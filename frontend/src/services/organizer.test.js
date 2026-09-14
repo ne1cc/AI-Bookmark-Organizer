@@ -1267,7 +1267,11 @@ describe('OrganizerService flat chronological date sorting', () => {
 
     it('sorts bookmarks descending (newest first) and bypasses AI schema and classification', async () => {
         const schemaSpy = vi.spyOn(ai, 'generateSchema')
+        const inferredSchemaSpy = vi.spyOn(ai, 'generateInferredSchema')
         const classifySpy = vi.spyOn(ai, 'classifyBatch')
+        schemaSpy.mockClear()
+        inferredSchemaSpy.mockClear()
+        classifySpy.mockClear()
 
         const progressMessages = []
         const onProgress = (evt) => {
@@ -1296,6 +1300,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         const results = await service.start(bookmarks)
 
         expect(schemaSpy).not.toHaveBeenCalled()
+        expect(inferredSchemaSpy).not.toHaveBeenCalled()
         expect(classifySpy).not.toHaveBeenCalled()
 
         expect(results.map(b => b.title)).toEqual(['Newest', 'Middle', 'Oldest'])
@@ -1584,6 +1589,100 @@ describe('OrganizerService flat chronological date sorting', () => {
         expect(results).toBeNull()
         expect(messages.some(m => m.includes('partially reorganized'))).toBe(true)
         expect(messages.some(m => m.includes('Run again to finish'))).toBe(true)
+    })
+})
+
+describe('OrganizerService inferred category runs', () => {
+    it('classifies against the run-scoped inferred schema instead of replacing it with Other', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [
+                { name: 'Engineering', sub_categories: ['Frontend'] },
+                { name: 'Research', sub_categories: ['Papers'] }
+            ]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+
+        const service = new OrganizerService(
+            'test-key', [], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+        await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+        expect(classify.mock.calls[0][2]).toEqual(inferred)
+        expect(classify.mock.calls[0][2].categories[0].name).not.toBe('Other')
+    })
+
+    it('stops when category inference fails instead of classifying against Other', async () => {
+        vi.clearAllMocks()
+        vi.spyOn(ai, 'generateInferredSchema').mockRejectedValue(new Error('invalid schema'))
+        const classify = vi.spyOn(ai, 'classifyBatch')
+        const progress = vi.fn()
+        const service = new OrganizerService(
+            'test-key', [], progress, undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+
+        await expect(service.start([{ title: 'React', url: 'https://react.dev' }]))
+            .rejects.toThrow('invalid schema')
+
+        expect(classify).not.toHaveBeenCalled()
+        expect(progress).toHaveBeenCalledWith({
+            status: 'error',
+            message: 'Could not infer categories from your bookmarks: invalid schema'
+        })
+    })
+
+    it('keeps selected categories authoritative in manual mode', async () => {
+        vi.clearAllMocks()
+        const generated = vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [{ name: 'Unselected', sub_categories: ['Ignored'] }]
+        })
+        const inferred = vi.spyOn(ai, 'generateInferredSchema')
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+        const service = new OrganizerService(
+            'test-key', ['Engineering'], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, false
+        )
+
+        await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+        expect(generated).toHaveBeenCalled()
+        expect(inferred).not.toHaveBeenCalled()
+        expect(classify.mock.calls[0][2].categories.map(category => category.name)).toEqual(['Engineering'])
+    })
+
+    it('reports inferred categories in stats without persisting them through a storage API', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Engineering', sub_categories: ['Frontend'] }]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+        const storageSet = vi.fn()
+        const originalChrome = globalThis.chrome
+        globalThis.chrome = { storage: { local: { set: storageSet } } }
+
+        try {
+            const service = new OrganizerService(
+                'test-key', [], vi.fn(), undefined, undefined, undefined,
+                undefined, undefined, false, undefined, undefined, true
+            )
+            const results = await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+            expect(results.stats.categoryBreakdown).toEqual({ Engineering: 1 })
+            expect(results.stats.categoriesCount).toBe(1)
+            expect(storageSet).not.toHaveBeenCalled()
+        } finally {
+            globalThis.chrome = originalChrome
+        }
     })
 })
 

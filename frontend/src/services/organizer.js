@@ -1,5 +1,5 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
@@ -235,7 +235,7 @@ export function isNonSubdividableError(err) {
 }
 
 export class OrganizerService {
-    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined) {
+    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategories = true) {
         this.apiKey = apiKey;
         this.categories = categories;
         this.onProgress = onProgress || (() => { });
@@ -245,6 +245,7 @@ export class OrganizerService {
         this.cleanTitles = cleanTitles;
         this.flatDateSort = flatDateSort;
         this.dateSortOrder = dateSortOrder; // 'desc' (newest first) or 'asc' (oldest first)
+        this.inferCategories = inferCategories;
 
         // schemaSortOrder can be 'alpha', 'date-desc', 'date-asc', 'domain', or 'none'
         if (schemaSortOrder !== undefined) {
@@ -275,6 +276,10 @@ export class OrganizerService {
 
     cancel() {
         this.isCancelled = true;
+    }
+
+    isInferenceMode() {
+        return this.inferCategories && (!Array.isArray(this.categories) || this.categories.length === 0);
     }
 
     async moveItems(pairs) {
@@ -790,10 +795,12 @@ export class OrganizerService {
         const deadLinks = [];
 
         let classifiedActive = [];
+        let runSchema = null;
 
         if (activeLinks.length > 0) {
             // --- Phase 1: Generate Schema ---
-            if (this.categories && this.categories.length > 0) {
+            const inferenceMode = this.isInferenceMode();
+            if (!inferenceMode && this.categories && this.categories.length > 0) {
                 this.onProgress({ status: 'info', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...` });
             } else {
                 this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate categories automatically...' });
@@ -804,33 +811,34 @@ export class OrganizerService {
 
             let schema;
             try {
-                schema = await generateSchema(
-                    activeLinks,
-                    this.apiKey,
-                    this.categories,
-                    this.model,
-                    this.subfolderTarget,
-                    () => this.isCancelled,
-                    ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
-                        // The corrective round-trip is not a transport failure:
-                        // reporting it as one hides the only signal that says
-                        // why the structure came back flat.
-                        if (isSchemaCorrection) {
-                            this.onProgress({
-                                status: 'warning',
-                                message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
-                            });
-                            return;
-                        }
-                        const sec = Math.ceil(delayMs / 1000);
+                const schemaRetryReporter = ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
+                    // The corrective round-trip is not a transport failure:
+                    // reporting it as one hides the only signal that says
+                    // why the structure came back flat.
+                    if (isSchemaCorrection) {
                         this.onProgress({
                             status: 'warning',
-                            message: isRateLimit
-                                ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
-                                : `Network issue during schema generation. Retrying in ${sec}s...`
+                            message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
                         });
+                        return;
                     }
-                );
+                    const sec = Math.ceil(delayMs / 1000);
+                    this.onProgress({
+                        status: 'warning',
+                        message: isRateLimit
+                            ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
+                            : `Network issue during schema generation. Retrying in ${sec}s...`
+                    });
+                };
+                schema = inferenceMode
+                    ? await generateInferredSchema(
+                        activeLinks, this.apiKey, this.model, this.subfolderTarget,
+                        () => this.isCancelled, schemaRetryReporter
+                    )
+                    : await generateSchema(
+                        activeLinks, this.apiKey, this.categories, this.model, this.subfolderTarget,
+                        () => this.isCancelled, schemaRetryReporter
+                    );
                 this.onProgress({ status: 'info', message: 'Generated category schema:' });
                 if (schema && schema.categories) {
                     schema.categories.forEach(cat => {
@@ -845,6 +853,14 @@ export class OrganizerService {
                 if (this.isCancelled || err?.isCancelled) {
                     this.onProgress({ status: 'warning', message: 'Process cancelled.' });
                     return null;
+                }
+
+                if (inferenceMode) {
+                    this.onProgress({
+                        status: 'error',
+                        message: `Could not infer categories from your bookmarks: ${err.message}`
+                    });
+                    throw err;
                 }
 
                 console.error('Schema generation failed, falling back to curated default folders:', err);
@@ -892,7 +908,10 @@ export class OrganizerService {
             // The selected categories are authoritative even when an adapter or
             // a recovery path supplies the schema. Classifiers and placement
             // below therefore share the same two-level source of truth.
-            schema = buildAuthoritativeSchema(this.categories, schema);
+            if (!inferenceMode) {
+                schema = buildAuthoritativeSchema(this.categories, schema);
+            }
+            runSchema = schema;
 
             const total = activeLinks.length;
             let processed = 0;
@@ -1019,7 +1038,7 @@ export class OrganizerService {
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
-        const categoryRank = new Map(buildAuthoritativeSchema(this.categories).categories
+        const categoryRank = new Map((runSchema || buildAuthoritativeSchema(this.categories)).categories
             .map((category, index) => [category.name, index]));
         const sortContents = this.schemaSortOrder && this.schemaSortOrder !== 'none';
         if (sortContents) {
