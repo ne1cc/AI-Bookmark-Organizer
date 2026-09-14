@@ -78,7 +78,7 @@ export default function RemoveDuplicatesButton() {
                 setStatus('idle')
                 setMessage('')
             }, 3500)
-        } catch (err) {
+        } catch {
             setStatus('error')
             setMessage('Failed to clear duplicates')
             resetTimerRef.current = setTimeout(() => {
