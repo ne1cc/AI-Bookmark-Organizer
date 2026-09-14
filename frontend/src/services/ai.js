@@ -594,7 +594,8 @@ export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount
 
     // Breadth matters as much as depth. A truncated response that salvages
     // cleanly still narrows the whole run: every bookmark outside the surviving
-    // categories is coerced to "Other" during classification. Tiny collections
+    // categories is coerced to the first approved category's "General" bucket
+    // during classification. Tiny collections
     // are exempt for the same reason they get a relaxed subcategory floor.
     const floor = Array.isArray(expectedCategories) && expectedCategories.length > 0
         ? Math.max(3, Math.ceil(expectedCategories.length / 2))

@@ -514,7 +514,8 @@ describe('truncation handling differs between schema design and classification',
 
     it('re-prompts when a salvaged schema is too narrow to classify the collection against', async () => {
         // Cut off after category 2 of a 6-category ask: structurally valid but
-        // it would coerce every other bookmark to "Other / General".
+        // it would coerce every other bookmark to the first approved category's
+        // "General" bucket.
         const truncated = '{"categories":[{"name":"Finance","sub_categories":["Trading","Crypto","Investing"]},'
             + '{"name":"Tech","sub_categories":["Web Dev","AI","DevOp'
         const sixCategories = ['Finance', 'Tech', 'Travel', 'Health', 'Design', 'Shopping']
