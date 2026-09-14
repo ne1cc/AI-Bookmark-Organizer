@@ -4,6 +4,7 @@ import {
     subfolderBounds,
     salvagePartialJson,
     generateSchema,
+    generateInferredSchema,
     classifyBatch,
     SCHEMA_MAX_TOKENS
 } from './ai'
@@ -398,6 +399,67 @@ describe('generateSchema validation and corrective retry', () => {
 
         expect(JSON.parse(global.fetch.mock.calls[0][1].body).max_tokens).toBe(SCHEMA_MAX_TOKENS)
         expect(SCHEMA_MAX_TOKENS).toBe(16000)
+    })
+})
+
+describe('generateInferredSchema', () => {
+    let originalFetch
+
+    beforeEach(() => {
+        originalFetch = global.fetch
+    })
+
+    afterEach(() => {
+        global.fetch = originalFetch
+        vi.restoreAllMocks()
+    })
+
+    it('uses every bookmark and permits model-generated top-level categories', async () => {
+        const bookmarks = Array.from({ length: 205 }, (_, index) => ({
+            title: `Bookmark ${index + 1}`,
+            url: `https://example.com/${index + 1}`
+        }))
+        let body
+        global.fetch = vi.fn(async (url, options) => {
+            body = JSON.parse(options.body)
+            return orResponse(JSON.stringify({
+                categories: [
+                    { name: 'Engineering', sub_categories: ['Frontend', 'Backend'] },
+                    { name: 'Research', sub_categories: ['Papers', 'Reference'] },
+                    { name: 'Personal', sub_categories: ['Health', 'Travel'] }
+                ]
+            }))
+        })
+
+        const schema = await generateInferredSchema(bookmarks, 'sk-or-test-key')
+        const prompt = body.messages[1].content
+
+        expect(prompt).toContain('Bookmark 1')
+        expect(prompt).toContain('Bookmark 205')
+        expect(prompt).not.toContain('FIXED TOP-LEVEL CATEGORIES')
+        expect(schema.categories.map(category => category.name)).toEqual(['Engineering', 'Research', 'Personal'])
+    })
+
+    it('rejects two unusable inferred schemas with schemaInvalid', async () => {
+        const flat = { categories: [{ name: 'Links', sub_categories: [] }] }
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify(flat)))
+
+        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, '5-10'))
+            .rejects.toMatchObject({ schemaInvalid: true })
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('passes cancellation and retry callbacks through to inferred generation', async () => {
+        const isCancelled = vi.fn(() => true)
+        const onRetry = vi.fn()
+        global.fetch = vi.fn()
+
+        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, '1-3', isCancelled, onRetry))
+            .rejects.toMatchObject({ isCancelled: true })
+
+        expect(isCancelled).toHaveBeenCalled()
+        expect(onRetry).not.toHaveBeenCalled()
+        expect(global.fetch).not.toHaveBeenCalled()
     })
 })
 
