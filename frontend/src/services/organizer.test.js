@@ -1843,6 +1843,49 @@ describe('categorized browser write moves and isolates failures', () => {
         expect(store.node('10').dateAdded).toBe(1500000000000)
     })
 
+    it('places approved subcategories only beneath their selected category', async () => {
+        const store = new FakeBookmarkStore()
+        store.addUrl('1', '10', 'https://tech.example', 'Tech', 1500000000000)
+        store.addUrl('1', '11', 'https://invented.example', 'Invented', 1500000000001)
+        store.addUrl('1', '12', 'https://finance-1.example', 'Finance 1', 1500000000002)
+        store.addUrl('1', '13', 'https://finance-2.example', 'Finance 2', 1500000000003)
+        store.addUrl('1', '14', 'https://finance-3.example', 'Finance 3', 1500000000004)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [
+                { name: 'Tech', sub_categories: ['Developer Tools'] },
+                { name: 'Finance', sub_categories: ['Investing'] }
+            ]
+        })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map(bookmark => {
+            if (bookmark.id === '10') return { ...bookmark, category: 'Tech', sub_category: 'Investing' }
+            if (bookmark.id === '11') return { ...bookmark, category: 'Invented', sub_category: 'Developer Tools' }
+            return { ...bookmark, category: 'Finance', sub_category: 'Investing' }
+        }))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const found = [...store.nodes.values()].find(n => n.parentId === parentId && n.title === title && !n.url)
+            if (found) return found
+            return store.addFolder(parentId, `folder-${parentId}-${title}`, title)
+        })
+
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        service.snapshotProvider = async () => {}
+        await service.start(null)
+
+        const techFolder = [...store.nodes.values()].find(n => n.title === 'Tech' && n.parentId.startsWith('folder-2-AI Organized'))
+        const financeFolder = [...store.nodes.values()].find(n => n.title === 'Finance' && n.parentId.startsWith('folder-2-AI Organized'))
+        const investingFolder = [...store.nodes.values()].find(n => n.title === 'Investing' && n.parentId === financeFolder.id)
+
+        expect(store.node('10').parentId).toBe(techFolder.id)
+        expect(store.node('11').parentId).toBe(techFolder.id)
+        expect(store.node('12').parentId).toBe(investingFolder.id)
+        expect(store.node('13').parentId).toBe(investingFolder.id)
+        expect(store.node('14').parentId).toBe(investingFolder.id)
+        expect([...store.nodes.values()].some(n => n.title === 'Invented' && !n.url)).toBe(false)
+        expect([...store.nodes.values()].some(n => n.title === 'Investing' && n.parentId === techFolder.id)).toBe(false)
+    })
+
     it('a category-folder failure fails only that item and records it', async () => {
         const store = new FakeBookmarkStore()
         store.addUrl('1', '10', 'https://a.com', 'A', 1500000000000)

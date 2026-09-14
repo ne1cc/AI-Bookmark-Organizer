@@ -1,8 +1,8 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId } from './bookmarks';
-import { generateSchema, classifyBatch, fallbackCategoryForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories } from './reconcile';
-import { buildFallbackSchema } from './defaultSchema';
+import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
@@ -750,6 +750,11 @@ export class OrganizerService {
                 return null;
             }
 
+            // The selected categories are authoritative even when an adapter or
+            // a recovery path supplies the schema. Classifiers and placement
+            // below therefore share the same two-level source of truth.
+            schema = buildAuthoritativeSchema(this.categories, schema);
+
             const total = activeLinks.length;
             let processed = 0;
 
@@ -845,7 +850,10 @@ export class OrganizerService {
                 return null;
             }
 
-            classifiedActive = results.flat().filter(Boolean);
+            classifiedActive = results.flat().filter(Boolean).map(item => {
+                const { category, sub_category, proposed } = normalizeClassificationForSchema(item, schema);
+                return { ...item, category, sub_category, ...(proposed ? { proposed: true } : {}) };
+            });
 
             // Batches run concurrently and cannot see each other, so this is the
             // first point where the whole set of subcategories is visible —

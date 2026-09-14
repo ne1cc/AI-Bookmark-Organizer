@@ -738,6 +738,43 @@ export function fallbackCategoryForSchema(schema) {
     return category?.name || 'Other';
 }
 
+// Resolve an AI classification against the approved two-level schema. A
+// subcategory already owned by another category is not a new proposal: it is
+// an invalid category/subcategory pair and belongs in the selected category's
+// General bucket instead. Truly new names remain proposals for reconciliation.
+export function normalizeClassificationForSchema(entry, schema) {
+    const approvedCategories = (Array.isArray(schema?.categories) ? schema.categories : [])
+        .filter(c => typeof c?.name === 'string' && c.name.trim());
+    const fallbackCategory = fallbackCategoryForSchema(schema);
+    const schemaCategories = new Map(
+        approvedCategories.map(c => [
+            c.name.trim().toLowerCase(),
+            {
+                name: c.name,
+                subs: new Map((Array.isArray(c.sub_categories) ? c.sub_categories : [])
+                    .filter(s => typeof s === 'string' && s.trim())
+                    .map(s => [s.trim().toLowerCase(), s]))
+            }
+        ])
+    );
+
+    const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
+    const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
+    const known = schemaCategories.get(rawCategory.toLowerCase());
+    if (!known) return { category: fallbackCategory, sub_category: 'General', proposed: false };
+    if (!rawSub) return { category: known.name, sub_category: 'General', proposed: false };
+
+    const subKey = rawSub.toLowerCase();
+    const approvedSub = known.subs.get(subKey);
+    if (approvedSub) return { category: known.name, sub_category: rawSub, proposed: false };
+
+    const belongsToAnotherCategory = [...schemaCategories.values()]
+        .some(candidate => candidate !== known && candidate.subs.has(subKey));
+    if (belongsToAnotherCategory) return { category: known.name, sub_category: 'General', proposed: false };
+
+    return { category: known.name, sub_category: rawSub, proposed: rawSub.toLowerCase() !== 'general' };
+}
+
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
     const titleInstruction = cleanTitles
         ? `\n    7. Title cleanup: If clean_title is requested, provide a cleaned, human-readable title in the 'clean_title' field for each bookmark (strip site prefixes/suffixes like 'Login |', '- Wikipedia', query noise, or convert raw URL titles into clean titles). If the existing title is already clean, keep it as is.`
@@ -784,48 +821,10 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
             }
         }
 
-        // Categories stay strictly schema-bound; only sub-categories may be
-        // proposed (rule 3). Look up the approved names once per batch. The
-        // canonical spelling is carried alongside the sub-set: matching
-        // case-insensitively but emitting the model's own casing would give one
-        // category two sibling top-level folders in both write paths.
-        const approvedCategories = (Array.isArray(schema?.categories) ? schema.categories : [])
-            .filter(c => typeof c?.name === 'string' && c.name.trim());
-        const fallbackCategory = fallbackCategoryForSchema(schema);
-        const schemaCategories = new Map(
-            approvedCategories
-                .map(c => [
-                    c.name.trim().toLowerCase(),
-                    {
-                        name: c.name,
-                        subs: new Set((Array.isArray(c.sub_categories) ? c.sub_categories : [])
-                            .filter(s => typeof s === 'string')
-                            .map(s => s.trim().toLowerCase()))
-                    }
-                ])
-        );
-
         return bookmarks.map((b, i) => {
             const entry = byIndex.get(i);
             const hasCleanTitle = cleanTitles && typeof entry?.clean_title === 'string' && entry.clean_title.trim().length > 0;
-
-            const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
-            const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
-
-            // An invented category is rejected outright — the schema's top level
-            // is the user's own configured list, so a novel one is a mistake.
-            const known = schemaCategories.get(rawCategory.toLowerCase());
-            const category = known ? known.name : fallbackCategory;
-            const sub_category = (known && rawSub) ? rawSub : 'General';
-
-            // A sub-category absent from the schema is the model exercising
-            // rule 3. Flag it so reconciliation can keep it only if enough
-            // bookmarks landed there across all batches.
-            const proposed = Boolean(
-                known &&
-                sub_category !== 'General' &&
-                !known.subs.has(sub_category.toLowerCase())
-            );
+            const { category, sub_category, proposed } = normalizeClassificationForSchema(entry, schema);
 
             return {
                 ...b,
