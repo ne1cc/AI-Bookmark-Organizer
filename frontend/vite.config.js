@@ -4,15 +4,16 @@ import { copyFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const targetBrowser = process.env.TARGET_BROWSER || 'chrome'
+const outDir = process.env.OUT_DIR || (targetBrowser === 'firefox' ? 'dist/firefox' : 'dist/chrome')
 
 // Side panel startup must depend on as few asset fetches as possible:
 // inline the single stylesheet into index.html (MV3 CSP forbids inlining
 // JS, so the script tag stays external).
-const inlineStyles = () => ({
+const inlineStyles = (outputDir) => ({
   name: 'inline-styles',
   enforce: 'post',
   closeBundle() {
-    const dir = join(import.meta.dirname, 'dist')
+    const dir = join(import.meta.dirname, outputDir)
     const htmlPath = join(dir, 'index.html')
     let html = readFileSync(htmlPath, 'utf8')
     const link = html.match(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+\.css)"[^>]*>/)
@@ -26,12 +27,12 @@ const inlineStyles = () => ({
   }
 })
 
-const extensionManifest = (target) => ({
+const extensionManifest = (target, outputDir) => ({
   name: 'extension-manifest',
   enforce: 'post',
   closeBundle() {
+    const dir = join(import.meta.dirname, outputDir)
     if (target === 'firefox') {
-      const dir = join(import.meta.dirname, 'dist')
       const ffManifestPath = join(import.meta.dirname, 'manifests', 'manifest.firefox.json')
       const targetManifestPath = join(dir, 'manifest.json')
       copyFileSync(ffManifestPath, targetManifestPath)
@@ -41,10 +42,10 @@ const extensionManifest = (target) => ({
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), inlineStyles(), extensionManifest(targetBrowser)],
+  plugins: [react(), inlineStyles(outDir), extensionManifest(targetBrowser, outDir)],
   base: './', // CRITICAL for extensions
   build: {
-    outDir: 'dist',
+    outDir,
     emptyOutDir: true,
     cssCodeSplit: false,
     modulePreload: { polyfill: false },

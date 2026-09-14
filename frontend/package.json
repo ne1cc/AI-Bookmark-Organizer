@@ -5,13 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "build:chrome": "vite build",
-    "build:firefox": "TARGET_BROWSER=firefox vite build",
+    "build": "npm run build:all",
+    "build:chrome": "TARGET_BROWSER=chrome OUT_DIR=dist/chrome vite build",
+    "build:firefox": "TARGET_BROWSER=firefox OUT_DIR=dist/firefox vite build",
     "package:firefox": "npm run build:firefox && node scripts/package-firefox.js",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:all": "npm run build:chrome && npm run build:firefox",
+    "package:chrome": "npm run build:chrome && node scripts/package-chrome.js",
+    "package:all": "npm run package:chrome && npm run package:firefox"
   },
   "dependencies": {
     "lucide-react": "^0.563.0",

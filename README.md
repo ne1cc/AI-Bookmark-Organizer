@@ -72,18 +72,19 @@ git clone https://github.com/ne1cc/Bookmark-Organizer-Chrome-Extension.git
 cd Bookmark-Organizer-Chrome-Extension/frontend
 npm install
 
-# Chrome build:
-npm run build:chrome
-# Load the "dist" folder in chrome://extensions
+# Build both browsers at once:
+npm run build:all
 
-# Firefox build:
-npm run build:firefox
-# Load "dist/manifest.json" in about:debugging -> This Firefox -> Load Temporary Add-on
+# Or build individually:
+npm run build:chrome    # Outputs unpacked extension to dist/chrome
+npm run build:firefox   # Outputs unpacked extension to dist/firefox
 
-# Package for Firefox AMO:
-npm run package:firefox
+# Package release zip files:
+npm run package:all     # Packages both Chrome and Firefox zips in dist/
+npm run package:chrome  # Packages dist/bookmark-organizer-chrome-v*.zip
+npm run package:firefox # Packages dist/bookmark-organizer-firefox-v*.zip and source zip
 
-# Run automated tests:
+# Run automated test suites:
 npm test
 ```
 
