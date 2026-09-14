@@ -766,7 +766,7 @@ export function normalizeClassificationForSchema(entry, schema) {
 
     const subKey = rawSub.toLowerCase();
     const approvedSub = known.subs.get(subKey);
-    if (approvedSub) return { category: known.name, sub_category: rawSub, proposed: false };
+    if (approvedSub) return { category: known.name, sub_category: approvedSub, proposed: false };
 
     const belongsToAnotherCategory = [...schemaCategories.values()]
         .some(candidate => candidate !== known && candidate.subs.has(subKey));

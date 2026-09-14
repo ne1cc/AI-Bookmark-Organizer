@@ -1860,6 +1860,8 @@ describe('categorized browser write moves and isolates failures', () => {
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map(bookmark => {
             if (bookmark.id === '10') return { ...bookmark, category: 'Tech', sub_category: 'Investing' }
             if (bookmark.id === '11') return { ...bookmark, category: 'Invented', sub_category: 'Developer Tools' }
+            if (bookmark.id === '12') return { ...bookmark, category: 'Finance', sub_category: ' investing ' }
+            if (bookmark.id === '13') return { ...bookmark, category: 'Finance', sub_category: 'INVESTING' }
             return { ...bookmark, category: 'Finance', sub_category: 'Investing' }
         }))
         wireStore(store)
@@ -1884,6 +1886,7 @@ describe('categorized browser write moves and isolates failures', () => {
         expect(store.node('14').parentId).toBe(investingFolder.id)
         expect([...store.nodes.values()].some(n => n.title === 'Invented' && !n.url)).toBe(false)
         expect([...store.nodes.values()].some(n => n.title === 'Investing' && n.parentId === techFolder.id)).toBe(false)
+        expect([...store.nodes.values()].filter(n => n.parentId === financeFolder.id && !n.url).map(n => n.title)).toEqual(['Investing'])
     })
 
     it('a category-folder failure fails only that item and records it', async () => {

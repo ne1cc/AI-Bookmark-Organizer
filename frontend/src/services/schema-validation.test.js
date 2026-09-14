@@ -408,7 +408,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', healthySchema)
 
         expect(result.every(r => r.proposed === undefined)).toBe(true)
-        expect(result[0].sub_category).toBe('web development')
+        expect(result[0].sub_category).toBe('Web Development')
     })
 
     it('emits the schema spelling of a category the model wrote in another casing', async () => {
