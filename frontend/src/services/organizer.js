@@ -880,7 +880,10 @@ export class OrganizerService {
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
-        if (this.schemaSortOrder && this.schemaSortOrder !== 'none') {
+        const categoryRank = new Map(buildAuthoritativeSchema(this.categories).categories
+            .map((category, index) => [category.name, index]));
+        const sortContents = this.schemaSortOrder && this.schemaSortOrder !== 'none';
+        if (sortContents) {
             const sortLabels = {
                 'alpha': 'Alphabetical (A–Z)',
                 'date-desc': 'Date Added (Newest First)',
@@ -892,54 +895,56 @@ export class OrganizerService {
                 status: 'info',
                 message: `Sorting folder contents (${sortLabel})...`
             });
-
-            finalResults.sort((a, b) => {
-                // Keep categories and sub-categories grouped and alphabetized
-                const catDiff = (a.category || '').localeCompare(b.category || '');
-                if (catDiff !== 0) return catDiff;
-                const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
-                if (subDiff !== 0) return subDiff;
-
-                // Sort bookmarks within each folder according to chosen schema
-                switch (this.schemaSortOrder) {
-                    case 'date-desc': {
-                        const timeA = getBookmarkTimestamp(a);
-                        const timeB = getBookmarkTimestamp(b);
-                        if (timeA > 0 && timeB > 0) {
-                            if (timeA !== timeB) return timeB - timeA;
-                        } else if (timeA > 0) {
-                            return -1;
-                        } else if (timeB > 0) {
-                            return 1;
-                        }
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'date-asc': {
-                        const timeA = getBookmarkTimestamp(a);
-                        const timeB = getBookmarkTimestamp(b);
-                        if (timeA > 0 && timeB > 0) {
-                            if (timeA !== timeB) return timeA - timeB;
-                        } else if (timeA > 0) {
-                            return -1;
-                        } else if (timeB > 0) {
-                            return 1;
-                        }
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'domain': {
-                        const domainA = getBookmarkDomain(a);
-                        const domainB = getBookmarkDomain(b);
-                        const domainDiff = domainA.localeCompare(domainB);
-                        if (domainDiff !== 0) return domainDiff;
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'alpha':
-                    default: {
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                }
-            });
         }
+
+        finalResults.sort((a, b) => {
+            // Selected category order applies even when content sorting is off.
+            const catDiff = (categoryRank.get(a.category) ?? categoryRank.size)
+                - (categoryRank.get(b.category) ?? categoryRank.size);
+            if (catDiff !== 0) return catDiff;
+            if (!sortContents) return 0;
+            const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
+            if (subDiff !== 0) return subDiff;
+
+            // Sort bookmarks within each folder according to chosen schema
+            switch (this.schemaSortOrder) {
+                case 'date-desc': {
+                    const timeA = getBookmarkTimestamp(a);
+                    const timeB = getBookmarkTimestamp(b);
+                    if (timeA > 0 && timeB > 0) {
+                        if (timeA !== timeB) return timeB - timeA;
+                    } else if (timeA > 0) {
+                        return -1;
+                    } else if (timeB > 0) {
+                        return 1;
+                    }
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'date-asc': {
+                    const timeA = getBookmarkTimestamp(a);
+                    const timeB = getBookmarkTimestamp(b);
+                    if (timeA > 0 && timeB > 0) {
+                        if (timeA !== timeB) return timeA - timeB;
+                    } else if (timeA > 0) {
+                        return -1;
+                    } else if (timeB > 0) {
+                        return 1;
+                    }
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'domain': {
+                    const domainA = getBookmarkDomain(a);
+                    const domainB = getBookmarkDomain(b);
+                    const domainDiff = domainA.localeCompare(domainB);
+                    if (domainDiff !== 0) return domainDiff;
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'alpha':
+                default: {
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+            }
+        });
 
         if (this.isCancelled) {
             this.onProgress({ status: 'warning', message: 'Process cancelled.' });
@@ -1014,6 +1019,11 @@ export class OrganizerService {
             for (const [parentId, expectedIds] of byFolder) {
                 await this.reorderFolder(parentId, expectedIds);
             }
+            // Reused folders retain their old positions until explicitly moved.
+            const categoryIds = [...categoryRank.keys()]
+                .map(category => createdFolders[category]?.id)
+                .filter(id => id != null);
+            await this.reorderFolder(rootFolder.id, categoryIds);
         }
 
         if (this.isCancelled) {

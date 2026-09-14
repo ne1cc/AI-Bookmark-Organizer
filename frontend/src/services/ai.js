@@ -1,4 +1,5 @@
 import { buildAuthoritativeSchema } from './defaultSchema';
+import { canonicalKey } from './subcategoryIdentity';
 
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
@@ -577,9 +578,9 @@ export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount
             if (typeof rawSub !== 'string') continue;
             const sub = rawSub.trim();
             if (!sub) continue;
-            const subKey = sub.toLowerCase();
+            const subKey = canonicalKey(sub);
             // Filler names and a subcategory echoing its own parent add no structure.
-            if (FILLER_SUBCATEGORIES.has(subKey) || subKey === key) continue;
+            if (FILLER_SUBCATEGORIES.has(sub.toLowerCase()) || subKey === canonicalKey(name)) continue;
             if (seenSubs.has(subKey)) continue;
             seenSubs.add(subKey);
             sub_categories.push(sub);
@@ -592,13 +593,12 @@ export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };
     }
 
-    // Breadth matters as much as depth. A truncated response that salvages
-    // cleanly still narrows the whole run: every bookmark outside the surviving
-    // categories is coerced to the first approved category's "General" bucket
-    // during classification. Tiny collections
-    // are exempt for the same reason they get a relaxed subcategory floor.
+    // A truncated response leaves omitted selected categories with only their
+    // General fallback. Require enough breadth to avoid losing useful structure,
+    // but never demand more categories than the user selected.
+    // Tiny collections are exempt, as with the relaxed subcategory floor.
     const floor = Array.isArray(expectedCategories) && expectedCategories.length > 0
-        ? Math.max(3, Math.ceil(expectedCategories.length / 2))
+        ? Math.min(expectedCategories.length, Math.max(3, Math.ceil(expectedCategories.length / 2)))
         : 3;
     if (bookmarkCount >= TINY_COLLECTION_THRESHOLD && categories.length < floor) {
         issues.push(`the response covered only ${categories.length} categories; at least ${floor} are needed`);
@@ -754,7 +754,7 @@ export function normalizeClassificationForSchema(entry, schema) {
                 name: c.name,
                 subs: new Map((Array.isArray(c.sub_categories) ? c.sub_categories : [])
                     .filter(s => typeof s === 'string' && s.trim())
-                    .map(s => [s.trim().toLowerCase(), s]))
+                    .map(s => [canonicalKey(s), s]))
             }
         ])
     );
@@ -765,7 +765,7 @@ export function normalizeClassificationForSchema(entry, schema) {
     if (!known) return { category: fallbackCategory, sub_category: 'General', proposed: false };
     if (!rawSub) return { category: known.name, sub_category: 'General', proposed: false };
 
-    const subKey = rawSub.toLowerCase();
+    const subKey = canonicalKey(rawSub);
     const approvedSub = known.subs.get(subKey);
     if (approvedSub) return { category: known.name, sub_category: approvedSub, proposed: false };
 

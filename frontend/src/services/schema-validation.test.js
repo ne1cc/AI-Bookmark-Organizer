@@ -62,6 +62,30 @@ describe('subfolderBounds', () => {
 })
 
 describe('validateSchema', () => {
+    it.each([1, 2])('accepts %i selected categories for large collections while enforcing depth', (count) => {
+        const categories = healthySchema.categories.slice(0, count)
+        const expectedCategories = categories.map(c => c.name)
+        for (const subfolderTarget of ['0-5', '5-10', '10+']) {
+            const options = { expectedCategories, subfolderTarget, bookmarkCount: 40 }
+            expect(validateSchema({ categories }, options).issues).toEqual([])
+            const thin = { categories: categories.map(c => ({ ...c, sub_categories: ['General', 'One Topic'] })) }
+            const result = validateSchema(thin, options)
+            expect(result.ok).toBe(false)
+            expect(result.issues.join(' ')).toMatch(/subcategories/)
+            expect(result.issues.join(' ')).not.toContain('covered only')
+        }
+    })
+
+    it('counts spacing and plural variants as one subcategory when validating depth', () => {
+        const result = validateSchema({ categories: [{
+            name: 'Tech', sub_categories: ['Developer Tools', 'Developer Tool', 'Developer  Tools']
+        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40 })
+
+        expect(result.schema.categories[0].sub_categories).toEqual(['Developer Tools'])
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toContain('"Tech" has 1')
+    })
+
     it('accepts a schema meeting the granularity floor', () => {
         const result = validateSchema(healthySchema, { subfolderTarget: '5-10', bookmarkCount: 500 })
 
@@ -72,8 +96,8 @@ describe('validateSchema', () => {
 
     it('rejects a response that covers too few of the configured categories', () => {
         // The exact shape a MAX_TOKENS salvage produces: structurally fine, but
-        // every bookmark outside the two surviving categories would be coerced
-        // to "Other / General" during classification.
+        // omitted selected categories would receive only their General fallback
+        // instead of useful topical subcategories.
         const narrow = { categories: healthySchema.categories.slice(0, 2) }
         const expectedCategories = ['Finance & Crypto', 'Tech & Development', 'Work & Career', 'Design & Media', 'Travel & Lifestyle', 'Shopping & Tools']
 
@@ -261,6 +285,16 @@ describe('generateSchema validation and corrective retry', () => {
         vi.useRealTimers()
     })
 
+    it.each([1, 2])('accepts a healthy %i-category selected schema without corrective retries', async (count) => {
+        const candidate = { categories: healthySchema.categories.slice(0, count) }
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify(candidate)))
+
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', candidate.categories.map(c => c.name))
+
+        expect(schema).toEqual(candidate)
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
     it('returns the schema unchanged when the first response is already valid', async () => {
         global.fetch = vi.fn(async () => orResponse(JSON.stringify(healthySchema)))
 
@@ -379,6 +413,35 @@ describe('classifyBatch hybrid subcategory proposals', () => {
     afterEach(() => {
         global.fetch = originalFetch
         vi.restoreAllMocks()
+    })
+
+    it.each(['Index  Funds', 'index fund', ' Index\tFund '])('rejects another category\'s subfolder variant %j', async (sub_category) => {
+        const schema = { categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools'] },
+            { name: 'Finance', sub_categories: ['Index Funds'] }
+        ] }
+        global.fetch = vi.fn(async () => classifyResponse(threeBookmarks.map((_, i) => ({ i, category: 'Tech', sub_category }))))
+
+        const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', schema)
+
+        expect(result.every(r => r.category === 'Tech' && r.sub_category === 'General' && !r.proposed)).toBe(true)
+    })
+
+    it('canonicalizes approved plural and spacing variants, including names shared by categories', async () => {
+        const schema = { categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools', 'News Feeds'] },
+            { name: 'Finance', sub_categories: ['News Feeds'] }
+        ] }
+        global.fetch = vi.fn(async () => classifyResponse([
+            { i: 0, category: 'Tech', sub_category: 'Developer Tool' },
+            { i: 1, category: 'Tech', sub_category: 'Developer  Tools' },
+            { i: 2, category: 'Finance', sub_category: 'News Feed' }
+        ]))
+
+        const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', schema)
+
+        expect(result.map(r => r.sub_category)).toEqual(['Developer Tools', 'Developer Tools', 'News Feeds'])
+        expect(result.every(r => !r.proposed)).toBe(true)
     })
 
     it('keeps a sub_category absent from the schema and flags it as proposed', async () => {
@@ -513,9 +576,8 @@ describe('truncation handling differs between schema design and classification',
     })
 
     it('re-prompts when a salvaged schema is too narrow to classify the collection against', async () => {
-        // Cut off after category 2 of a 6-category ask: structurally valid but
-        // it would coerce every other bookmark to the first approved category's
-        // "General" bucket.
+        // Cut off after category 2 of a 6-category ask: structurally valid, but
+        // omitted selected categories would have only their General fallback.
         const truncated = '{"categories":[{"name":"Finance","sub_categories":["Trading","Crypto","Investing"]},'
             + '{"name":"Tech","sub_categories":["Web Dev","AI","DevOp'
         const sixCategories = ['Finance', 'Tech', 'Travel', 'Health', 'Design', 'Shopping']

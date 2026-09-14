@@ -1470,14 +1470,12 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
 
         const results = await service.start(bookmarks)
 
-        // Categories remain ordered A-Z (Design before Tech)
-        // Inside Design: Newest Design (1800000000) then Oldest Design (1400000000)
-        // Inside Tech: Newer Tech (1700000000) then Older Tech (1500000000)
+        // Selected category order is preserved, with newest first inside each.
         expect(results.map(b => b.title)).toEqual([
-            'Newest Design',
-            'Oldest Design',
             'Newer Tech',
-            'Older Tech'
+            'Older Tech',
+            'Newest Design',
+            'Oldest Design'
         ])
         expect(service.stats.schemaSortOrder).toBe('date-desc')
         expect(service.stats.isFlat).toBe(false)
@@ -1810,6 +1808,125 @@ describe('schema fallback path reporting', () => {
         expect(events.some(e => e.status === 'error')).toBe(false)
         // M3: the shape of the degraded structure is logged here too.
         expect(messages.filter(m => m.startsWith('Schema:'))).toHaveLength(1)
+    })
+})
+
+describe('fixed hierarchy placement and export', () => {
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('reorders reused category folders to the selected rank and leaves a repeated run unchanged', async () => {
+        const store = new FakeBookmarkStore()
+        const root = store.addFolder('2', 'organized', 'AI Organized Bookmarks-' + new Date().toISOString().slice(0, 10))
+        store.addFolder(root.id, 'finance', 'Finance')
+        store.addFolder(root.id, 'tech', 'Tech')
+        store.addUrl('finance', '10', 'https://finance.example', 'Finance link', 1500000000000)
+        store.addUrl('tech', '11', 'https://tech.example', 'Tech link', 1500000000001)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({ categories: [
+            { name: 'Tech', sub_categories: [] }, { name: 'Finance', sub_categories: [] }
+        ] })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({
+            ...b, category: b.id === '10' ? 'Finance' : 'Tech', sub_category: 'General'
+        })))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
+            store.node(parentId).children.find(n => !n.url && n.title === title))
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        service.snapshotProvider = async () => {}
+
+        await service.start(null)
+        expect(root.children.map(n => n.title)).toEqual(['Tech', 'Finance'])
+        expect(store.ops).toEqual([['move', 'tech', { parentId: root.id, index: 0 }]])
+        await service.start(null)
+        expect(store.ops).toHaveLength(1)
+    })
+
+    it.each(['alpha', 'date-desc', 'date-asc', 'domain', 'none'].flatMap(sortOrder =>
+        [['Tech', 'Finance'], ['20', '3']].map(selected => ({ sortOrder, selected }))
+    ))('preserves $selected category rank in browser placement and export with $sortOrder sorting', async ({ sortOrder, selected }) => {
+        const [firstCategory, secondCategory] = selected
+        const store = new FakeBookmarkStore()
+        const schema = { categories: [
+            { name: secondCategory, sub_categories: ['Investing'] },
+            { name: firstCategory, sub_categories: ['Zeta Tools', 'Alpha Tools'] }
+        ] }
+        const classifications = new Map()
+        // Input and model category order both disagree with the selected rank.
+        for (const [group, category, sub_category] of [[0, secondCategory, 'Investing'], [1, firstCategory, 'Zeta Tools'], [2, firstCategory, 'Alpha Tools']]) {
+            for (const [i, title, domain, dateAdded] of [[0, 'Bravo', 'z.example', 1700000000000], [1, 'Charlie', 'a.example', 1500000000000], [2, 'Alpha', 'm.example', 1600000000000]]) {
+                const id = String(10 + group * 3 + i)
+                store.addUrl('1', id, `https://${domain}/${id}`, title, dateAdded)
+                classifications.set(id, { category, sub_category })
+            }
+        }
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({ ...b, ...classifications.get(b.id) })))
+        vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const found = store.node(parentId).children.find(n => !n.url && n.title === title)
+            return found || store.addFolder(parentId, `folder-${parentId}-${title}`, title)
+        })
+
+        const service = new OrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
+        service.snapshotProvider = async () => {}
+        const browserResults = await service.start(null)
+        const fileResults = await service.start([...classifications.keys()].map(id => ({ ...store.node(id) })))
+        const root = store.node('2').children.find(n => n.title.startsWith('AI Organized'))
+
+        expect(root.children.map(n => n.title)).toEqual(selected)
+        const tech = root.children[0]
+        expect(tech.children.map(n => n.title)).toEqual(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools'])
+        const expectedTitles = {
+            alpha: ['Alpha', 'Bravo', 'Charlie'],
+            'date-desc': ['Bravo', 'Alpha', 'Charlie'],
+            'date-asc': ['Charlie', 'Alpha', 'Bravo'],
+            domain: ['Charlie', 'Alpha', 'Bravo'],
+            none: ['Bravo', 'Charlie', 'Alpha']
+        }[sortOrder]
+        expect(tech.children[0].children.map(n => n.title)).toEqual(expectedTitles)
+        for (const results of [browserResults, fileResults]) {
+            expect([...new Set(results.map(b => b.category))]).toEqual(selected)
+            const html = bookmarksExport.generateNetscapeHTML(results)
+            const doc = new DOMParser().parseFromString(html, 'text/html')
+            expect([...doc.querySelectorAll('h3')].map(n => n.textContent)).toEqual([
+                firstCategory, ...(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools']), secondCategory, 'Investing'
+            ])
+            expect([...doc.querySelectorAll('a')].slice(0, 3).map(n => n.textContent)).toEqual(expectedTitles)
+        }
+        expect(bookmarksExport.downloadBookmarks).toHaveBeenLastCalledWith(fileResults)
+    })
+
+    it('blocks cross-category whitespace variants and preserves approved plurals through reconciliation and placement', async () => {
+        const store = new FakeBookmarkStore()
+        for (let i = 0; i < 6; i++) store.addUrl('1', String(10 + i), `https://example.com/${i}`, `Bookmark ${i}`, 1500000000000 + i)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({ categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools'] },
+            { name: 'Finance', sub_categories: ['Index Funds'] }
+        ] })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({
+            ...b, category: 'Tech', sub_category: Number(b.id) < 13 ? 'Index  Funds' : 'Developer Tool', proposed: true
+        })))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
+            store.node(parentId).children.find(n => !n.url && n.title === title) || store.addFolder(parentId, `folder-${parentId}-${title}`, title))
+
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        service.snapshotProvider = async () => {}
+        const results = await service.start(null)
+        const tech = [...store.nodes.values()].find(n => !n.url && n.title === 'Tech')
+        expect(tech.children.filter(n => !n.url).map(n => n.title)).toEqual(['Developer Tools'])
+        expect(['10', '11', '12'].every(id => store.node(id).parentId === tech.id)).toBe(true)
+        expect(tech.children.find(n => n.title === 'Developer Tools').children.map(n => n.id)).toEqual(['13', '14', '15'])
+        expect(results.every(b => !('proposed' in b))).toBe(true)
+        const html = bookmarksExport.generateNetscapeHTML(results)
+        expect(html).toContain('>Developer Tools</H3>')
+        expect(html).not.toContain('>Index Funds</H3>')
+        expect(html).not.toContain('>Index  Funds</H3>')
     })
 })
 

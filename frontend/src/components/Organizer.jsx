@@ -1521,7 +1521,7 @@ export default function Organizer() {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No categories chosen. AI will automatically design a structure from your bookmarks, or you can add from the suggestions below.
+                            No categories chosen. Bookmarks will use a single "Other" category, or you can add categories from the suggestions below.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
