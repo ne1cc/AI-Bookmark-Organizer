@@ -782,6 +782,62 @@ describe('In-process and completion date range display', () => {
                 vi.useRealTimers()
             }
         })
+
+        it('falls back immediately when the service worker disconnects during the START_JOB handshake', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-disconnect')
+            vi.useFakeTimers()
+
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'done', message: 'Organization complete!' }) })
+                        return [{ title: 'Item 1', url: 'https://example.com/1' }]
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const messageListeners = []
+                const disconnectListeners = []
+                const disconnectedPort = {
+                    postMessage: vi.fn((msg) => {
+                        if (msg?.type === 'START_JOB') {
+                            disconnectListeners.forEach((fn) => fn())
+                        }
+                    }),
+                    onMessage: {
+                        addListener: vi.fn((fn) => messageListeners.push(fn)),
+                        removeListener: vi.fn((fn) => {
+                            const idx = messageListeners.indexOf(fn)
+                            if (idx !== -1) messageListeners.splice(idx, 1)
+                        })
+                    },
+                    onDisconnect: { addListener: vi.fn((fn) => disconnectListeners.push(fn)) },
+                    disconnect: vi.fn()
+                }
+
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => disconnectedPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await Promise.resolve()
+                })
+
+                expect(screen.getByText(/did not acknowledge the job/i)).toBeDefined()
+                expect(screen.getByText(/Organization complete!/i)).toBeDefined()
+                expect(disconnectedPort.disconnect).toHaveBeenCalled()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
     })
 })
 

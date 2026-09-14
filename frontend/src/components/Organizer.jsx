@@ -859,12 +859,16 @@ export default function Organizer() {
                 delegated = await new Promise((resolveDelegate) => {
                     let settled = false;
                     let ackListener = null;
+                    let disconnectListener = null;
                     const finish = (acknowledged) => {
                         if (settled) return;
                         settled = true;
                         clearTimeout(ackTimer);
                         if (ackListener && port.onMessage?.removeListener) {
                             try { port.onMessage.removeListener(ackListener); } catch {}
+                        }
+                        if (disconnectListener && port.onDisconnect?.removeListener) {
+                            try { port.onDisconnect.removeListener(disconnectListener); } catch {}
                         }
                         resolveDelegate(acknowledged);
                     };
@@ -873,8 +877,10 @@ export default function Organizer() {
                     ackListener = (msg) => {
                         if (msg?.type === 'JOB_ACK') finish(true);
                     };
+                    disconnectListener = () => finish(false);
                     try {
                         port.onMessage.addListener(ackListener);
+                        port.onDisconnect?.addListener(disconnectListener);
                     } catch {
                         finish(false);
                         return;
