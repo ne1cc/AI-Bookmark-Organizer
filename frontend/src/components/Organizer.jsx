@@ -1198,9 +1198,25 @@ export default function Organizer() {
                             </div>
                             <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.95rem', fontWeight: '700' }}>
+                                    <button
+                                        type="button"
+                                        aria-label="Toggle Sort by Date Added (Flat List)"
+                                        onClick={() => handleFlatDateSortToggle(!flatDateSort)}
+                                        style={{
+                                            display: 'block',
+                                            color: 'var(--text-primary)',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '700',
+                                            background: 'transparent',
+                                            border: 'none',
+                                            padding: 0,
+                                            cursor: 'pointer',
+                                            fontFamily: 'inherit',
+                                            textAlign: 'left'
+                                        }}
+                                    >
                                         Sort by Date Added (Flat List)
-                                    </label>
+                                    </button>
                                     <span style={{
                                         fontSize: '0.68rem',
                                         padding: '0.15rem 0.5rem',
@@ -1259,9 +1275,23 @@ export default function Organizer() {
                                 <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
                                     Chronological Direction
                                 </label>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
+                                    title="Click to reverse direction"
+                                    style={{
+                                        fontSize: '0.72rem',
+                                        color: 'var(--text-muted)',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        padding: 0,
+                                        cursor: 'pointer',
+                                        fontFamily: 'inherit',
+                                        textDecoration: 'underline'
+                                    }}
+                                >
                                     {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
-                                </span>
+                                </button>
                             </div>
                             <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
                                 <button
