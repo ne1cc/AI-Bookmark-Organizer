@@ -10,13 +10,17 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
   - Compact (1 to 3 subfolders per category) for simple, broad organization (recommended).
   - Balanced (3 to 6 subfolders) for everyday collections.
   - Detailed (6 to 10 subfolders) for large, topic-rich collections.
+- Subfolder Hierarchy Diagrams: Visual diagrams for both light and dark themes that illustrate exactly how each subfolder compactness mode organizes your links.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
 - Model Options: Choose the Gemini model that fits your needs:
   - Gemini 3.1 Flash Lite: Fast, low cost, and great for most collections (default).
   - Gemini 3.8 Flash: Balanced speed and categorization quality.
   - Gemini 3.1 Pro Preview: Best for very large or complex bookmark collections.
 - Sort Inside Folders: Order links inside each folder alphabetically, by date added (newest or oldest first), or by website name.
-- Sort by Date (Free, Offline): A fast offline mode that sorts all bookmarks into a simple date timeline without using any AI tokens.
+- Sort by Date (Free, Offline): A fast offline mode that sorts all bookmarks into a simple date timeline without using any AI tokens. Clickable card header and direction readout allow instant toggling.
+- Zoom & Interface Scaling: Adjustable zoom controls (+, -, reset) in the header for comfortable viewing at any display scale or panel width.
+- Enhanced Readability & Contrast: High-contrast typography, clear boundaries, and accessible styling optimized across light and dark modes.
+- Close & Exit Protection: Safety confirmation dialog before closing the extension panel, navigating away, or wiping runs while an organization is active.
 - Clean Up Titles: Optionally shortens long, cluttered webpage titles and strips tracking text.
 - Keeps Original Dates: Moves bookmarks directly so your original "date added" timestamps are never lost or overwritten.
 - Automatic Safety Backup: Automatically saves an HTML backup of your bookmarks to your Downloads folder before making changes.
@@ -27,8 +31,8 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
   - File Mode: Drag and drop an exported bookmarks HTML file from any browser and download an organized file back.
 - Saved Input File Card: Uploaded files stay available in the extension so you can re-organize, redownload the untouched original, or remove the file anytime.
 - Works in Chrome and Firefox: Runs in the Chrome Side Panel or the Firefox Sidebar.
-- Background Processing: Continues working even if you close the side panel or sidebar, and sends a desktop notification when done.
-- Light, Dark, and System Themes: Clean design that matches your system or preference.
+- Background Processing & Port Resilience: Continues working even if you close the side panel or sidebar with instant fallback if ports disconnect, and sends a desktop notification when done.
+- Light, Dark, and System Themes: Clean design with high-contrast text and custom subfolder illustrations for both themes.
 
 ## How It Works
 
@@ -107,11 +111,16 @@ Your data stays private:
 
 ### v1.3.0
 
-- Clickable Sort Mode: Directly click the "Sort by date added - Flat list" title to toggle flat chronological sorting.
+- Zoom & Interface Scaling: Added top-bar zoom controls (+ / - / reset) allowing users to dynamically scale the extension UI for comfortable reading at any side panel width.
+- Enhanced Contrast & Readability: Upgraded typography, button borders, and color contrasts for clear readability across light and dark themes.
+- Dark Mode Hierarchy Diagrams: Added dedicated dark theme visual diagrams for Subfolder Hierarchy compactness modes (Compact, Balanced, Detailed).
+- In-Flight Exit & Close Confirmation: Added confirmation modal before closing the extension panel, navigating away, or wiping runs while organization is in progress.
+- Port Disconnect & Loading Lag Fix: Fixed loading stalls and latency when background service worker ports disconnect, providing seamless instant in-panel fallback.
+- Clickable Sort Controls: Directly click the "Sort by date added - Flat list" header or direction readout to toggle flat chronological sorting and reverse sort order.
 - MECE Month & Year Organization: Chronological bookmark sorting groups items into mutually exclusive and collectively exhaustive month-year subfolders without consuming AI tokens.
 - Standardized Root Folder & Export Names: Consistent naming conventions across browser bookmark roots and exported Netscape HTML bookmark files.
 - Resilient Background Organization: Enhanced background worker persistence, instantaneous cancellation response, and automatic recovery.
-- Native Duplicate Bookmark Removal: Free one-click cleanup tool for removing duplicate bookmarks directly from browser bookmark folders.
+- Native Duplicate Bookmark Removal: Free one-click cleanup tool for removing duplicate bookmarks directly from browser bookmark folders without AI tokens.
 - Cached Input Bookmark Files: Drop in and retain bookmark files with one-click re-organization, pristine download, or removal.
 
 ### v1.2.1
