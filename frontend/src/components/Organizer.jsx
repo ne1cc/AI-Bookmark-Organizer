@@ -6,6 +6,9 @@ import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, remo
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
+import subfolderHierarchyDarkImage from '../assets/subfolder-hierarchy-dark.png'
+import subfolderHierarchyBalancedDarkImage from '../assets/subfolder-hierarchy-balanced-dark.png'
+import subfolderHierarchyDetailedDarkImage from '../assets/subfolder-hierarchy-detailed-dark.png'
 
 export const DEFAULT_CATEGORIES = [
     'Work & Career',
@@ -76,9 +79,16 @@ export const SCHEMA_SORT_OPTIONS = [
 ];
 
 const SUBFOLDER_EXPLAINER_IMAGES = {
-    '1-3': subfolderHierarchyImage,
-    '3-6': subfolderHierarchyBalancedImage,
-    '6-10': subfolderHierarchyDetailedImage
+    light: {
+        '1-3': subfolderHierarchyImage,
+        '3-6': subfolderHierarchyBalancedImage,
+        '6-10': subfolderHierarchyDetailedImage
+    },
+    dark: {
+        '1-3': subfolderHierarchyDarkImage,
+        '3-6': subfolderHierarchyBalancedDarkImage,
+        '6-10': subfolderHierarchyDetailedDarkImage
+    }
 };
 
 // Synchronous in-process memory reader (0.05ms latency, zero IPC overhead)
@@ -106,7 +116,7 @@ const formatDateSpan = (span) => {
     return (span.includes(' – ') || span.includes(' - ')) ? span : `${span} – ${span}`;
 };
 
-export default function Organizer() {
+export default function Organizer({ theme = 'light' }) {
     const [status, setStatus] = useState('idle') // idle, processing, complete, error
     const [logs, setLogs] = useState([])
     const [progress, setProgress] = useState(0)
@@ -1391,7 +1401,7 @@ export default function Organizer() {
                         <div className="subfolder-explainer">
                             <img
                                 className="subfolder-hierarchy-image"
-                                src={SUBFOLDER_EXPLAINER_IMAGES[subfolderTarget] || subfolderHierarchyImage}
+                                src={SUBFOLDER_EXPLAINER_IMAGES[theme]?.[subfolderTarget] || subfolderHierarchyImage}
                                 alt="Category and nested subfolder hierarchy for the selected organization level"
                             />
                         </div>

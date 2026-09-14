@@ -107,6 +107,13 @@ describe('Organizer Component UI Tests', () => {
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
     })
 
+    it('shows a dark hierarchy illustration when dark mode is active', () => {
+        render(<Organizer theme="dark" />)
+
+        const image = screen.getByRole('img', { name: /category and nested subfolder hierarchy/i })
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-dark.png')
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 

@@ -5,7 +5,7 @@ import { useTheme } from './hooks/useTheme'
 import { X } from 'lucide-react'
 
 function App() {
-  const { theme, setTheme } = useTheme()
+  const { theme, resolved, setTheme } = useTheme()
 
   const handleClose = () => {
     try {
@@ -47,7 +47,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        <Organizer />
+        <Organizer theme={resolved} />
       </main>
     </div>
   )
