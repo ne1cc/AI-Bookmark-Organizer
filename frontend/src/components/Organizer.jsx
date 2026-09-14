@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
-import { saveInputBookmarkFile, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
 
 export const DEFAULT_CATEGORIES = [
     'Work & Career',
@@ -218,13 +218,46 @@ export default function Organizer() {
     const logContainerRef = useRef(null)
     const organizerRef = useRef(null)
     const portRef = useRef(null)
+    const cancelRequestedRef = useRef(false)
+    const completionTimerRef = useRef(null)
+    const resetAppRef = useRef(null)
+    const statusRef = useRef('idle')
+    useEffect(() => { statusRef.current = status }, [status])
+
+    // How long the panel waits for the service worker to acknowledge a
+    // START_JOB before assuming the port is dead and running the job in
+    // the panel itself.
+    const BACKGROUND_ACK_TIMEOUT_MS = 2500
+
+    // How long the completion summary stays up before the app leaves
+    // organization mode and returns to the main menu.
+    const RETURN_TO_MENU_DELAY_MS = 10000
+
+    // Organization mode is transient: after a run completes, leave the
+    // completion summary up briefly, then hand control back to the main
+    // menu (the last-run banner keeps the results downloadable there).
+    // resetApp is reached through a ref because it is defined below.
+    const scheduleReturnToMenu = useCallback(() => {
+        if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
+        completionTimerRef.current = setTimeout(() => {
+            completionTimerRef.current = null
+            if (resetAppRef.current) resetAppRef.current()
+        }, RETURN_TO_MENU_DELAY_MS)
+    }, [])
 
     // Background job connection & state restoration hook
     useEffect(() => {
-        // 1. Initial check of session storage to restore any in-flight background job instantly
+        const t0 = performance.now()
+        const mark = (label) => console.log(`[Startup] ${label} +${(performance.now() - t0).toFixed(1)}ms`)
+        mark('panel mounted')
+
+        // 1. Initial check of session storage to restore any in-flight background job
+        //    instantly. Only the tiny job-state record is read here — the full
+        //    organized results are fetched on demand when the user downloads them.
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.get(['activeJobState', 'organizedData'], (res) => {
+                chrome.storage.session.get(['activeJobState'], (res) => {
+                    mark('session job state restored')
                     if (res?.activeJobState) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
@@ -238,11 +271,11 @@ export default function Organizer() {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
-                        } else if (aj.status === 'complete' && res.organizedData) {
-                            organizedResultsRef.current = res.organizedData;
+                        } else if (aj.status === 'complete') {
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             setStatus('complete');
                             setProgress(100);
+                            scheduleReturnToMenu();
                             if (Array.isArray(aj.logs) && aj.logs.length > 0) {
                                 setLogs(aj.logs.map(l => ({
                                     message: l.message,
@@ -260,6 +293,7 @@ export default function Organizer() {
             try {
                 const port = chrome.runtime.connect({ name: 'organizer-channel' });
                 portRef.current = port;
+                mark('background channel connected')
 
                 port.onMessage.addListener((msg) => {
                     if (!msg || !msg.type) return;
@@ -283,6 +317,7 @@ export default function Organizer() {
                             if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
                             setStatus('complete');
                             setProgress(100);
+                            scheduleReturnToMenu();
                             if (Array.isArray(state.logs) && state.logs.length > 0) {
                                 setLogs(state.logs.map(l => ({
                                     message: l.message,
@@ -302,6 +337,15 @@ export default function Organizer() {
                             setBackgroundNotice('');
                         } else if (state.status === 'idle') {
                             setIsCancelling(false);
+                            // A stale session snapshot can leave the panel in a
+                            // zombie "In Progress" state with no worker behind
+                            // it. If the worker has no job and nothing is
+                            // running in this panel, return to the main menu.
+                            if (statusRef.current === 'processing' && !organizerRef.current) {
+                                setStatus('idle');
+                                setProgress(0);
+                                setBackgroundNotice('');
+                            }
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -314,6 +358,7 @@ export default function Organizer() {
                         setStatus('complete');
                         setProgress(100);
                         setBackgroundNotice('');
+                        scheduleReturnToMenu();
                     } else if (msg.type === 'JOB_ERROR') {
                         setStatus('error');
                         setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
@@ -334,12 +379,29 @@ export default function Organizer() {
         }
 
         return () => {
+            if (completionTimerRef.current) {
+                clearTimeout(completionTimerRef.current);
+                completionTimerRef.current = null;
+            }
             if (portRef.current) {
                 try { portRef.current.disconnect(); } catch {}
                 portRef.current = null;
             }
         };
-    }, []);
+    }, [scheduleReturnToMenu]);
+
+    // Watchdog: port messages can be dropped while the service worker is
+    // busy or restarting, so re-poll its state periodically while a run is
+    // active. Keeps the progress bar and terminal from going stale.
+    useEffect(() => {
+        if (status !== 'processing') return;
+        const watchdog = setInterval(() => {
+            if (portRef.current) {
+                try { portRef.current.postMessage({ type: 'GET_STATUS' }); } catch {}
+            }
+        }, 10000);
+        return () => clearInterval(watchdog);
+    }, [status]);
 
     // Non-blocking background sync from chrome.storage (runs AFTER UI is already painted)
     useEffect(() => {
@@ -559,10 +621,16 @@ export default function Organizer() {
         e.preventDefault();
     }, [])
 
-    // Restore the cached dropped-in file (spec §12) on mount.
+    // Restore the cached dropped-in file (spec §12) on mount. Only the tiny
+    // metadata record is read here; the multi-megabyte HTML is fetched from
+    // storage on demand (download / re-organize) so panel startup stays fast.
     useEffect(() => {
-        getInputBookmarkFile()
-            .then((entry) => { if (entry) setInputFile(entry) })
+        const t = performance.now()
+        getInputBookmarkMeta()
+            .then((entry) => {
+                console.log(`[Startup] input card metadata restored +${(performance.now() - t).toFixed(1)}ms`)
+                if (entry) setInputFile(entry)
+            })
             .catch(() => {})
     }, [])
 
@@ -570,10 +638,17 @@ export default function Organizer() {
         if (inputFile) downloadInputBookmarkFile(inputFile)
     }, [inputFile])
 
-    const handleReorganizeInput = useCallback(() => {
+    const handleReorganizeInput = useCallback(async () => {
         if (!inputFile) return
         try {
-            const links = parseBookmarks(inputFile.html)
+            const html = (typeof inputFile.html === 'string' && inputFile.html.length > 0)
+                ? inputFile.html
+                : await getInputBookmarkHtml()
+            if (!html) {
+                setErrorMsg('Cached input file content is missing — drop the file in again.')
+                return
+            }
+            const links = parseBookmarks(html)
             const span = calculateDateSpan(links)
             setParsedBookmarks(links)
             if (span) setActiveDateSpan(span)
@@ -660,6 +735,7 @@ export default function Organizer() {
     }, [addLog, lastOrganized, activeDateSpan])
 
     const handleCancel = useCallback(() => {
+        cancelRequestedRef.current = true;
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'CANCEL_JOB' });
@@ -673,6 +749,11 @@ export default function Organizer() {
     }, [addLog]);
 
     const resetApp = useCallback(() => {
+        cancelRequestedRef.current = true;
+        if (completionTimerRef.current) {
+            clearTimeout(completionTimerRef.current);
+            completionTimerRef.current = null;
+        }
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'RESET_JOB' });
@@ -693,6 +774,8 @@ export default function Organizer() {
         if (fileInputRef.current) fileInputRef.current.value = '';
     }, [lastOrganized])
 
+    useEffect(() => { resetAppRef.current = resetApp }, [resetApp])
+
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;
         if (requiresApiKey && !apiKey) {
@@ -700,7 +783,12 @@ export default function Organizer() {
             return;
         }
 
+        if (completionTimerRef.current) {
+            clearTimeout(completionTimerRef.current);
+            completionTimerRef.current = null;
+        }
         setIsCancelling(false);
+        cancelRequestedRef.current = false;
 
         try {
             setStatus('processing');
@@ -730,40 +818,94 @@ export default function Organizer() {
             setErrorMsg('');
             setBackgroundNotice('');
 
-            // If connected to background service worker, delegate execution
+            // Delegate to the background service worker. A port whose worker
+            // has gone idle swallows postMessage silently, which used to
+            // strand the run at 0% with no terminal output — so the worker
+            // must acknowledge the job before the panel trusts it with
+            // the run, and otherwise falls back to an in-panel run.
             let port = portRef.current;
             if (!port && typeof chrome !== 'undefined' && chrome.runtime?.connect) {
                 try {
                     port = chrome.runtime.connect({ name: 'organizer-channel' });
                     portRef.current = port;
-                } catch {}
+                } catch {
+                    port = null;
+                }
+            }
+
+            let delegated = false;
+            if (port) {
+                delegated = await new Promise((resolveDelegate) => {
+                    let settled = false;
+                    let ackListener = null;
+                    const finish = (acknowledged) => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(ackTimer);
+                        if (ackListener && port.onMessage?.removeListener) {
+                            try { port.onMessage.removeListener(ackListener); } catch {}
+                        }
+                        resolveDelegate(acknowledged);
+                    };
+                    const ackTimer = setTimeout(() => finish(false), BACKGROUND_ACK_TIMEOUT_MS);
+
+                    ackListener = (msg) => {
+                        if (msg?.type === 'JOB_ACK') finish(true);
+                    };
+                    try {
+                        port.onMessage.addListener(ackListener);
+                    } catch {
+                        finish(false);
+                        return;
+                    }
+
+                    try {
+                        port.postMessage({
+                            type: 'START_JOB',
+                            payload: {
+                                config: {
+                                    apiKey,
+                                    categories,
+                                    selectedModel,
+                                    subfolderTarget,
+                                    sortAlphabetically,
+                                    removeDuplicates,
+                                    cleanTitles,
+                                    flatDateSort,
+                                    dateSortOrder,
+                                    schemaSortOrder
+                                },
+                                parsedBookmarks
+                            }
+                        });
+                    } catch (portErr) {
+                        console.warn('[Organizer] Port postMessage failed, falling back to in-process:', portErr);
+                        finish(false);
+                    }
+                });
+            }
+
+            if (delegated && cancelRequestedRef.current) {
+                return;
+            }
+            if (delegated) {
+                addLog('Background service worker acknowledged the job — organization continues there.');
+                return;
             }
 
             if (port) {
-                try {
-                    port.postMessage({
-                        type: 'START_JOB',
-                        payload: {
-                            config: {
-                                apiKey,
-                                categories,
-                                selectedModel,
-                                subfolderTarget,
-                                sortAlphabetically,
-                                removeDuplicates,
-                                cleanTitles,
-                                flatDateSort,
-                                dateSortOrder,
-                                schemaSortOrder
-                            },
-                            parsedBookmarks
-                        }
-                    });
+                // The worker never acknowledged: stop it if it did receive the
+                // message, drop the suspect port, and run in this panel so the
+                // terminal keeps showing live progress instead of stalling.
+                try { port.postMessage({ type: 'CANCEL_JOB' }); } catch {}
+                try { port.disconnect(); } catch {}
+                portRef.current = null;
+                if (cancelRequestedRef.current) {
                     return;
-                } catch (portErr) {
-                    console.warn('[Organizer] Port postMessage failed, falling back to in-process:', portErr);
-                    portRef.current = null;
                 }
+                addLog('Background service worker did not acknowledge the job — running the organization in this panel instead.');
+            } else if (!cancelRequestedRef.current) {
+                addLog('Background service worker unavailable — running the organization in this panel instead.');
             }
 
             const { OrganizerService } = await import('../services/organizer')
@@ -809,6 +951,7 @@ export default function Organizer() {
                         setBackgroundNotice('');
                         setStatus('complete');
                         setProgress(100);
+                        scheduleReturnToMenu();
                     }
                 },
                 selectedModel,
@@ -872,7 +1015,7 @@ export default function Organizer() {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan]);
+    }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -1525,7 +1668,7 @@ export default function Organizer() {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No categories chosen. AI will automatically design a structure from your bookmarks, or you can add from the suggestions below.
+                            No categories chosen. Bookmarks will use a single "Other" category, or you can add categories from the suggestions below.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -1982,6 +2125,9 @@ export default function Organizer() {
                             }}
                         >
                             {flatDateSort ? 'Sort Again' : 'Organize Again'}
+                        </div>
+                        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Returning to the main menu shortly — your results stay downloadable in the last-run banner.
                         </div>
                     </div>
                 ) : status === 'processing' ? (

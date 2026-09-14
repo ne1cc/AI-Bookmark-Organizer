@@ -69,17 +69,19 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         return html;
     }
 
-    // Group by category and subcategory. Prototype-free objects: a proposed
+    // A Map preserves category insertion order even for numeric custom names.
+    // Subcategory groups use prototype-free objects: a proposed
     // sub_category named "constructor" or "toString" would otherwise read as
     // already-present via the prototype chain, skip its array initialisation,
     // and throw on push — losing the entire export to a caught console.warn.
-    const structured = Object.create(null);
+    const structured = new Map();
 
     bookmarks.forEach(b => {
         const cat = b.category || "Uncategorized";
         const sub = b.sub_category;
 
-        if (!structured[cat]) structured[cat] = Object.create(null);
+        if (!structured.has(cat)) structured.set(cat, Object.create(null));
+        const content = structured.get(cat);
 
         // Mirror the browser-write path exactly: `shouldCreateSubFolder` rejects
         // "General", "None", "Uncategorized" and a subcategory echoing its own
@@ -87,15 +89,15 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         // "General" folder under every category on HTML import, while the same
         // run in browser mode filed them directly under the category.
         if (shouldCreateSubFolder(cat, sub)) {
-            if (!structured[cat][sub]) structured[cat][sub] = [];
-            structured[cat][sub].push(b);
+            if (!content[sub]) content[sub] = [];
+            content[sub].push(b);
         } else {
-            if (!structured[cat]['_root']) structured[cat]['_root'] = [];
-            structured[cat]['_root'].push(b);
+            if (!content['_root']) content['_root'] = [];
+            content['_root'].push(b);
         }
     });
 
-    for (const [category, content] of Object.entries(structured)) {
+    for (const [category, content] of structured) {
         const safeCategory = escapeHtml(category);
         html += `    <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeCategory}</H3>\n`;
         html += `    <DL><p>\n`;
