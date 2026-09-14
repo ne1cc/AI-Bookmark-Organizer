@@ -1,43 +1,43 @@
-import { calculateDateSpan } from "../utils/dates";
-import { shouldCreateSubFolder } from "./bookmarks";
+import { calculateDateSpan } from '../utils/dates';
+import { shouldCreateSubFolder } from './bookmarks';
 
 // HTML escape function to prevent XSS
 function escapeHtml(text) {
-    if (!text) return "";
-    if (typeof document !== "undefined" && document.createElement) {
-        const div = document.createElement("div");
+    if (!text) return '';
+    if (typeof document !== 'undefined' && document.createElement) {
+        const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
     return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 // Embed a favicon only when it is a pure base64 image data URL: the strict
 // charset (no quotes, angle brackets or ampersands) guarantees the value
 // cannot break out of the quoted attribute.
 function iconAttribute(icon) {
-    if (typeof icon === "string" && /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]*$/i.test(icon)) {
+    if (typeof icon === 'string' && /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]*$/i.test(icon)) {
         return ` ICON="${icon}"`;
     }
-    return "";
+    return '';
 }
 
 // URL sanitization - only allow http/https protocols
 function sanitizeUrl(url) {
-    if (!url) return "";
+    if (!url) return '';
     try {
         const parsed = new URL(url);
-        if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
             return escapeHtml(url);
         }
-        return "";
+        return '';
     } catch {
-        return "";
+        return '';
     }
 }
 
@@ -46,7 +46,7 @@ export function generateNetscapeHTML(bookmarks, options = {}) {
     const dateSpan = bookmarks?.stats?.dateSpan || bookmarks?.dateSpan || calculateDateSpan(bookmarks);
     let html = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
 <!-- This is an automatically generated file.
-${dateSpan ? `     Date range: ${dateSpan}\n` : ""}     It will be read and overwritten.
+${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and overwritten.
      DO NOT EDIT! -->
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
 <TITLE>Bookmarks</TITLE>
@@ -70,17 +70,19 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ""}     It will be read and over
         return html;
     }
 
-    // Group by category and subcategory. Prototype-free objects: a proposed
+    // A Map preserves category insertion order even for numeric custom names.
+    // Subcategory groups use prototype-free objects: a proposed
     // sub_category named "constructor" or "toString" would otherwise read as
     // already-present via the prototype chain, skip its array initialisation,
     // and throw on push — losing the entire export to a caught console.warn.
-    const structured = Object.create(null);
+    const structured = new Map();
 
     bookmarks.forEach(b => {
         const cat = b.category || "Uncategorized";
         const sub = b.sub_category;
 
-        if (!structured[cat]) structured[cat] = Object.create(null);
+        if (!structured.has(cat)) structured.set(cat, Object.create(null));
+        const content = structured.get(cat);
 
         // Mirror the browser-write path exactly: `shouldCreateSubFolder` rejects
         // "General", "None", "Uncategorized" and a subcategory echoing its own
@@ -88,22 +90,22 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ""}     It will be read and over
         // "General" folder under every category on HTML import, while the same
         // run in browser mode filed them directly under the category.
         if (shouldCreateSubFolder(cat, sub)) {
-            if (!structured[cat][sub]) structured[cat][sub] = [];
-            structured[cat][sub].push(b);
+            if (!content[sub]) content[sub] = [];
+            content[sub].push(b);
         } else {
-            if (!structured[cat]["_root"]) structured[cat]["_root"] = [];
-            structured[cat]["_root"].push(b);
+            if (!content['_root']) content['_root'] = [];
+            content['_root'].push(b);
         }
     });
 
-    for (const [category, content] of Object.entries(structured)) {
+    for (const [category, content] of structured) {
         const safeCategory = escapeHtml(category);
         html += `    <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeCategory}</H3>\n`;
         html += `    <DL><p>\n`;
 
         // Subcategories
         for (const [sub, items] of Object.entries(content)) {
-            if (sub !== "_root") {
+            if (sub !== '_root') {
                 const safeSub = escapeHtml(sub);
                 html += `        <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeSub}</H3>\n`;
                 html += `        <DL><p>\n`;
@@ -120,8 +122,8 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ""}     It will be read and over
         }
 
         // Root items in category
-        if (content["_root"]) {
-            content["_root"].forEach(item => {
+        if (content['_root']) {
+            content['_root'].forEach(item => {
                 const safeTitle = escapeHtml(item.title);
                 const safeUrl = sanitizeUrl(item.url);
                 const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
@@ -146,35 +148,29 @@ export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.htm
     const html = generateNetscapeHTML(bookmarks, options);
 
     let url;
-    if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
-        const blob = new Blob([html], { type: "text/html" });
-        url = URL.createObjectURL(blob);
-    } else {
-        url = "data:text/html;charset=utf-8," + encodeURIComponent(html);
-    }
-
-    if (typeof chrome !== "undefined" && chrome.downloads && typeof chrome.downloads.download === "function") {
+    if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         try {
-            chrome.downloads.download({
-                url: url,
-                filename: actualFilename,
-                saveAs: saveAs
-            });
-            return;
+            const blob = new Blob([html], { type: "text/html" });
+            url = URL.createObjectURL(blob);
         } catch {
-            // fallback
+            url = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
         }
+    } else {
+        url = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
     }
 
-    if (typeof document !== "undefined") {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = actualFilename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        if (url.startsWith("blob:")) {
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
+    if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
+        chrome.downloads.download({
+            url: url,
+            filename: actualFilename,
+            saveAs: saveAs
+        });
+    } else if (typeof document !== 'undefined' && document.createElement) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = actualFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
     }
 }

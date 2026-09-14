@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, RotateCcw, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
+import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
-import { saveInputBookmarkFile, getInputBookmarkFile, getInputBookmarkFiles, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
-import { OrganizerService } from '../services/organizer'
-import { downloadBookmarks } from '../services/bookmarks_export'
+import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
+import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
+import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
 
-export const DEFAULT_CATEGORIES = [];
-
-export const LEGACY_DEFAULT_CATEGORIES = [
+export const DEFAULT_CATEGORIES = [
     'Work & Career',
     'Finance & Crypto',
     'Design & Media',
@@ -20,14 +19,6 @@ export const LEGACY_DEFAULT_CATEGORIES = [
 ];
 
 export const SUGGESTED_ADDABLE_CATEGORIES = [
-    'Work & Career',
-    'Finance & Crypto',
-    'Design & Media',
-    'Reading & Knowledge',
-    'Entertainment & Social',
-    'Shopping & Tools',
-    'Travel & Lifestyle',
-    'Tech & Development',
     'Health, Fitness & Wellness',
     'AI & Machine Learning',
     'News & Current Affairs',
@@ -39,6 +30,15 @@ export const SUGGESTED_ADDABLE_CATEGORIES = [
     'Gaming & Esports',
     'Legal, Docs & Admin'
 ];
+
+const SUBFOLDER_TARGET_IDS = ['1-3', '3-6', '6-10'];
+const LEGACY_SUBFOLDER_TARGETS = {
+    '0-5': '1-3',
+    '5-10': '3-6',
+    '10+': '6-10'
+};
+const normalizeSubfolderTarget = (target) =>
+    LEGACY_SUBFOLDER_TARGETS[target] || (SUBFOLDER_TARGET_IDS.includes(target) ? target : '1-3');
 
 export const SCHEMA_SORT_OPTIONS = [
     {
@@ -74,6 +74,12 @@ export const SCHEMA_SORT_OPTIONS = [
         desc: 'Groups bookmarks by domain (e.g. github.com, youtube.com), then title.'
     }
 ];
+
+const SUBFOLDER_EXPLAINER_IMAGES = {
+    '1-3': subfolderHierarchyImage,
+    '3-6': subfolderHierarchyBalancedImage,
+    '6-10': subfolderHierarchyDetailedImage
+};
 
 // Synchronous in-process memory reader (0.05ms latency, zero IPC overhead)
 const getStored = (key, fallback) => {
@@ -173,17 +179,8 @@ export default function Organizer() {
         }
     })
 
-    // Categories — defaults to empty [] for automatic AI category generation.
-    // If stored value is the legacy 8 default preset, migrate to [] so automatic generation is active.
-    const [categories, setCategories] = useState(() => {
-        const stored = getStored('categories', null);
-        if (!stored || !Array.isArray(stored)) return [];
-        if (stored.length === 8 && stored.every((c, i) => c === LEGACY_DEFAULT_CATEGORIES[i])) {
-            try { localStorage.setItem('categories', JSON.stringify([])); } catch {}
-            return [];
-        }
-        return stored;
-    });
+    // Default Categories — instantaneous bootstrap
+    const [categories, setCategories] = useState(() => getStored('categories', DEFAULT_CATEGORIES))
     const [newCategory, setNewCategory] = useState('')
 
     // Suggested Categories not yet in active categories
@@ -222,16 +219,15 @@ export default function Organizer() {
 
     // Subfolder Target Size
     const subfolderTargetOptions = useMemo(() => [
-        { id: '0-5', label: 'Compact (0-5)', description: 'Minimal subfolders' },
-        { id: '5-10', label: 'Balanced (5-10)', description: 'Recommended' },
-        { id: '10+', label: 'Detailed (10+)', description: 'More specific grouping' }
+        { id: '1-3', label: 'Compact (1-3)', description: 'Recommended — only the clearest subgroups' },
+        { id: '3-6', label: 'Balanced (3-6)', description: 'A focused structure for broader collections' },
+        { id: '6-10', label: 'Detailed (6-10)', description: 'More specific grouping for large collections' }
     ], [])
     const [subfolderTarget, setSubfolderTarget] = useState(() => {
         try {
-            const t = localStorage.getItem('subfolderTarget')
-            return t && ['0-5', '5-10', '10+'].includes(t) ? t : '5-10'
+            return normalizeSubfolderTarget(localStorage.getItem('subfolderTarget'))
         } catch {
-            return '5-10'
+            return '1-3'
         }
     })
     const subfolderOptions = subfolderTargetOptions
@@ -239,14 +235,46 @@ export default function Organizer() {
     const logContainerRef = useRef(null)
     const organizerRef = useRef(null)
     const portRef = useRef(null)
-    const cancelTimeoutRef = useRef(null)
+    const cancelRequestedRef = useRef(false)
+    const completionTimerRef = useRef(null)
+    const resetAppRef = useRef(null)
+    const statusRef = useRef('idle')
+    useEffect(() => { statusRef.current = status }, [status])
+
+    // How long the panel waits for the service worker to acknowledge a
+    // START_JOB before assuming the port is dead and running the job in
+    // the panel itself.
+    const BACKGROUND_ACK_TIMEOUT_MS = 2500
+
+    // How long the completion summary stays up before the app leaves
+    // organization mode and returns to the main menu.
+    const RETURN_TO_MENU_DELAY_MS = 10000
+
+    // Organization mode is transient: after a run completes, leave the
+    // completion summary up briefly, then hand control back to the main
+    // menu (the last-run banner keeps the results downloadable there).
+    // resetApp is reached through a ref because it is defined below.
+    const scheduleReturnToMenu = useCallback(() => {
+        if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
+        completionTimerRef.current = setTimeout(() => {
+            completionTimerRef.current = null
+            if (resetAppRef.current) resetAppRef.current()
+        }, RETURN_TO_MENU_DELAY_MS)
+    }, [])
 
     // Background job connection & state restoration hook
     useEffect(() => {
-        // 1. Initial check of session storage to restore any in-flight background job instantly
+        const t0 = performance.now()
+        const mark = (label) => console.log(`[Startup] ${label} +${(performance.now() - t0).toFixed(1)}ms`)
+        mark('panel mounted')
+
+        // 1. Initial check of session storage to restore any in-flight background job
+        //    instantly. Only the tiny job-state record is read here — the full
+        //    organized results are fetched on demand when the user downloads them.
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.get(['activeJobState', 'organizedData'], (res) => {
+                chrome.storage.session.get(['activeJobState'], (res) => {
+                    mark('session job state restored')
                     if (res?.activeJobState) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
@@ -260,16 +288,11 @@ export default function Organizer() {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
-                        } else if (aj.status === 'idle') {
-                            setStatus('idle');
-                            setIsCancelling(false);
-                            setProgress(0);
-                            setBackgroundNotice('');
-                        } else if (aj.status === 'complete' && res.organizedData) {
-                            organizedResultsRef.current = res.organizedData;
+                        } else if (aj.status === 'complete') {
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             setStatus('complete');
                             setProgress(100);
+                            scheduleReturnToMenu();
                             if (Array.isArray(aj.logs) && aj.logs.length > 0) {
                                 setLogs(aj.logs.map(l => ({
                                     message: l.message,
@@ -287,6 +310,7 @@ export default function Organizer() {
             try {
                 const port = chrome.runtime.connect({ name: 'organizer-channel' });
                 portRef.current = port;
+                mark('background channel connected')
 
                 port.onMessage.addListener((msg) => {
                     if (!msg || !msg.type) return;
@@ -310,6 +334,7 @@ export default function Organizer() {
                             if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
                             setStatus('complete');
                             setProgress(100);
+                            scheduleReturnToMenu();
                             if (Array.isArray(state.logs) && state.logs.length > 0) {
                                 setLogs(state.logs.map(l => ({
                                     message: l.message,
@@ -328,11 +353,16 @@ export default function Organizer() {
                             setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
                             setBackgroundNotice('');
                         } else if (state.status === 'idle') {
-                            if (cancelTimeoutRef.current) { clearTimeout(cancelTimeoutRef.current); cancelTimeoutRef.current = null; }
-                            setStatus('idle');
                             setIsCancelling(false);
-                            setProgress(0);
-                            setBackgroundNotice('');
+                            // A stale session snapshot can leave the panel in a
+                            // zombie "In Progress" state with no worker behind
+                            // it. If the worker has no job and nothing is
+                            // running in this panel, return to the main menu.
+                            if (statusRef.current === 'processing' && !organizerRef.current) {
+                                setStatus('idle');
+                                setProgress(0);
+                                setBackgroundNotice('');
+                            }
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -345,36 +375,20 @@ export default function Organizer() {
                         setStatus('complete');
                         setProgress(100);
                         setBackgroundNotice('');
+                        scheduleReturnToMenu();
                     } else if (msg.type === 'JOB_ERROR') {
                         setStatus('error');
                         setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
                         setBackgroundNotice('');
                     } else if (msg.type === 'JOB_CANCELLED') {
-                        if (cancelTimeoutRef.current) { clearTimeout(cancelTimeoutRef.current); cancelTimeoutRef.current = null; }
                         setStatus('idle');
                         setIsCancelling(false);
                         setProgress(0);
-                        setBackgroundNotice('');
                     }
                 });
 
                 port.onDisconnect.addListener(() => {
                     portRef.current = null;
-                    if (cancelTimeoutRef.current) {
-                        clearTimeout(cancelTimeoutRef.current);
-                        cancelTimeoutRef.current = null;
-                    }
-                    setStatus((currStatus) => {
-                        if (currStatus === 'processing') {
-                            setIsCancelling(false);
-                            setProgress(0);
-                            setBackgroundNotice('');
-                            addLog('Background service worker disconnected. Halting operations.');
-                            return 'idle';
-                        }
-                        return currStatus;
-                    });
-                    setIsCancelling(false);
                 });
             } catch (err) {
                 console.warn('[Organizer] Failed to connect to background channel:', err);
@@ -382,43 +396,29 @@ export default function Organizer() {
         }
 
         return () => {
-            if (cancelTimeoutRef.current) {
-                clearTimeout(cancelTimeoutRef.current);
-                cancelTimeoutRef.current = null;
+            if (completionTimerRef.current) {
+                clearTimeout(completionTimerRef.current);
+                completionTimerRef.current = null;
             }
             if (portRef.current) {
                 try { portRef.current.disconnect(); } catch {}
                 portRef.current = null;
             }
         };
-    }, []);
+    }, [scheduleReturnToMenu]);
 
+    // Watchdog: port messages can be dropped while the service worker is
+    // busy or restarting, so re-poll its state periodically while a run is
+    // active. Keeps the progress bar and terminal from going stale.
     useEffect(() => {
-        const handleWindowCloseOrUnload = () => {
-            if (isCancelling) {
-                if (typeof chrome !== 'undefined' && chrome.storage?.session) {
-                    try {
-                        chrome.storage.session.remove(['activeJobState']);
-                    } catch {}
-                }
-                if (portRef.current) {
-                    try {
-                        portRef.current.postMessage({ type: 'CANCEL_JOB' });
-                    } catch {}
-                }
+        if (status !== 'processing') return;
+        const watchdog = setInterval(() => {
+            if (portRef.current) {
+                try { portRef.current.postMessage({ type: 'GET_STATUS' }); } catch {}
             }
-        };
-
-        window.addEventListener('beforeunload', handleWindowCloseOrUnload);
-        window.addEventListener('pagehide', handleWindowCloseOrUnload);
-        window.addEventListener('extension-close-requested', handleWindowCloseOrUnload);
-
-        return () => {
-            window.removeEventListener('beforeunload', handleWindowCloseOrUnload);
-            window.removeEventListener('pagehide', handleWindowCloseOrUnload);
-            window.removeEventListener('extension-close-requested', handleWindowCloseOrUnload);
-        };
-    }, [isCancelling]);
+        }, 10000);
+        return () => clearInterval(watchdog);
+    }, [status]);
 
     // Non-blocking background sync from chrome.storage (runs AFTER UI is already painted)
     useEffect(() => {
@@ -427,15 +427,9 @@ export default function Organizer() {
             chrome.storage.local.get(['apiKey', 'categories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
                 if (!result) return
                 if (result.apiKey && result.apiKey !== apiKey) setApiKey(result.apiKey)
-                if (result.categories && Array.isArray(result.categories)) {
-                    if (result.categories.length === 8 && result.categories.every((c, i) => c === LEGACY_DEFAULT_CATEGORIES[i])) {
-                        setCategories([]);
-                        try { localStorage.setItem('categories', JSON.stringify([])); } catch {}
-                        chrome.storage.local.set({ categories: [] });
-                    } else {
-                        setCategories(result.categories);
-                        try { localStorage.setItem('categories', JSON.stringify(result.categories)); } catch {}
-                    }
+                if (result.categories && Array.isArray(result.categories) && result.categories.length > 0) {
+                    setCategories(result.categories)
+                    try { localStorage.setItem('categories', JSON.stringify(result.categories)) } catch {}
                 }
                 if (result.selectedModel === 'google/gemini-2.5-pro') {
                     setSelectedModel('google/gemini-3.1-pro-preview')
@@ -446,8 +440,12 @@ export default function Organizer() {
                     try { localStorage.setItem('selectedModel', result.selectedModel) } catch {}
                 }
                 if (result.subfolderTarget) {
-                    setSubfolderTarget(result.subfolderTarget)
-                    try { localStorage.setItem('subfolderTarget', result.subfolderTarget) } catch {}
+                    const normalizedTarget = normalizeSubfolderTarget(result.subfolderTarget)
+                    setSubfolderTarget(normalizedTarget)
+                    try { localStorage.setItem('subfolderTarget', normalizedTarget) } catch {}
+                    if (normalizedTarget !== result.subfolderTarget) {
+                        chrome.storage.local.set({ subfolderTarget: normalizedTarget })
+                    }
                 }
                 if (result.schemaSortOrder && SCHEMA_SORT_OPTIONS.some(opt => opt.id === result.schemaSortOrder)) {
                     setSchemaSortOrder(result.schemaSortOrder)
@@ -505,7 +503,15 @@ export default function Organizer() {
         }
     }, [])
 
-
+    // Warm the lazy organize pipeline after first paint so clicking
+    // Organize is never slower than the old eager bundle.
+    useEffect(() => {
+        const idle = window.requestIdleCallback || (cb => setTimeout(cb, 200))
+        idle(() => {
+            import('../services/organizer')
+            import('../services/bookmarks_export')
+        })
+    }, [])
 
     // Save Settings to both in-process memory and chrome.storage
     const updateSetting = useCallback((key, val) => {
@@ -537,6 +543,11 @@ export default function Organizer() {
         setSchemaSortOrder(newOrder)
         updateSetting('schemaSortOrder', newOrder)
         updateSetting('sortAlphabetically', newOrder === 'alpha')
+    }, [updateSetting])
+
+    const handleRemoveDuplicatesToggle = useCallback((enabled) => {
+        setRemoveDuplicates(enabled)
+        updateSetting('removeDuplicates', enabled)
     }, [updateSetting])
 
     const handleCleanTitlesToggle = useCallback((enabled) => {
@@ -581,162 +592,98 @@ export default function Organizer() {
     // File Upload Handlers
     const [uploadedFile, setUploadedFile] = useState(null)
     const [parsedBookmarks, setParsedBookmarks] = useState(null)
-    const [inputFiles, setInputFiles] = useState([])
-    const inputFile = inputFiles[0] || null
+    const [inputFile, setInputFile] = useState(null)
     const fileInputRef = useRef(null)
 
     const addLog = useCallback((message) => {
         setLogs(prev => [...prev, { message, timestamp: new Date() }])
     }, [])
 
-    const readAndCacheFile = useCallback((file) => {
-        return new Promise((resolve, reject) => {
-            if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
-                return reject(new Error(`"${file.name}" is not a valid bookmarks HTML file.`))
-            }
+    const processFile = useCallback((file) => {
+        if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
+            setErrorMsg("Please upload a valid bookmarks HTML file.");
+            return;
+        }
 
-            const reader = new FileReader()
-            reader.onload = (e) => {
-                const content = e.target.result
-                try {
-                    const links = parseBookmarks(content)
-                    const span = calculateDateSpan(links)
-                    saveInputBookmarkFile({ filename: file.name, html: content, count: links.length, dateSpan: span })
-                        .then((res) => {
-                            if (res.saved) {
-                                if (res.entries) setInputFiles(res.entries)
-                                else if (res.entry) setInputFiles(prev => [res.entry, ...prev.filter(f => f.filename !== file.name)].slice(0, 3))
-                            } else {
-                                addLog(`"${file.name}" too large to cache (25 MB limit) — organize continues; keep your own copy of the original.`)
-                            }
-                            resolve({ file, links, span, content })
-                        })
-                        .catch(() => {
-                            addLog(`Could not cache "${file.name}" locally.`)
-                            resolve({ file, links, span, content })
-                        })
-                } catch (err) {
-                    reject(new Error(`Failed to parse "${file.name}".`))
-                }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const content = e.target.result;
+            try {
+                const links = parseBookmarks(content);
+                const span = calculateDateSpan(links);
+                setUploadedFile(file);
+                setParsedBookmarks(links);
+                saveInputBookmarkFile({ filename: file.name, html: content, count: links.length, dateSpan: span })
+                    .then((res) => { if (res.saved) setInputFile(res.entry); else addLog('Input file too large to cache (25 MB limit) — organize continues; keep your own copy of the original.'); })
+                    .catch(() => addLog('Could not cache the input file locally.'))
+                if (span) setActiveDateSpan(span);
+                setErrorMsg('');
+                addLog(`Loaded ${file.name} (${links.length.toLocaleString()} bookmarks found${span ? ` · Dates ${span}` : ''})`);
+            } catch (err) {
+                console.error(err);
+                setErrorMsg("Failed to parse bookmarks file.");
             }
-            reader.onerror = () => reject(new Error(`Failed to read "${file.name}".`))
-            reader.readAsText(file)
-        })
+        };
+        reader.readAsText(file);
     }, [addLog])
 
-    const processFiles = useCallback(async (fileList) => {
-        const files = Array.from(fileList || []).slice(0, 3)
-        if (files.length === 0) return
-
-        const validFiles = files.filter(f => f.name.endsWith('.html') || f.name.endsWith('.htm'))
-        if (validFiles.length === 0) {
-            setErrorMsg("Please upload a valid bookmarks HTML file.")
-            return
-        }
-
-        setErrorMsg('')
-        let lastSuccessful = null
-        for (const file of validFiles) {
-            try {
-                const result = await readAndCacheFile(file)
-                lastSuccessful = result
-                addLog(`Loaded ${file.name} (${result.links.length.toLocaleString()} bookmarks found${result.span ? ` · Dates ${result.span}` : ''})`)
-            } catch (err) {
-                console.error(err)
-                setErrorMsg(err.message || "Failed to parse bookmarks file.")
-            }
-        }
-
-        if (lastSuccessful) {
-            setUploadedFile(lastSuccessful.file)
-            setParsedBookmarks(lastSuccessful.links)
-            if (lastSuccessful.span) setActiveDateSpan(lastSuccessful.span)
-        }
-    }, [readAndCacheFile, addLog])
-
-    const processFile = useCallback((file) => {
-        if (file) processFiles([file])
-    }, [processFiles])
-
     const handleFileSelect = useCallback(async (e) => {
-        const files = e.target.files
-        if (files && files.length > 0) processFiles(files)
-    }, [processFiles])
+        const file = e.target.files[0];
+        if (file) processFile(file);
+    }, [processFile])
 
     const handleDrop = useCallback((e) => {
-        e.preventDefault()
-        const files = e.dataTransfer?.files
-        if (files && files.length > 0) processFiles(files)
-    }, [processFiles])
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) processFile(file);
+    }, [processFile])
 
     const handleDragOver = useCallback((e) => {
-        e.preventDefault()
+        e.preventDefault();
     }, [])
 
-    // Restore the cached dropped-in files (spec §12) on mount (up to 3).
+    // Restore the cached dropped-in file (spec §12) on mount. Only the tiny
+    // metadata record is read here; the multi-megabyte HTML is fetched from
+    // storage on demand (download / re-organize) so panel startup stays fast.
     useEffect(() => {
-        const fetchInputs = async () => {
-            try {
-                if (typeof getInputBookmarkFiles === 'function') {
-                    const files = await getInputBookmarkFiles()
-                    if (Array.isArray(files) && files.length > 0) {
-                        setInputFiles(files)
-                        return
-                    }
-                }
-                if (typeof getInputBookmarkFile === 'function') {
-                    const single = await getInputBookmarkFile()
-                    if (Array.isArray(single)) setInputFiles(single)
-                    else if (single) setInputFiles([single])
-                    else setInputFiles([])
-                }
-            } catch {
-                setInputFiles([])
-            }
-        }
-        fetchInputs()
+        const t = performance.now()
+        getInputBookmarkMeta()
+            .then((entry) => {
+                console.log(`[Startup] input card metadata restored +${(performance.now() - t).toFixed(1)}ms`)
+                if (entry) setInputFile(entry)
+            })
+            .catch(() => {})
     }, [])
 
-    const handleDownloadInput = useCallback((target) => {
-        const fileToDownload = (target && target.html) ? target : (inputFiles[0] || inputFile)
-        if (fileToDownload) downloadInputBookmarkFile(fileToDownload)
-    }, [inputFiles, inputFile])
+    const handleDownloadInput = useCallback(() => {
+        if (inputFile) downloadInputBookmarkFile(inputFile)
+    }, [inputFile])
 
-    const handleReorganizeInput = useCallback((target) => {
-        const fileToLoad = (target && target.html) ? target : (inputFiles[0] || inputFile)
-        if (!fileToLoad) return
+    const handleReorganizeInput = useCallback(async () => {
+        if (!inputFile) return
         try {
-            const links = parseBookmarks(fileToLoad.html)
+            const html = (typeof inputFile.html === 'string' && inputFile.html.length > 0)
+                ? inputFile.html
+                : await getInputBookmarkHtml()
+            if (!html) {
+                setErrorMsg('Cached input file content is missing — drop the file in again.')
+                return
+            }
+            const links = parseBookmarks(html)
             const span = calculateDateSpan(links)
-            setUploadedFile({ name: fileToLoad.filename })
             setParsedBookmarks(links)
             if (span) setActiveDateSpan(span)
             setErrorMsg('')
-            addLog(`Re-loaded ${fileToLoad.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
+            addLog(`Re-loaded ${inputFile.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
         } catch (err) {
             console.error(err)
             setErrorMsg('Cached input file could not be parsed.')
         }
-    }, [inputFiles, inputFile, addLog])
+    }, [inputFile, addLog])
 
-    const handleRemoveInput = useCallback(async (idOrFile) => {
-        const id = typeof idOrFile === 'string' ? idOrFile : (idOrFile?.id || idOrFile?.filename)
-        try {
-            if (id) {
-                const remaining = await removeInputBookmarkFile(id)
-                setInputFiles(Array.isArray(remaining) ? remaining : [])
-            } else {
-                await removeInputBookmarkFile()
-                setInputFiles([])
-            }
-        } catch {
-            setInputFiles([])
-        }
-    }, [])
-
-    const handleClearAllInputs = useCallback(async () => {
+    const handleRemoveInput = useCallback(async () => {
         try { await removeInputBookmarkFile() } catch {}
-        setInputFiles([])
+        setInputFile(null)
     }, [])
 
     // Auto-scroll logs
@@ -747,6 +694,7 @@ export default function Organizer() {
     }, [logs])
 
     const downloadOrganized = useCallback(async () => {
+        const { downloadBookmarks } = await import('../services/bookmarks_export')
         const doDownload = (data) => {
             const span = calculateDateSpan(data) || lastOrganized?.stats?.dateSpan || lastOrganized?.dateSpan || activeDateSpan;
             addLog(`Downloading ${data.length.toLocaleString()} bookmarks${span ? ` (Dates ${span})` : ''}...`);
@@ -808,10 +756,7 @@ export default function Organizer() {
     }, [addLog, lastOrganized, activeDateSpan])
 
     const handleCancel = useCallback(() => {
-        if (cancelTimeoutRef.current) {
-            clearTimeout(cancelTimeoutRef.current);
-            cancelTimeoutRef.current = null;
-        }
+        cancelRequestedRef.current = true;
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'CANCEL_JOB' });
@@ -822,28 +767,13 @@ export default function Organizer() {
         }
         setIsCancelling(true);
         addLog('Cancellation requested — halting operations...');
-
-        // Watchdog: If background worker was terminated, crashed or fails to acknowledge within 1.5s,
-        // forcefully unfreeze the UI back to idle.
-        cancelTimeoutRef.current = setTimeout(() => {
-            setIsCancelling(false);
-            setStatus((currStatus) => {
-                if (currStatus === 'processing') {
-                    setProgress(0);
-                    setBackgroundNotice('');
-                    addLog('Cancellation confirmed.');
-                    return 'idle';
-                }
-                return currStatus;
-            });
-            cancelTimeoutRef.current = null;
-        }, 1500);
     }, [addLog]);
 
     const resetApp = useCallback(() => {
-        if (cancelTimeoutRef.current) {
-            clearTimeout(cancelTimeoutRef.current);
-            cancelTimeoutRef.current = null;
+        cancelRequestedRef.current = true;
+        if (completionTimerRef.current) {
+            clearTimeout(completionTimerRef.current);
+            completionTimerRef.current = null;
         }
         if (portRef.current) {
             try {
@@ -865,6 +795,8 @@ export default function Organizer() {
         if (fileInputRef.current) fileInputRef.current.value = '';
     }, [lastOrganized])
 
+    useEffect(() => { resetAppRef.current = resetApp }, [resetApp])
+
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;
         if (requiresApiKey && !apiKey) {
@@ -872,7 +804,12 @@ export default function Organizer() {
             return;
         }
 
+        if (completionTimerRef.current) {
+            clearTimeout(completionTimerRef.current);
+            completionTimerRef.current = null;
+        }
         setIsCancelling(false);
+        cancelRequestedRef.current = false;
 
         try {
             setStatus('processing');
@@ -902,42 +839,97 @@ export default function Organizer() {
             setErrorMsg('');
             setBackgroundNotice('');
 
-            // If connected to background service worker, delegate execution
+            // Delegate to the background service worker. A port whose worker
+            // has gone idle swallows postMessage silently, which used to
+            // strand the run at 0% with no terminal output — so the worker
+            // must acknowledge the job before the panel trusts it with
+            // the run, and otherwise falls back to an in-panel run.
             let port = portRef.current;
             if (!port && typeof chrome !== 'undefined' && chrome.runtime?.connect) {
                 try {
                     port = chrome.runtime.connect({ name: 'organizer-channel' });
                     portRef.current = port;
-                } catch {}
-            }
-
-            if (port) {
-                try {
-                    port.postMessage({
-                        type: 'START_JOB',
-                        payload: {
-                            config: {
-                                apiKey,
-                                categories,
-                                selectedModel,
-                                subfolderTarget,
-                                sortAlphabetically,
-                                removeDuplicates,
-                                cleanTitles,
-                                flatDateSort,
-                                dateSortOrder,
-                                schemaSortOrder
-                            },
-                            parsedBookmarks
-                        }
-                    });
-                    return;
-                } catch (portErr) {
-                    console.warn('[Organizer] Port postMessage failed, falling back to in-process:', portErr);
-                    portRef.current = null;
+                } catch {
+                    port = null;
                 }
             }
 
+            let delegated = false;
+            if (port) {
+                delegated = await new Promise((resolveDelegate) => {
+                    let settled = false;
+                    let ackListener = null;
+                    const finish = (acknowledged) => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(ackTimer);
+                        if (ackListener && port.onMessage?.removeListener) {
+                            try { port.onMessage.removeListener(ackListener); } catch {}
+                        }
+                        resolveDelegate(acknowledged);
+                    };
+                    const ackTimer = setTimeout(() => finish(false), BACKGROUND_ACK_TIMEOUT_MS);
+
+                    ackListener = (msg) => {
+                        if (msg?.type === 'JOB_ACK') finish(true);
+                    };
+                    try {
+                        port.onMessage.addListener(ackListener);
+                    } catch {
+                        finish(false);
+                        return;
+                    }
+
+                    try {
+                        port.postMessage({
+                            type: 'START_JOB',
+                            payload: {
+                                config: {
+                                    apiKey,
+                                    categories,
+                                    selectedModel,
+                                    subfolderTarget,
+                                    sortAlphabetically,
+                                    removeDuplicates,
+                                    cleanTitles,
+                                    flatDateSort,
+                                    dateSortOrder,
+                                    schemaSortOrder
+                                },
+                                parsedBookmarks
+                            }
+                        });
+                    } catch (portErr) {
+                        console.warn('[Organizer] Port postMessage failed, falling back to in-process:', portErr);
+                        finish(false);
+                    }
+                });
+            }
+
+            if (delegated && cancelRequestedRef.current) {
+                return;
+            }
+            if (delegated) {
+                addLog('Background service worker acknowledged the job — organization continues there.');
+                return;
+            }
+
+            if (port) {
+                // The worker never acknowledged: stop it if it did receive the
+                // message, drop the suspect port, and run in this panel so the
+                // terminal keeps showing live progress instead of stalling.
+                try { port.postMessage({ type: 'CANCEL_JOB' }); } catch {}
+                try { port.disconnect(); } catch {}
+                portRef.current = null;
+                if (cancelRequestedRef.current) {
+                    return;
+                }
+                addLog('Background service worker did not acknowledge the job — running the organization in this panel instead.');
+            } else if (!cancelRequestedRef.current) {
+                addLog('Background service worker unavailable — running the organization in this panel instead.');
+            }
+
+            const { OrganizerService } = await import('../services/organizer')
             organizerRef.current = new OrganizerService(
                 apiKey,
                 categories,
@@ -980,6 +972,7 @@ export default function Organizer() {
                         setBackgroundNotice('');
                         setStatus('complete');
                         setProgress(100);
+                        scheduleReturnToMenu();
                     }
                 },
                 selectedModel,
@@ -1043,156 +1036,16 @@ export default function Organizer() {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan]);
+    }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu]);
 
-    const canStart = (flatDateSort && !cleanTitles) || Boolean(apiKey);
+    // Keep the primary action available before a key is entered so browser
+    // mode can explain the remaining requirement instead of looking broken.
+    // The uploaded bookmark file remains optional and browser bookmarks are
+    // the default source.
+    const canStart = status === 'idle' && !isCancelling;
 
     return (
         <div className="glass-panel main-glass-panel">
-
-            {/* Sort by Date Added (Flat List) — Conditionally Active Flat Pipeline */}
-            {status === 'idle' && (
-                <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
-                            <div style={{
-                                width: '36px',
-                                height: '36px',
-                                borderRadius: '10px',
-                                background: flatDateSort ? 'var(--accent-gradient)' : 'var(--surface-solid)',
-                                color: flatDateSort ? '#ffffff' : 'var(--accent)',
-                                border: '1px solid var(--border)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                boxShadow: flatDateSort ? '0 2px 8px var(--accent-glow)' : 'none',
-                                transition: 'all 0.2s ease',
-                                marginTop: '2px'
-                            }}>
-                                <Clock size={18} />
-                            </div>
-                            <div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.95rem', fontWeight: '700' }}>
-                                        Sort by Date Added (Flat List)
-                                    </label>
-                                    <span style={{
-                                        fontSize: '0.68rem',
-                                        padding: '0.15rem 0.5rem',
-                                        borderRadius: '10px',
-                                        background: 'var(--accent-soft)',
-                                        border: '1px solid var(--border)',
-                                        color: 'var(--accent)',
-                                        fontWeight: 700,
-                                        letterSpacing: '0.4px',
-                                        textTransform: 'uppercase'
-                                    }}>
-                                        Zero AI Tokens
-                                    </span>
-                                </div>
-                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', lineHeight: '1.35' }}>
-                                    Orders all bookmarks chronologically into a single list without folders.
-                                </div>
-                            </div>
-                        </div>
-                        <button
-                            role="switch"
-                            aria-label="Sort by Date Added (Flat List)"
-                            aria-checked={flatDateSort}
-                            onClick={() => handleFlatDateSortToggle(!flatDateSort)}
-                            style={{
-                                width: '46px',
-                                height: '26px',
-                                borderRadius: '13px',
-                                border: '1px solid var(--border)',
-                                background: flatDateSort ? 'var(--accent)' : 'var(--surface-solid)',
-                                position: 'relative',
-                                cursor: 'pointer',
-                                padding: 0,
-                                flexShrink: 0,
-                                transition: 'all 0.2s ease',
-                                boxShadow: flatDateSort ? '0 0 10px var(--accent-glow)' : 'none'
-                            }}
-                        >
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                left: flatDateSort ? '22px' : '2px',
-                                width: '20px',
-                                height: '20px',
-                                borderRadius: '50%',
-                                background: flatDateSort ? '#ffffff' : 'var(--text-muted)',
-                                transition: 'left 0.2s ease',
-                                boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
-                            }} />
-                        </button>
-                    </div>
-
-                    {flatDateSort && (
-                        <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
-                                    Chronological Direction
-                                </label>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                    {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
-                                </span>
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDateSortOrderChange('desc')}
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        borderRadius: '6px',
-                                        border: 'none',
-                                        background: dateSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
-                                        color: dateSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.82rem',
-                                        fontWeight: dateSortOrder === 'desc' ? '600' : '500',
-                                        transition: 'all 0.2s ease',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.4rem',
-                                        boxShadow: dateSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                    }}
-                                >
-                                    <ArrowDown size={14} />
-                                    <span>Newest First</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDateSortOrderChange('asc')}
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        borderRadius: '6px',
-                                        border: 'none',
-                                        background: dateSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
-                                        color: dateSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.82rem',
-                                        fontWeight: dateSortOrder === 'asc' ? '600' : '500',
-                                        transition: 'all 0.2s ease',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.4rem',
-                                        boxShadow: dateSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                    }}
-                                >
-                                    <ArrowUp size={14} />
-                                    <span>Oldest First</span>
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
 
             {/* API Key Input */}
             <div className="section-block">
@@ -1321,6 +1174,180 @@ export default function Organizer() {
                 </div>
             )}
 
+            {/* Sort by date added - Flat list — Conditionally Active Flat Pipeline */}
+            {status === 'idle' && (
+                <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                            <div style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '10px',
+                                background: flatDateSort ? 'var(--accent-gradient)' : 'var(--surface-solid)',
+                                color: flatDateSort ? '#ffffff' : 'var(--accent)',
+                                border: '1px solid var(--border)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                                boxShadow: flatDateSort ? '0 2px 8px var(--accent-glow)' : 'none',
+                                transition: 'all 0.2s ease',
+                                marginTop: '2px'
+                            }}>
+                                <Clock size={18} />
+                            </div>
+                            <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        type="button"
+                                        aria-label="Toggle Sort by date added - Flat list"
+                                        onClick={() => handleFlatDateSortToggle(!flatDateSort)}
+                                        style={{
+                                            display: 'block',
+                                            color: 'var(--text-primary)',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '700',
+                                            background: 'transparent',
+                                            border: 'none',
+                                            padding: 0,
+                                            cursor: 'pointer',
+                                            fontFamily: 'inherit',
+                                            textAlign: 'left'
+                                        }}
+                                    >
+                                        Sort by date added - Flat list
+                                    </button>
+                                    <span style={{
+                                        fontSize: '0.68rem',
+                                        padding: '0.15rem 0.5rem',
+                                        borderRadius: '10px',
+                                        background: 'var(--accent-soft)',
+                                        border: '1px solid var(--border)',
+                                        color: 'var(--accent)',
+                                        fontWeight: 700,
+                                        letterSpacing: '0.4px',
+                                        textTransform: 'uppercase'
+                                    }}>
+                                        Zero AI Tokens
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', lineHeight: '1.35' }}>
+                                    Orders all bookmarks chronologically into a single list without folders.
+                                </div>
+                            </div>
+                        </div>
+                        <button
+                            role="switch"
+                            aria-label="Sort by date added - Flat list"
+                            aria-checked={flatDateSort}
+                            onClick={() => handleFlatDateSortToggle(!flatDateSort)}
+                            style={{
+                                width: '46px',
+                                height: '26px',
+                                borderRadius: '13px',
+                                border: '1px solid var(--border)',
+                                background: flatDateSort ? 'var(--accent)' : 'var(--surface-solid)',
+                                position: 'relative',
+                                cursor: 'pointer',
+                                padding: 0,
+                                flexShrink: 0,
+                                transition: 'all 0.2s ease',
+                                boxShadow: flatDateSort ? '0 0 10px var(--accent-glow)' : 'none'
+                            }}
+                        >
+                            <span style={{
+                                position: 'absolute',
+                                top: '2px',
+                                left: flatDateSort ? '22px' : '2px',
+                                width: '20px',
+                                height: '20px',
+                                borderRadius: '50%',
+                                background: flatDateSort ? '#ffffff' : 'var(--text-muted)',
+                                transition: 'left 0.2s ease',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                            }} />
+                        </button>
+                    </div>
+
+                    {flatDateSort && (
+                        <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
+                                    Chronological Direction
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
+                                    title="Click to reverse direction"
+                                    style={{
+                                        fontSize: '0.72rem',
+                                        color: 'var(--text-muted)',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        padding: 0,
+                                        cursor: 'pointer',
+                                        fontFamily: 'inherit',
+                                        textDecoration: 'underline'
+                                    }}
+                                >
+                                    {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
+                                </button>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDateSortOrderChange('desc')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '0.5rem 0.75rem',
+                                        borderRadius: '6px',
+                                        border: 'none',
+                                        background: dateSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
+                                        color: dateSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
+                                        cursor: 'pointer',
+                                        fontSize: '0.82rem',
+                                        fontWeight: dateSortOrder === 'desc' ? '600' : '500',
+                                        transition: 'all 0.2s ease',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.4rem',
+                                        boxShadow: dateSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                    }}
+                                >
+                                    <ArrowDown size={14} />
+                                    <span>Newest First</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleDateSortOrderChange('asc')}
+                                    style={{
+                                        flex: 1,
+                                        padding: '0.5rem 0.75rem',
+                                        borderRadius: '6px',
+                                        border: 'none',
+                                        background: dateSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
+                                        color: dateSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
+                                        cursor: 'pointer',
+                                        fontSize: '0.82rem',
+                                        fontWeight: dateSortOrder === 'asc' ? '600' : '500',
+                                        transition: 'all 0.2s ease',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.4rem',
+                                        boxShadow: dateSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                    }}
+                                >
+                                    <ArrowUp size={14} />
+                                    <span>Oldest First</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Subfolder & Sorting Strategy Row (2-col grid on wide, stacked on compact) */}
             {status === 'idle' && !flatDateSort && (
                 <div className="settings-grid-row section-block">
@@ -1355,6 +1382,13 @@ export default function Organizer() {
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
                             {subfolderOptions.find(opt => opt.id === subfolderTarget)?.description}
                         </div>
+                        <div className="subfolder-explainer">
+                            <img
+                                className="subfolder-hierarchy-image"
+                                src={SUBFOLDER_EXPLAINER_IMAGES[subfolderTarget] || subfolderHierarchyImage}
+                                alt="Category and nested subfolder hierarchy for the selected organization level"
+                            />
+                        </div>
                     </div>
 
                     {/* Folder Content Sorting (Schema-Dependent Mode) */}
@@ -1379,7 +1413,7 @@ export default function Organizer() {
                             </span>
                         </div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                            Choose how bookmarks are ordered inside each {categories.length === 0 ? 'AI-generated category' : 'category'} folder:
+                            Choose how bookmarks are ordered inside each AI-generated category folder:
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -1456,9 +1490,51 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Clean Titles Toggle */}
+            {/* Toggles Row (2-col grid on wide, stacked on compact) */}
             {status === 'idle' && (
-                <div className="section-block">
+                <div className="settings-grid-row section-block">
+                    {/* Duplicate Removal Toggle */}
+                    <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                        <div>
+                            <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
+                                Remove Duplicate URLs
+                            </label>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                                Keep one copy of each URL in the organized result; original bookmarks are unchanged
+                            </div>
+                        </div>
+                        <button
+                            role="switch"
+                            aria-label="Remove duplicate URLs"
+                            aria-checked={removeDuplicates}
+                            onClick={() => handleRemoveDuplicatesToggle(!removeDuplicates)}
+                            style={{
+                                width: '44px',
+                                height: '24px',
+                                borderRadius: '12px',
+                                border: '1px solid var(--border)',
+                                background: removeDuplicates ? 'var(--accent)' : 'var(--surface-solid)',
+                                position: 'relative',
+                                cursor: 'pointer',
+                                padding: 0,
+                                flexShrink: 0,
+                                transition: 'background 0.2s ease'
+                            }}
+                        >
+                            <span style={{
+                                position: 'absolute',
+                                top: '2px',
+                                left: removeDuplicates ? '22px' : '2px',
+                                width: '18px',
+                                height: '18px',
+                                borderRadius: '50%',
+                                background: removeDuplicates ? 'var(--on-accent)' : 'var(--text-muted)',
+                                transition: 'left 0.2s ease'
+                            }} />
+                        </button>
+                    </div>
+
+                    {/* Clean Titles Toggle */}
                     <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -1521,7 +1597,7 @@ export default function Organizer() {
             {/* Category Editor */}
             {status === 'idle' && !flatDateSort && (
                 <div className="glass-panel categories-panel section-block">
-                    {/* Header with Title, Count Badge, and Clear All Action */}
+                    {/* Header with Title, Count Badge, and Clear All / Reset Action */}
                     <div className="categories-header">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600 }}>
@@ -1533,14 +1609,13 @@ export default function Organizer() {
                                 borderRadius: '12px',
                                 background: 'var(--surface-solid)',
                                 border: '1px solid var(--border)',
-                                color: categories.length > 0 ? 'var(--accent)' : 'var(--text-muted)',
-                                fontWeight: categories.length > 0 ? 600 : 400
+                                color: 'var(--text-muted)'
                             }}>
-                                {categories.length > 0 ? `${categories.length} hard-coded` : 'Automatic (AI-Generated)'}
+                                {categories.length} chosen
                             </span>
                         </div>
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            {categories.length > 0 && (
+                            {categories.length > 0 ? (
                                 <button
                                     type="button"
                                     onClick={handleClearAllCategories}
@@ -1557,10 +1632,32 @@ export default function Organizer() {
                                         cursor: 'pointer',
                                         transition: 'all 0.15s ease'
                                     }}
-                                    title="Clear all categories (switch to automatic AI category generation)"
+                                    title="Clear all active categories"
                                 >
                                     <X size={12} />
                                     <span>Clear All</span>
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={handleResetDefaultCategories}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.3rem',
+                                        padding: '0.25rem 0.6rem',
+                                        fontSize: '0.75rem',
+                                        borderRadius: '6px',
+                                        border: '1px solid var(--border)',
+                                        background: 'var(--surface-solid)',
+                                        color: 'var(--accent)',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                    title="Reset to default categories"
+                                >
+                                    <RefreshCw size={12} />
+                                    <span>Reset Defaults</span>
                                 </button>
                             )}
                         </div>
@@ -1621,32 +1718,18 @@ export default function Organizer() {
                     {/* Active Chosen Categories Bin */}
                     {categories.length === 0 ? (
                         <div style={{
-                            padding: '0.9rem 1rem',
-                            textAlign: 'left',
+                            padding: '0.85rem',
+                            textAlign: 'center',
+                            fontSize: '0.8rem',
+                            color: 'var(--text-muted)',
                             background: 'var(--surface-solid)',
                             borderRadius: '8px',
-                            border: '1px dashed var(--border)',
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: '0.75rem'
+                            border: '1px dashed var(--border)'
                         }}>
-                            <Zap size={18} style={{ color: 'var(--accent)', marginTop: '2px', flexShrink: 0 }} />
-                            <div>
-                                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                                    Automatic Category Generation
-                                </div>
-                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-                                    No categories chosen — Gemini will automatically analyze your bookmarks and generate categories. Or click <strong>+</strong> on any suggested category below to lock in hard-coded folders instead.
-                                </div>
-                            </div>
+                            No categories chosen. Bookmarks will use a single "Other" category, or you can add categories from the suggestions below.
                         </div>
                     ) : (
-                        <div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                                <Lock size={12} style={{ color: 'var(--accent)' }} />
-                                <span>Hard-coded categories active. Gemini will organize bookmarks into these folders without running inference on potential categories.</span>
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                             {categories.map((cat, idx) => (
                                 <div key={idx} style={{
                                     display: 'flex',
@@ -1668,7 +1751,6 @@ export default function Organizer() {
                                     />
                                 </div>
                             ))}
-                            </div>
                         </div>
                     )}
 
@@ -1738,7 +1820,6 @@ export default function Organizer() {
                         ref={fileInputRef}
                         onChange={handleFileSelect}
                         accept=".html,.htm"
-                        multiple
                         style={{ display: 'none' }}
                     />
 
@@ -1772,7 +1853,7 @@ export default function Organizer() {
                         <div>
                             <Upload size={24} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
                             <div style={{ color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                                Drag & drop bookmarks.html here (up to 3 files)
+                                Drag & drop bookmarks.html here
                             </div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                 or click to browse
@@ -1785,83 +1866,23 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Cached dropped-in input files (spec §12): pristine originals kept for re-organize/download (up to 3) */}
-            {status === 'idle' && inputFiles.length > 0 && (
+            {/* Cached dropped-in input file (spec §12): pristine original kept for re-organize/download */}
+            {status === 'idle' && inputFile && (
                 <div className="input-bookmarks-card section-block">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: inputFiles.length > 1 ? '0.6rem' : '0.25rem' }}>
-                        <div style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>
-                            Input Bookmarks {inputFiles.length > 1 ? `(${inputFiles.length}/3)` : ''}
-                        </div>
-                        {inputFiles.length > 1 && (
-                            <button
-                                type="button"
-                                onClick={handleClearAllInputs}
-                                style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    color: 'var(--error)',
-                                    fontSize: '0.75rem',
-                                    cursor: 'pointer',
-                                    padding: '0.1rem 0.3rem',
-                                    textDecoration: 'underline'
-                                }}
-                            >
-                                Clear All
-                            </button>
-                        )}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                        {inputFiles.map((file, idx) => (
-                            <div
-                                key={file.id || `${file.filename}-${file.savedAt}-${idx}`}
-                                style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    flexWrap: 'wrap',
-                                    paddingTop: idx > 0 ? '0.6rem' : 0,
-                                    borderTop: idx > 0 ? '1px solid var(--border)' : 'none'
-                                }}
-                            >
-                                <div style={{ minWidth: 0, flex: '1 1 200px' }}>
-                                    <div style={{ fontSize: '0.82rem', fontWeight: '500', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-                                        {file.filename}
-                                    </div>
-                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                        {(file.count || 0).toLocaleString()} bookmarks
-                                        {file.dateSpan ? ` · Dates ${formatDateSpan(file.dateSpan)}` : ''}
-                                        {' '}· saved {new Date(file.savedAt).toLocaleString()}
-                                    </div>
-                                </div>
-                                <div className="input-file-actions">
-                                    <button
-                                        className="input-file-action input-file-action-secondary"
-                                        type="button"
-                                        onClick={() => handleDownloadInput(file)}
-                                        title={`Download ${file.filename}`}
-                                    >
-                                        Download
-                                    </button>
-                                    <button
-                                        className="input-file-action input-file-action-primary"
-                                        type="button"
-                                        onClick={() => handleReorganizeInput(file)}
-                                        title={`Organize from ${file.filename}`}
-                                    >
-                                        Re-organize
-                                    </button>
-                                    <button
-                                        className="input-file-action input-file-action-danger"
-                                        type="button"
-                                        onClick={() => handleRemoveInput(file.id || file.filename)}
-                                        title={`Remove ${file.filename}`}
-                                    >
-                                        Remove
-                                    </button>
-                                </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>Input Bookmarks</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {inputFile.filename} · {(inputFile.count || 0).toLocaleString()} bookmarks
+                                {inputFile.dateSpan ? ` · Dates ${formatDateSpan(inputFile.dateSpan)}` : ''}
+                                {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
                             </div>
-                        ))}
+                        </div>
+                        <div className="input-file-actions">
+                            <button className="input-file-action input-file-action-secondary" type="button" onClick={handleDownloadInput} title="Download the original file">Download</button>
+                            <button className="input-file-action input-file-action-primary" type="button" onClick={handleReorganizeInput} title="Organize from the cached original again">Re-organize</button>
+                            <button className="input-file-action input-file-action-danger" type="button" onClick={handleRemoveInput} title="Forget the cached input">Remove</button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -1980,164 +2001,16 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Controls (shown when idle or processing) */}
-            {status !== 'complete' && (
-                <div className="action-button-container section-block" style={{ display: 'flex', justifyContent: 'center' }}>
-                    {status === 'processing' ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
-                        {activeDateSpan && (
-                            <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                padding: '0.35rem 0.8rem',
-                                borderRadius: '20px',
-                                background: 'var(--surface-alt)',
-                                border: '1px solid var(--border)',
-                                fontSize: '0.8rem',
-                                color: 'var(--text-secondary)'
-                            }}>
-                                <Calendar size={13} style={{ color: 'var(--accent)' }} />
-                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
-                            </div>
-                        )}
-                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-                            <button
-                                className="btn-primary btn-in-progress"
-                                disabled
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    cursor: 'wait'
-                                }}
-                            >
-                                <Loader2 size={18} className="spin-icon" />
-                                <span>In Progress... {progress}%</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleCancel}
-                                disabled={isCancelling}
-                                title="Cancel the organization process"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.4rem',
-                                    padding: '0.8rem 1.25rem',
-                                    borderRadius: '10px',
-                                    border: '1px solid var(--error)',
-                                    background: 'var(--error-soft)',
-                                    color: 'var(--error)',
-                                    fontWeight: '600',
-                                    fontSize: '0.95rem',
-                                    cursor: isCancelling ? 'not-allowed' : 'pointer',
-                                    opacity: isCancelling ? 0.6 : 1,
-                                    transition: 'all 0.2s ease'
-                                }}
-                            >
-                                <Square size={16} fill="currentColor" />
-                                {isCancelling ? 'Cancelling...' : 'Cancel'}
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <button
-                        className="btn-primary"
-                        onClick={startProcess}
-                        disabled={!canStart}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            opacity: !canStart ? 0.5 : 1,
-                            cursor: !canStart ? 'not-allowed' : 'pointer'
-                        }}
-                    >
-                        {flatDateSort ? (
-                            <>
-                                <Clock size={20} />
-                                {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
-                            </>
-                        ) : (
-                            <>
-                                {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}
-                                {uploadedFile ? 'Organize File & Download' : 'Organize My Bookmarks'}
-                            </>
-                        )}
-                    </button>
-                )}
-                </div>
-            )}
-
-            {/* Background Ongoing Progress / Transient Retry Notification */}
-            {status === 'processing' && backgroundNotice && (
-                <div style={{
-                    background: 'var(--success-soft)',
-                    border: '1px solid var(--success)',
-                    color: 'var(--success)',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '8px',
-                    marginBottom: '1.5rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.6rem',
-                    fontSize: '0.85rem'
-                }}>
-                    <RefreshCw size={18} className="spin-icon" style={{ flexShrink: 0 }} />
-                    <div>
-                        <strong>Background Run Active:</strong> {backgroundNotice}
-                    </div>
-                </div>
-            )}
-
-            {/* Error Message */}
-            {errorMsg && (
-                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <AlertCircle size={20} />
-                    {errorMsg}
-                </div>
-            )}
-
-            {/* Logs / Terminal */}
-            <div
-                className="glass-panel terminal-panel"
-                ref={logContainerRef}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--terminal-muted)', paddingBottom: '0.5rem', color: 'var(--text-muted)' }}>
-                    <Terminal size={16} />
-                    <span>System Output</span>
-                </div>
-
-                {logs.length === 0 && <span style={{ color: 'var(--terminal-muted)' }}>Waiting for start...</span>}
-
-                {logs.map((log, index) => (
-                    <div key={index} style={{ marginBottom: '0.25rem', display: 'flex', gap: '0.5rem' }}>
-                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
-                            {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
-                        </span>
-                        <span style={{ overflowWrap: 'anywhere' }}>
-                            {typeof log === 'object' ? log.message : log}
-                        </span>
-                    </div>
-                ))}
-                {status === 'processing' && (
-                    <div className="animate-pulse">_</div>
-                )}
-            </div>
-
-            {/* Final Downloadable Organized Files & Results (shown after the terminal) */}
-            {status === 'complete' && (
-                <div className="glass-panel completed-results-panel section-block" style={{ textAlign: 'center', width: '100%', marginTop: '1.25rem', padding: '1.5rem' }}>
+            {/* Controls */}
+            <div className="action-button-container section-block" style={{ display: 'flex', justifyContent: 'center' }}>
+                {status === 'complete' ? (
                     <div style={{ textAlign: 'center', width: '100%' }}>
                         <div style={{ marginBottom: '0.75rem', color: 'var(--success)', fontSize: '1.2rem', fontWeight: 'bold' }}>
                             {uploadedFile
                                 ? "File Processed! Check your downloads."
-                                : ((lastOrganized?.stats?.folderTitle || lastOrganized?.folderTitle)
-                                    ? `All Done! Check your "${lastOrganized?.stats?.folderTitle || lastOrganized?.folderTitle}" folder in Other Bookmarks.`
-                                    : (flatDateSort
-                                        ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
-                                        : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`))}
+                                : (flatDateSort
+                                    ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
+                                    : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`)}
                         </div>
                         {!uploadedFile && (
                             <div style={{ marginBottom: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -2311,9 +2184,151 @@ export default function Organizer() {
                         >
                             {flatDateSort ? 'Sort Again' : 'Organize Again'}
                         </div>
+                        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            Returning to the main menu shortly — your results stay downloadable in the last-run banner.
+                        </div>
+                    </div>
+                ) : status === 'processing' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
+                        {activeDateSpan && (
+                            <div style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                padding: '0.35rem 0.8rem',
+                                borderRadius: '20px',
+                                background: 'var(--surface-alt)',
+                                border: '1px solid var(--border)',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-secondary)'
+                            }}>
+                                <Calendar size={13} style={{ color: 'var(--accent)' }} />
+                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <button
+                                className="btn-primary btn-in-progress"
+                                disabled
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    cursor: 'wait'
+                                }}
+                            >
+                                <Loader2 size={18} className="spin-icon" />
+                                <span>In Progress... {progress}%</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                disabled={isCancelling}
+                                title="Cancel the organization process"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    padding: '0.8rem 1.25rem',
+                                    borderRadius: '10px',
+                                    border: '1px solid var(--error)',
+                                    background: 'var(--error-soft)',
+                                    color: 'var(--error)',
+                                    fontWeight: '600',
+                                    fontSize: '0.95rem',
+                                    cursor: isCancelling ? 'not-allowed' : 'pointer',
+                                    opacity: isCancelling ? 0.6 : 1,
+                                    transition: 'all 0.2s ease'
+                                }}
+                            >
+                                <Square size={16} fill="currentColor" />
+                                {isCancelling ? 'Cancelling...' : 'Cancel'}
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <button
+                        className="btn-primary"
+                        onClick={startProcess}
+                        disabled={!canStart}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            opacity: !canStart ? 0.5 : 1,
+                            cursor: !canStart ? 'not-allowed' : 'pointer'
+                        }}
+                    >
+                        {flatDateSort ? (
+                            <>
+                                <Clock size={20} />
+                                {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
+                            </>
+                        ) : (
+                            <>
+                                {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}
+                                {uploadedFile ? 'Organize File & Download' : 'Organize My Bookmarks'}
+                            </>
+                        )}
+                    </button>
+                )}
+            </div>
+
+            {/* Background Ongoing Progress / Transient Retry Notification */}
+            {status === 'processing' && backgroundNotice && (
+                <div style={{
+                    background: 'var(--success-soft)',
+                    border: '1px solid var(--success)',
+                    color: 'var(--success)',
+                    padding: '0.85rem 1rem',
+                    borderRadius: '8px',
+                    marginBottom: '1.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    fontSize: '0.85rem'
+                }}>
+                    <RefreshCw size={18} className="spin-icon" style={{ flexShrink: 0 }} />
+                    <div>
+                        <strong>Background Run Active:</strong> {backgroundNotice}
                     </div>
                 </div>
             )}
+
+            {/* Error Message */}
+            {errorMsg && (
+                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <AlertCircle size={20} />
+                    {errorMsg}
+                </div>
+            )}
+
+            {/* Logs / Terminal */}
+            <div
+                className="glass-panel terminal-panel"
+                ref={logContainerRef}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--terminal-muted)', paddingBottom: '0.5rem', color: 'var(--text-muted)' }}>
+                    <Terminal size={16} />
+                    <span>System Output</span>
+                </div>
+
+                {logs.length === 0 && <span style={{ color: 'var(--terminal-muted)' }}>Waiting for start...</span>}
+
+                {logs.map((log, index) => (
+                    <div key={index} style={{ marginBottom: '0.25rem', display: 'flex', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+                            {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
+                        </span>
+                        <span style={{ overflowWrap: 'anywhere' }}>
+                            {typeof log === 'object' ? log.message : log}
+                        </span>
+                    </div>
+                ))}
+                {status === 'processing' && (
+                    <div className="animate-pulse">_</div>
+                )}
+            </div>
 
         </div>
     )

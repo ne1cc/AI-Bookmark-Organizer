@@ -1,104 +1,95 @@
 // File-mode input preservation (spec §12): the pristine dropped-in HTML is the date
 // source of truth for file mode. Cached raw, never mutated by organize runs.
-// Supports caching up to 3 input files.
+//
+// The HTML (up to 25 MB) is stored under its own key, separate from the tiny
+// metadata record: panel startup reads only the metadata, so opening the side
+// panel never drags megabytes out of LevelDB. The HTML is fetched on demand
+// (download / re-organize). The legacy combined `inputBookmarks` entry written
+// by older builds is still read and cleaned up.
 export const INPUT_MAX_BYTES = 25 * 1024 * 1024;
-export const MAX_CACHED_INPUTS = 3;
-const STORAGE_KEY = 'inputBookmarks';
+const LEGACY_KEY = 'inputBookmarks';
+const META_KEY = 'inputBookmarksMeta';
+const HTML_KEY = 'inputBookmarksHtml';
 
 const local = () => {
     if (typeof chrome === 'undefined' || !chrome.storage?.local) throw new Error('chrome.storage.local unavailable');
     return chrome.storage.local;
 };
 
-export function normalizeBookmarkEntries(stored) {
-    if (!stored) return [];
-    if (Array.isArray(stored)) return stored.filter(Boolean);
-    if (typeof stored === 'object' && (stored.html || stored.filename)) {
-        return [stored];
-    }
-    return [];
-}
-
-export async function getInputBookmarkFiles() {
-    return new Promise((resolve, reject) => {
-        local().get([STORAGE_KEY], (res) => {
-            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-            else resolve(normalizeBookmarkEntries(res?.[STORAGE_KEY]));
-        });
+const getKeys = (keys) => new Promise((resolve, reject) => {
+    local().get(keys, (res) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(res || {});
     });
-}
+});
 
-export async function getInputBookmarkFile() {
-    const files = await getInputBookmarkFiles();
-    return files[0] || null;
-}
+const setKeys = (payload) => new Promise((resolve, reject) => {
+    local().set(payload, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+    });
+});
 
 export async function saveInputBookmarkFile({ filename, html, count, dateSpan }) {
     if (html.length > INPUT_MAX_BYTES) return { saved: false, reason: 'too-large' };
+    const meta = { filename, size: html.length, savedAt: Date.now(), count, dateSpan };
+    await setKeys({ [META_KEY]: meta, [HTML_KEY]: html });
+    // The legacy combined entry would keep a second 25 MB copy on disk forever.
+    await new Promise((resolve) => { local().remove([LEGACY_KEY], () => resolve()); });
+    return { saved: true, entry: { ...meta, html } };
+}
 
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const newEntry = {
-        id,
-        filename,
-        html,
-        size: html.length,
-        savedAt: Date.now(),
-        count,
-        dateSpan
-    };
+// Tiny (bytes) record for panel startup: filename, count, dates — no HTML.
+export async function getInputBookmarkMeta() {
+    try {
+        const res = await getKeys([META_KEY]);
+        if (res[META_KEY]) return res[META_KEY];
+        const legacy = await getKeys([LEGACY_KEY]);
+        if (legacy[LEGACY_KEY]) {
+            const entry = legacy[LEGACY_KEY];
+            return { filename: entry.filename, size: entry.size, savedAt: entry.savedAt, count: entry.count, dateSpan: entry.dateSpan };
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
 
-    const currentFiles = await getInputBookmarkFiles().catch(() => []);
+// The heavy part, only when the user actually needs the file back.
+export async function getInputBookmarkHtml() {
+    try {
+        const res = await getKeys([HTML_KEY]);
+        if (typeof res[HTML_KEY] === 'string') return res[HTML_KEY];
+        const legacy = await getKeys([LEGACY_KEY]);
+        return typeof legacy[LEGACY_KEY]?.html === 'string' ? legacy[LEGACY_KEY].html : null;
+    } catch {
+        return null;
+    }
+}
 
-    // If a file with identical filename and html content already exists, replace it so it moves to top
-    const filtered = currentFiles.filter(f => !(f.filename === filename && f.size === html.length));
+// Full entry including HTML (legacy-aware). Callers that already hold the
+// entry from saveInputBookmarkFile should prefer their in-memory copy.
+export async function getInputBookmarkFile() {
+    const meta = await getInputBookmarkMeta();
+    if (!meta) return null;
+    const html = await getInputBookmarkHtml();
+    return { ...meta, html: html || '' };
+}
 
-    // Prepend new entry, keep at most MAX_CACHED_INPUTS (3)
-    const updated = [newEntry, ...filtered].slice(0, MAX_CACHED_INPUTS);
-
+export async function removeInputBookmarkFile() {
     await new Promise((resolve, reject) => {
-        local().set({ [STORAGE_KEY]: updated }, () => {
+        local().remove([LEGACY_KEY, META_KEY, HTML_KEY], () => {
             if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
             else resolve();
         });
     });
-
-    return { saved: true, entry: newEntry, entries: updated };
 }
 
-export async function removeInputBookmarkFile(idOrFilename) {
-    if (!idOrFilename) {
-        return new Promise((resolve, reject) => {
-            local().remove([STORAGE_KEY], () => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve([]);
-            });
-        });
-    }
-
-    const currentFiles = await getInputBookmarkFiles().catch(() => []);
-    const remaining = currentFiles.filter(f => f.id !== idOrFilename && f.filename !== idOrFilename);
-
-    await new Promise((resolve, reject) => {
-        if (remaining.length === 0) {
-            local().remove([STORAGE_KEY], () => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve();
-            });
-        } else {
-            local().set({ [STORAGE_KEY]: remaining }, () => {
-                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-                else resolve();
-            });
-        }
-    });
-
-    return remaining;
-}
-
-export function downloadInputBookmarkFile(entry) {
-    if (!entry || !entry.html) return;
-    const name = entry.filename || 'input_bookmarks.html';
-    const blob = new Blob([entry.html], { type: 'text/html' });
+export async function downloadInputBookmarkFile(entry) {
+    const html = (typeof entry?.html === 'string' && entry.html.length > 0) ? entry.html : await getInputBookmarkHtml();
+    if (!html) return;
+    const name = entry?.filename || 'input_bookmarks.html';
+    const blob = new Blob([html], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
         chrome.downloads.download({ url, filename: name, saveAs: true });

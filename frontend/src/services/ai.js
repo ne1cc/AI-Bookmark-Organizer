@@ -1,3 +1,6 @@
+import { buildAuthoritativeSchema } from './defaultSchema';
+import { canonicalKey } from './subcategoryIdentity';
+
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
     "Content-Type": "application/json",
@@ -173,8 +176,6 @@ function summarizeApiError(response, errorText) {
 
 // Determine if an error is retryable (transient) vs permanent
 export function isRetryableError(error, statusCode) {
-    if (error?.isCancelled) return false;
-
     // Explicitly flagged (e.g. malformed/truncated model output): the request
     // succeeded but the response was unusable — a fresh attempt may differ.
     if (error?.retryable) return true;
@@ -205,7 +206,7 @@ export function isRetryableError(error, statusCode) {
 
 // Check if an error was caused by a network drop, timeout, or unreachable host
 export function isNetworkError(error) {
-    if (!error || error?.isCancelled) return false;
+    if (!error) return false;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
     if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
 
@@ -228,7 +229,7 @@ export function isNetworkError(error) {
 
 // Check if an error was caused by rate limits / quota exhaustion
 export function isRateLimitError(error) {
-    if (!error || error?.isCancelled) return false;
+    if (!error) return false;
     const statusCode = error.statusCode;
     if (statusCode === 429) return true;
     const msg = (error.message || '').toLowerCase();
@@ -328,55 +329,19 @@ const REQUEST_TIMEOUT_MS = 30000;
 async function fetchWithTimeout(url, options = {}, isCancelled = null) {
     const controller = new AbortController();
     let cancelTimer = null;
-    let removeCancelListener = null;
-
-    const checkCancelled = () => {
-        if (!isCancelled) return false;
-        if (typeof isCancelled === 'function') return Boolean(isCancelled());
-        if (isCancelled?.aborted) return true;
-        if (isCancelled?.signal?.aborted) return true;
-        return Boolean(isCancelled);
-    };
-
-    const abortWithCancel = () => {
-        const cancelErr = new Error('Operation cancelled.');
-        cancelErr.isCancelled = true;
-        try {
-            controller.abort(cancelErr);
-        } catch {
-            controller.abort();
-        }
-    };
-
-    if (checkCancelled()) {
-        abortWithCancel();
-        const err = new Error('Operation cancelled.');
-        err.isCancelled = true;
-        throw err;
-    }
 
     const timer = setTimeout(() => {
         controller.abort(new Error("request timeout"));
     }, REQUEST_TIMEOUT_MS);
 
-    const signal = isCancelled instanceof AbortSignal ? isCancelled : isCancelled?.signal;
-    if (signal) {
-        if (signal.aborted) {
-            abortWithCancel();
-        } else {
-            signal.addEventListener('abort', abortWithCancel, { once: true });
-            removeCancelListener = () => signal.removeEventListener('abort', abortWithCancel);
-        }
-    } else if (typeof isCancelled?.onCancel === 'function') {
-        removeCancelListener = isCancelled.onCancel(abortWithCancel);
-    }
-
     if (typeof isCancelled === 'function') {
         cancelTimer = setInterval(() => {
             if (isCancelled()) {
-                abortWithCancel();
+                const cancelErr = new Error('Operation cancelled.');
+                cancelErr.isCancelled = true;
+                controller.abort(cancelErr);
             }
-        }, 10);
+        }, 150);
     }
 
     try {
@@ -403,17 +368,9 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
         }
 
         return bodyJson;
-    } catch (err) {
-        if (checkCancelled() || err?.isCancelled || (controller.signal.aborted && checkCancelled())) {
-            const cancelErr = new Error('Operation cancelled.');
-            cancelErr.isCancelled = true;
-            throw cancelErr;
-        }
-        throw err;
     } finally {
         clearTimeout(timer);
         if (cancelTimer) clearInterval(cancelTimer);
-        if (removeCancelListener) removeCancelListener();
     }
 }
 
@@ -458,16 +415,13 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
     return parseModelResponse(data, { salvageTruncated });
 }
 
-// Generic retry wrapper with exponential backoff, rate-limit cooldowns, jitter, Retry-After header support, and instantaneous cancellation
+// Generic retry wrapper with exponential backoff, rate-limit cooldowns, jitter, Retry-After header support, and cancellation
 export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCancelled = null, onRetry = null) {
     let attempt = 1;
 
     const checkCancelled = () => {
         if (!isCancelled) return false;
-        if (typeof isCancelled === 'function') return Boolean(isCancelled());
-        if (isCancelled?.aborted) return true;
-        if (isCancelled?.signal?.aborted) return true;
-        return Boolean(isCancelled);
+        return typeof isCancelled === 'function' ? isCancelled() : Boolean(isCancelled);
     };
 
     while (true) {
@@ -480,10 +434,8 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
         try {
             return await fn();
         } catch (error) {
-            if (error?.isCancelled || checkCancelled()) {
-                const cancelErr = new Error('Operation cancelled.');
-                cancelErr.isCancelled = true;
-                throw cancelErr;
+            if (error?.isCancelled) {
+                throw error;
             }
 
             // Extract status code if available
@@ -520,61 +472,18 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
                 }
             }
 
-            if (checkCancelled()) {
-                const err = new Error('Operation cancelled.');
-                err.isCancelled = true;
-                throw err;
-            }
-
-            // Cancellable sleep: aborts instantly on signal or cancellation callback, and polls every 10ms as fallback
-            await new Promise((resolve, reject) => {
-                let timer = null;
-                let checkTimer = null;
-                let removeListener = null;
-
-                const cleanup = () => {
-                    if (timer) clearTimeout(timer);
-                    if (checkTimer) clearInterval(checkTimer);
-                    if (removeListener) removeListener();
-                };
-
-                const abortSleep = () => {
-                    cleanup();
+            let elapsed = 0;
+            const stepMs = 200;
+            while (elapsed < delayMs) {
+                if (checkCancelled()) {
                     const err = new Error('Operation cancelled.');
                     err.isCancelled = true;
-                    reject(err);
-                };
-
-                if (checkCancelled()) {
-                    abortSleep();
-                    return;
+                    throw err;
                 }
-
-                timer = setTimeout(() => {
-                    cleanup();
-                    resolve();
-                }, delayMs);
-
-                const signal = isCancelled instanceof AbortSignal ? isCancelled : isCancelled?.signal;
-                if (signal) {
-                    if (signal.aborted) {
-                        abortSleep();
-                        return;
-                    }
-                    signal.addEventListener('abort', abortSleep, { once: true });
-                    removeListener = () => signal.removeEventListener('abort', abortSleep);
-                } else if (typeof isCancelled?.onCancel === 'function') {
-                    removeListener = isCancelled.onCancel(abortSleep);
-                }
-
-                if (typeof isCancelled === 'function') {
-                    checkTimer = setInterval(() => {
-                        if (checkCancelled()) {
-                            abortSleep();
-                        }
-                    }, 10);
-                }
-            });
+                const sleepTime = Math.min(stepMs, delayMs - elapsed);
+                await new Promise(resolve => setTimeout(resolve, sleepTime));
+                elapsed += sleepTime;
+            }
 
             if (checkCancelled()) {
                 const err = new Error('Operation cancelled.');
@@ -615,7 +524,6 @@ export const SUBFOLDER_BOUNDS = {
     '1-3': { ask: [1, 3], min: 1, max: 3 },
     '3-6': { ask: [3, 6], min: 2, max: 6 },
     '6-10': { ask: [6, 10], min: 3, max: 10 },
-    // Legacy values remain readable for existing callers and stored jobs.
     '0-5': { ask: [3, 5], min: 2, max: 5 },
     '5-10': { ask: [5, 10], min: 3, max: 10 },
     '10+': { ask: [10, 14], min: 5, max: 16 }
@@ -673,9 +581,9 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
             if (typeof rawSub !== 'string') continue;
             const sub = rawSub.trim();
             if (!sub) continue;
-            const subKey = sub.toLowerCase();
+            const subKey = canonicalKey(sub);
             // Filler names and a subcategory echoing its own parent add no structure.
-            if (FILLER_SUBCATEGORIES.has(subKey) || subKey === key) continue;
+            if (FILLER_SUBCATEGORIES.has(sub.toLowerCase()) || subKey === canonicalKey(name)) continue;
             if (seenSubs.has(subKey)) continue;
             seenSubs.add(subKey);
             sub_categories.push(sub);
@@ -688,12 +596,12 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };
     }
 
-    // Breadth matters as much as depth. A truncated response that salvages
-    // cleanly still narrows the whole run: every bookmark outside the surviving
-    // categories is coerced to "Other" during classification. Tiny collections
-    // are exempt for the same reason they get a relaxed subcategory floor.
+    // A truncated response leaves omitted selected categories with only their
+    // General fallback. Require enough breadth to avoid losing useful structure,
+    // but never demand more categories than the user selected.
+    // Tiny collections are exempt, as with the relaxed subcategory floor.
     const floor = Array.isArray(expectedCategories) && expectedCategories.length > 0
-        ? Math.max(3, Math.ceil(expectedCategories.length / 2))
+        ? Math.min(expectedCategories.length, Math.max(3, Math.ceil(expectedCategories.length / 2)))
         : 3;
     if (bookmarkCount >= TINY_COLLECTION_THRESHOLD && categories.length < floor) {
         issues.push(`the response covered only ${categories.length} categories; at least ${floor} are needed`);
@@ -742,16 +650,6 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
         ? `\n    NOTE: The list below is a representative sample of ${schemaSource.length} bookmarks drawn evenly from the full collection. Design the structure for the ENTIRE collection of ${bookmarks.length}.\n`
         : '';
 
-    const hasHardCodedCategories = Array.isArray(baseCategories) && baseCategories.length > 0;
-
-    const categoryGuidance = hasHardCodedCategories
-        ? `HARD-CODED TOP-LEVEL CATEGORIES (STRICT - DO NOT INVENT NEW CATEGORIES):\n    The user has specified hard-coded categories. You MUST use ONLY these exact top-level categories:\n    ${JSON.stringify(baseCategories)}\n    Do NOT invent, add, merge, remove, or rename top-level categories. The top-level categories are fixed and hard-coded.\n    Your task is ONLY to design ${askMin}-${askMax} distinct, relevant subcategories inside EACH of these hard-coded categories based on the bookmarks provided.`
-        : `TOP-LEVEL CATEGORIES (AUTOMATIC AI GENERATION):\n    Analyze the bookmarks and design 8-10 broad, clearly distinct top-level categories. Every bookmark must have a natural home.`;
-
-    const rule4 = hasHardCodedCategories
-        ? `4. Top-level categories: STRICTLY use the provided hard-coded categories. Do NOT invent new top-level categories.`
-        : `4. Top-level categories: aim for 8-10 broad, clearly distinct categories. Every bookmark must have a natural home.`;
-
     const buildPrompt = (issues) => {
         const correction = issues?.length
             ? `
@@ -773,10 +671,11 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
-    ${categoryGuidance}
+    FIXED TOP-LEVEL CATEGORIES (use every name exactly as written; do not rename, omit, or add categories):
+    ${JSON.stringify(baseCategories)}
 
     STRUCTURE RULES
-    ${rule4}
+    4. The fixed top-level categories above are authoritative. Design subcategories inside each one; every bookmark must have a natural home.
     5. NON-REDUNDANCY IS CRITICAL. Sub-categories within a category MUST be mutually exclusive. Never create near-duplicates or synonyms as separate folders. Collapse "Tech News" + "Tech Articles" + "Tech Blogs" + "Tech Reports" into ONE folder. Collapse "Career Advice" + "Career Pathways" + "Career Roles" into ONE folder. Collapse "JS" + "JavaScript" into ONE. If two folder names could plausibly hold the same bookmark, merge them.
     6. Group by the user's INTENT, not surface keywords. Ask "why did they save this?" Links saved for the same purpose belong together even when their titles look different.
 
@@ -788,7 +687,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     QUALITY BAR
     10. No orphan folders: every sub-category should plausibly hold several bookmarks. Never create a folder for a single link — merge it into the nearest fit.
     11. Categories themselves must not overlap either. Each bookmark should have exactly ONE obvious destination, never two or three.
-    12. A genuine outlier that fits no category belongs in an "Other" category. Do NOT distort the structure to force-fit it, and do NOT invent a filler subcategory for it.
+    12. A genuine outlier still belongs in the closest fixed top-level category. Use its "General" subcategory when no specific subcategory fits; do not add an "Other" category or invent a filler subcategory.
 
     OUTPUT — return ONLY this JSON, no markdown fences, no commentary:
     {
@@ -818,7 +717,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: baseCategories };
 
     const first = validateSchema(await attempt(null), options);
-    if (first.ok) return first.schema;
+    if (first.ok) return buildAuthoritativeSchema(baseCategories, first.schema);
 
     // One corrective round-trip naming exactly what was wrong. Models that
     // return a flat structure usually fix it when told so explicitly.
@@ -827,7 +726,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     }
 
     const second = validateSchema(await attempt(first.issues), options);
-    if (second.ok) return second.schema;
+    if (second.ok) return buildAuthoritativeSchema(baseCategories, second.schema);
 
     const error = new Error(`the AI returned a folder structure without usable subcategories (${second.issues.join('; ')})`);
     error.schemaInvalid = true;
@@ -835,6 +734,52 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     // caller merges them with curated defaults rather than starting from zero.
     error.partialSchema = second.schema;
     throw error;
+}
+
+// A non-empty authoritative schema always starts with a user-selected category.
+// Falling back there preserves the fixed hierarchy when a model response is
+// malformed or a terminal request failure leaves no classification to trust.
+export function fallbackCategoryForSchema(schema) {
+    const category = (Array.isArray(schema?.categories) ? schema.categories : [])
+        .find(c => typeof c?.name === 'string' && c.name.trim());
+    return category?.name || 'Other';
+}
+
+// Resolve an AI classification against the approved two-level schema. A
+// subcategory already owned by another category is not a new proposal: it is
+// an invalid category/subcategory pair and belongs in the selected category's
+// General bucket instead. Truly new names remain proposals for reconciliation.
+export function normalizeClassificationForSchema(entry, schema) {
+    const approvedCategories = (Array.isArray(schema?.categories) ? schema.categories : [])
+        .filter(c => typeof c?.name === 'string' && c.name.trim());
+    const fallbackCategory = fallbackCategoryForSchema(schema);
+    const schemaCategories = new Map(
+        approvedCategories.map(c => [
+            c.name.trim().toLowerCase(),
+            {
+                name: c.name,
+                subs: new Map((Array.isArray(c.sub_categories) ? c.sub_categories : [])
+                    .filter(s => typeof s === 'string' && s.trim())
+                    .map(s => [canonicalKey(s), s]))
+            }
+        ])
+    );
+
+    const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
+    const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
+    const known = schemaCategories.get(rawCategory.toLowerCase());
+    if (!known) return { category: fallbackCategory, sub_category: 'General', proposed: false };
+    if (!rawSub) return { category: known.name, sub_category: 'General', proposed: false };
+
+    const subKey = canonicalKey(rawSub);
+    const approvedSub = known.subs.get(subKey);
+    if (approvedSub) return { category: known.name, sub_category: approvedSub, proposed: false };
+
+    const belongsToAnotherCategory = [...schemaCategories.values()]
+        .some(candidate => candidate !== known && candidate.subs.has(subKey));
+    if (belongsToAnotherCategory) return { category: known.name, sub_category: 'General', proposed: false };
+
+    return { category: known.name, sub_category: rawSub, proposed: rawSub.toLowerCase() !== 'general' };
 }
 
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
@@ -857,7 +802,7 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
     2. CATEGORY is fixed: you MUST use a "category" string EXACTLY as written in the schema above (same spelling, casing, spacing). Never invent a new category.
     3. SUB_CATEGORY: strongly prefer one written exactly as in the schema. The schema was designed from a sample, so it may miss a real theme. If at least 3 bookmarks in THIS batch share a clear, specific theme that no schema sub-category captures well, you MAY introduce ONE new sub_category for them under the correct existing category. Name it in Title Case, 1-3 words, and make sure it is not a synonym or near-duplicate of a sub-category already in the schema.
     4. Use "General" as the sub_category ONLY when a bookmark genuinely belongs in the category but fits no sub-category at all — neither an existing one nor a new one worth creating. This should be rare.
-    5. If a bookmark fits no category at all, classify it as category "Other" with sub_category "General".
+    5. If a bookmark fits no category at all, choose the closest approved category and use sub_category "General". Never add an "Other" category unless it is already in the approved schema.
     6. Every bookmark must be classified exactly once. Refer to each bookmark ONLY by its index "i" — do NOT repeat titles or urls in your output.${titleInstruction}
 
     Return JSON object: ${returnSchema}
@@ -883,46 +828,10 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
             }
         }
 
-        // Categories stay strictly schema-bound; only sub-categories may be
-        // proposed (rule 3). Look up the approved names once per batch. The
-        // canonical spelling is carried alongside the sub-set: matching
-        // case-insensitively but emitting the model's own casing would give one
-        // category two sibling top-level folders in both write paths.
-        const schemaCategories = new Map(
-            (Array.isArray(schema?.categories) ? schema.categories : [])
-                .filter(c => typeof c?.name === 'string')
-                .map(c => [
-                    c.name.trim().toLowerCase(),
-                    {
-                        name: c.name.trim(),
-                        subs: new Set((Array.isArray(c.sub_categories) ? c.sub_categories : [])
-                            .filter(s => typeof s === 'string')
-                            .map(s => s.trim().toLowerCase()))
-                    }
-                ])
-        );
-
         return bookmarks.map((b, i) => {
             const entry = byIndex.get(i);
             const hasCleanTitle = cleanTitles && typeof entry?.clean_title === 'string' && entry.clean_title.trim().length > 0;
-
-            const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
-            const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
-
-            // An invented category is rejected outright — the schema's top level
-            // is the user's own configured list, so a novel one is a mistake.
-            const known = schemaCategories.get(rawCategory.toLowerCase());
-            const category = known ? known.name : 'Other';
-            const sub_category = (known && rawSub) ? rawSub : 'General';
-
-            // A sub-category absent from the schema is the model exercising
-            // rule 3. Flag it so reconciliation can keep it only if enough
-            // bookmarks landed there across all batches.
-            const proposed = Boolean(
-                known &&
-                sub_category !== 'General' &&
-                !known.subs.has(sub_category.toLowerCase())
-            );
+            const { category, sub_category, proposed } = normalizeClassificationForSchema(entry, schema);
 
             return {
                 ...b,

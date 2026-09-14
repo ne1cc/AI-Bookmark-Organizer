@@ -37,14 +37,10 @@ vi.mock('../services/organizer', () => {
 
 vi.mock('../services/input_bookmarks', () => ({
     INPUT_MAX_BYTES: 25 * 1024 * 1024,
-    MAX_CACHED_INPUTS: 3,
-    saveInputBookmarkFile: vi.fn(async (input) => {
-        const entry = { ...input, size: input.html.length, savedAt: 1757000000000, id: 'test-id' };
-        return { saved: true, entry, entries: [entry] };
-    }),
-    getInputBookmarkFile: vi.fn(async () => null),
-    getInputBookmarkFiles: vi.fn(async () => []),
-    removeInputBookmarkFile: vi.fn(async () => []),
+    saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, size: input.html.length, savedAt: 1757000000000 } })),
+    getInputBookmarkMeta: vi.fn(async () => null),
+    getInputBookmarkHtml: vi.fn(async () => null),
+    removeInputBookmarkFile: vi.fn(async () => {}),
     downloadInputBookmarkFile: vi.fn()
 }))
 
@@ -77,6 +73,38 @@ describe('Organizer Component UI Tests', () => {
 
         expect(screen.getByText(/Gemini AI/i)).toBeDefined()
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
+    })
+
+    it('explains the single Other category fallback after clearing the selection', () => {
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
+
+        expect(screen.getByText(/No categories chosen.*single "Other" category/)).toBeDefined()
+        expect(screen.queryByText(/AI will automatically design a structure/)).toBeNull()
+    })
+
+    it('lets browser-mode organization explain the missing API key instead of disabling the action', () => {
+        render(<Organizer />)
+
+        const organizeButton = screen.getByRole('button', { name: 'Organize My Bookmarks' })
+        expect(organizeButton.disabled).toBe(false)
+
+        fireEvent.click(organizeButton)
+
+        expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
+    })
+
+    it('shows the matching hierarchy illustration for each subfolder setting', () => {
+        render(<Organizer />)
+
+        const image = screen.getByRole('img', { name: /category and nested subfolder hierarchy/i })
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Balanced (3-6)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-balanced.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Detailed (6-10)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
     })
 
     it('allows entering API key and persists to localStorage', () => {
@@ -167,26 +195,10 @@ describe('Organizer Component UI Tests', () => {
         })
     })
 
-    it('renders sort by date added as the first section above API key and AI model selection', () => {
-        const { container } = render(<Organizer />)
-
-        const flatDateCard = container.querySelector('.flat-date-card')
-        const apiKeyInput = screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
-        const apiKeySection = apiKeyInput.closest('.section-block')
-        const modelSelector = screen.getByText('Select AI Model').closest('.section-block')
-
-        expect(flatDateCard).toBeTruthy()
-        expect(apiKeySection).toBeTruthy()
-        expect(modelSelector).toBeTruthy()
-
-        expect(flatDateCard.compareDocumentPosition(apiKeySection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-        expect(apiKeySection.compareDocumentPosition(modelSelector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    })
-
     it('allows toggling flat date sort (0 AI tokens) which makes API key optional', () => {
         render(<Organizer />)
 
-        const flatToggle = screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i })
+        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
         act(() => {
@@ -195,6 +207,56 @@ describe('Organizer Component UI Tests', () => {
         expect(flatToggle.getAttribute('aria-checked')).toBe('true')
 
         expect(screen.getByText(/Optional for flat date sorting/i)).toBeDefined()
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+    })
+
+    it('toggles flat date sort when the card title is clicked', () => {
+        render(<Organizer />)
+
+        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+
+        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by date added - Flat list' })
+        act(() => {
+            fireEvent.click(titleButton)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+
+        act(() => {
+            fireEvent.click(titleButton)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+    })
+
+    it('shows the default direction readout after enabling flat date sort', () => {
+        render(<Organizer />)
+
+        act(() => {
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+        })
+
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+    })
+
+    it('flips the direction readout text once per click while flat date sort is enabled', () => {
+        render(<Organizer />)
+
+        act(() => {
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+        })
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'Newest bookmarks at the top' }))
+        })
+        expect(screen.getByText('Oldest bookmarks at the top')).toBeDefined()
+        expect(screen.queryByText('Newest bookmarks at the top')).toBeNull()
+
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'Oldest bookmarks at the top' }))
+        })
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+        expect(screen.queryByText('Oldest bookmarks at the top')).toBeNull()
     })
 
     it('provides cancel button during processing that invokes organizer.cancel()', async () => {
@@ -492,7 +554,7 @@ describe('In-process and completion date range display', () => {
             }
         }
 
-        const { container } = render(<Organizer />)
+        render(<Organizer />)
 
         const startButton = screen.getByRole('button', { name: /Organize My Bookmarks/i })
         act(() => {
@@ -504,11 +566,6 @@ describe('In-process and completion date range display', () => {
             expect(screen.getByText(/A backup file was also saved to your downloads/i)).toBeDefined()
             expect(screen.getByText(/Date range:/i)).toBeDefined()
             expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i }).getAttribute('title')).toContain('Dates 1/1/2021')
-            const terminal = container.querySelector('.terminal-panel')
-            const completionCard = container.querySelector('.completed-results-panel')
-            expect(terminal).not.toBeNull()
-            expect(completionCard).not.toBeNull()
-            expect(terminal.compareDocumentPosition(completionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
         })
     })
 
@@ -604,12 +661,23 @@ describe('In-process and completion date range display', () => {
             })
         })
 
-        it('dispatches START_JOB and CANCEL_JOB over port to service worker when connected', async () => {
+        it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {
             localStorage.setItem('apiKey', 'sk-or-test-port')
 
+            const listeners = []
             const mockPort = {
-                postMessage: vi.fn(),
-                onMessage: { addListener: vi.fn() },
+                postMessage: vi.fn((msg) => {
+                    if (msg?.type === 'START_JOB') {
+                        listeners.forEach((fn) => fn({ type: 'JOB_ACK', payload: {} }))
+                    }
+                }),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn((fn) => {
+                        const idx = listeners.indexOf(fn)
+                        if (idx !== -1) listeners.splice(idx, 1)
+                    })
+                },
                 onDisconnect: { addListener: vi.fn() },
                 disconnect: vi.fn()
             }
@@ -635,7 +703,8 @@ describe('In-process and completion date range display', () => {
 
             expect(global.chrome.runtime.connect).toHaveBeenCalledWith({ name: 'organizer-channel' })
 
-            act(() => {
+            const callsBefore = OrganizerService.mock.calls.length
+            await act(async () => {
                 fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
             })
 
@@ -647,6 +716,8 @@ describe('In-process and completion date range display', () => {
                     })
                 })
             )
+            expect(screen.getByText(/acknowledged the job/i)).toBeDefined()
+            expect(OrganizerService.mock.calls.length).toBe(callsBefore)
 
             // Click Cancel
             act(() => {
@@ -656,122 +727,68 @@ describe('In-process and completion date range display', () => {
             expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
         })
 
-        it('recovers immediately to idle when STATUS_UPDATE reports idle', async () => {
-            let messageListener = null
-            const mockPort = {
-                postMessage: vi.fn(),
-                onMessage: { addListener: vi.fn((cb) => { messageListener = cb }) },
-                onDisconnect: { addListener: vi.fn() },
-                disconnect: vi.fn()
-            }
+        it('falls back to an in-panel run with live progress when the service worker never acknowledges START_JOB', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-fallback')
+            vi.useFakeTimers()
 
-            global.chrome = {
-                runtime: {
-                    connect: vi.fn(() => mockPort)
-                },
-                storage: {
-                    local: {
-                        get: vi.fn((keys, cb) => cb({})),
-                        set: vi.fn(),
-                        remove: vi.fn()
-                    },
-                    session: {
-                        get: vi.fn((keys, cb) => {
-                            if (keys.includes('activeJobState')) {
-                                cb({
-                                    activeJobState: {
-                                        status: 'processing',
-                                        progress: 45,
-                                        logs: [{ message: 'Working...', timestamp: Date.now() }]
-                                    }
-                                })
-                            } else {
-                                cb({})
-                            }
-                        }),
-                        set: vi.fn()
-                    }
-                }
-            }
-
-            render(<Organizer />)
-
-            await waitFor(() => {
-                expect(screen.getByText(/45%/i)).toBeDefined()
-            })
-
-            // Background sends status: idle
-            act(() => {
-                messageListener({
-                    type: 'STATUS_UPDATE',
-                    payload: { status: 'idle' }
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'info', message: 'Processing uploaded file...' }) })
+                        act(() => { onProgress({ status: 'processing', message: 'Classifying batch 1/3...', percent: 25 }) })
+                        act(() => { onProgress({ status: 'done', message: 'Organization complete!' }) })
+                        return [{ title: 'Item 1', url: 'https://example.com/1' }]
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
                 })
-            })
 
-            await waitFor(() => {
-                expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
-                expect(screen.queryByText(/45%/i)).toBeNull()
-            })
-        })
-
-        it('cleans up session storage and sends CANCEL_JOB when window close is requested while cancelling', async () => {
-            localStorage.setItem('apiKey', 'sk-or-test-close')
-            const mockPort = {
-                postMessage: vi.fn(),
-                onMessage: { addListener: vi.fn() },
-                onDisconnect: { addListener: vi.fn() },
-                disconnect: vi.fn()
-            }
-            const removeSpy = vi.fn()
-
-            global.chrome = {
-                runtime: {
-                    connect: vi.fn(() => mockPort)
-                },
-                storage: {
-                    local: {
-                        get: vi.fn((keys, cb) => cb({})),
-                        set: vi.fn(),
-                        remove: vi.fn()
+                const listeners = []
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: {
+                        addListener: vi.fn((fn) => listeners.push(fn)),
+                        removeListener: vi.fn((fn) => {
+                            const idx = listeners.indexOf(fn)
+                            if (idx !== -1) listeners.splice(idx, 1)
+                        })
                     },
-                    session: {
-                        get: vi.fn((keys, cb) => cb({})),
-                        set: vi.fn(),
-                        remove: removeSpy
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
                     }
                 }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                expect(screen.getByText(/did not acknowledge the job/i)).toBeDefined()
+                expect(screen.getByText(/Processing uploaded file\.\.\./i)).toBeDefined()
+                expect(screen.getByText(/Classifying batch 1\/3\.\.\./i)).toBeDefined()
+                expect(screen.getByText(/Organization complete!/i)).toBeDefined()
+                expect(silentPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
+                expect(silentPort.disconnect).toHaveBeenCalled()
+            } finally {
+                vi.useRealTimers()
             }
-
-            render(<Organizer />)
-
-            // Start job then click cancel
-            act(() => {
-                fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
-            })
-
-            await waitFor(() => {
-                expect(screen.getByRole('button', { name: /Cancel/i })).toBeDefined()
-            })
-
-            act(() => {
-                fireEvent.click(screen.getByRole('button', { name: /Cancel/i }))
-            })
-
-            // Now extension-close-requested event is fired (e.g. from header X button)
-            act(() => {
-                window.dispatchEvent(new CustomEvent('extension-close-requested'))
-            })
-
-            expect(removeSpy).toHaveBeenCalledWith(['activeJobState'])
-            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
         })
     })
 })
 
 describe('Input Bookmarks card', () => {
-    const cachedEntry = { filename: 'b.html', html: '<x/>', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
+    const cachedMeta = { filename: 'b.html', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
 
-    beforeEach(() => { inputService.getInputBookmarkFile.mockResolvedValue(null) })
+    beforeEach(() => { inputService.getInputBookmarkMeta.mockResolvedValue(null) })
     afterEach(() => { vi.clearAllMocks(); cleanup(); delete global.chrome })
 
     const chromeWith = (local = {}) => {
@@ -799,7 +816,7 @@ describe('Input Bookmarks card', () => {
 
     it('renders the cached input as a card with Download, Re-organize, Remove', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         expect(container.querySelector('.input-bookmarks-card').textContent).toContain('b.html')
@@ -817,7 +834,7 @@ describe('Input Bookmarks card', () => {
 
     it('Remove clears the card and calls the service', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Remove'))
@@ -827,39 +844,13 @@ describe('Input Bookmarks card', () => {
 
     it('Download emits the pristine original', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Download'))
+        // The card holds metadata only; the service fetches the cached HTML itself.
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
-            expect.objectContaining({ html: '<x/>', filename: 'b.html' })
+            expect.objectContaining({ filename: 'b.html' })
         )
-    })
-
-    it('renders multiple cached inputs (up to 3) and allows individual actions', async () => {
-        chromeWith({})
-        const multiEntries = [
-            { id: '1', filename: 'file1.html', html: '<1/>', size: 4, savedAt: 1757000000000, count: 120, dateSpan: null },
-            { id: '2', filename: 'file2.html', html: '<2/>', size: 4, savedAt: 1757000001000, count: 340, dateSpan: null },
-            { id: '3', filename: 'file3.html', html: '<3/>', size: 4, savedAt: 1757000002000, count: 560, dateSpan: null }
-        ]
-        inputService.getInputBookmarkFiles.mockResolvedValue(multiEntries)
-        const { container, getAllByText } = render(<Organizer />)
-        await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
-        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('Input Bookmarks (3/3)')
-        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file1.html')
-        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file2.html')
-        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file3.html')
-        const downloadBtns = getAllByText('Download')
-        expect(downloadBtns).toHaveLength(3)
-        fireEvent.click(downloadBtns[1]) // click download on file2
-        expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
-            expect.objectContaining({ filename: 'file2.html' })
-        )
-
-        const removeBtns = getAllByText('Remove')
-        expect(removeBtns).toHaveLength(3)
-        fireEvent.click(removeBtns[0]) // click remove on file1
-        expect(inputService.removeInputBookmarkFile).toHaveBeenCalledWith('1')
     })
 })

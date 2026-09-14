@@ -68,6 +68,30 @@ describe('subfolderBounds', () => {
 })
 
 describe('validateSchema', () => {
+    it.each([1, 2])('accepts %i selected categories for large collections while enforcing depth', (count) => {
+        const categories = healthySchema.categories.slice(0, count)
+        const expectedCategories = categories.map(c => c.name)
+        for (const subfolderTarget of ['0-5', '5-10', '10+']) {
+            const options = { expectedCategories, subfolderTarget, bookmarkCount: 40 }
+            expect(validateSchema({ categories }, options).issues).toEqual([])
+            const thin = { categories: categories.map(c => ({ ...c, sub_categories: ['General', 'One Topic'] })) }
+            const result = validateSchema(thin, options)
+            expect(result.ok).toBe(false)
+            expect(result.issues.join(' ')).toMatch(/subcategories/)
+            expect(result.issues.join(' ')).not.toContain('covered only')
+        }
+    })
+
+    it('counts spacing and plural variants as one subcategory when validating depth', () => {
+        const result = validateSchema({ categories: [{
+            name: 'Tech', sub_categories: ['Developer Tools', 'Developer Tool', 'Developer  Tools']
+        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40, subfolderTarget: '5-10' })
+
+        expect(result.schema.categories[0].sub_categories).toEqual(['Developer Tools'])
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toContain('"Tech" has 1')
+    })
+
     it('accepts a schema meeting the granularity floor', () => {
         const result = validateSchema(healthySchema, { subfolderTarget: '5-10', bookmarkCount: 500 })
 
@@ -78,8 +102,8 @@ describe('validateSchema', () => {
 
     it('rejects a response that covers too few of the configured categories', () => {
         // The exact shape a MAX_TOKENS salvage produces: structurally fine, but
-        // every bookmark outside the two surviving categories would be coerced
-        // to "Other / General" during classification.
+        // omitted selected categories would receive only their General fallback
+        // instead of useful topical subcategories.
         const narrow = { categories: healthySchema.categories.slice(0, 2) }
         const expectedCategories = ['Finance & Crypto', 'Tech & Development', 'Work & Career', 'Design & Media', 'Travel & Lifestyle', 'Shopping & Tools']
 
@@ -268,14 +292,41 @@ describe('generateSchema validation and corrective retry', () => {
         vi.useRealTimers()
     })
 
+    it.each([1, 2])('accepts a healthy %i-category selected schema without corrective retries', async (count) => {
+        const candidate = { categories: healthySchema.categories.slice(0, count) }
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify(candidate)))
+
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', candidate.categories.map(c => c.name))
+
+        expect(schema).toEqual(candidate)
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
     it('returns the schema unchanged when the first response is already valid', async () => {
         global.fetch = vi.fn(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
         expect(schema.categories).toHaveLength(3)
         expect(schema.categories[0].sub_categories).toContain('Trading & Markets')
+    })
+
+    it('uses the selected category names verbatim and ignores model-invented top-level categories', async () => {
+        const selected = ['Finance & CRYPTO', 'Tech & Development', 'Personal Research']
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify({
+            categories: [
+                { name: 'finance & crypto', sub_categories: ['Trading & Markets', 'Crypto & Blockchain', 'Investing & Wealth'] },
+                { name: 'Tech & Development', sub_categories: ['Web Development', 'DevOps & Cloud', 'Security'] },
+                { name: 'Invented Category', sub_categories: ['One', 'Two', 'Three'] }
+            ]
+        })))
+
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', selected, undefined, '5-10')
+
+        expect(schema.categories.map(c => c.name)).toEqual(selected)
+        expect(schema.categories[0].sub_categories).toEqual(['Trading & Markets', 'Crypto & Blockchain', 'Investing & Wealth'])
+        expect(schema.categories[2].sub_categories).toEqual(['General'])
     })
 
     it('re-prompts once when the model returns a flat schema, and accepts the correction', async () => {
@@ -284,7 +335,7 @@ describe('generateSchema validation and corrective retry', () => {
             .mockImplementationOnce(async () => orResponse(JSON.stringify(flat)))
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(schema.categories).toHaveLength(3)
@@ -371,6 +422,35 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         vi.restoreAllMocks()
     })
 
+    it.each(['Index  Funds', 'index fund', ' Index\tFund '])('rejects another category\'s subfolder variant %j', async (sub_category) => {
+        const schema = { categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools'] },
+            { name: 'Finance', sub_categories: ['Index Funds'] }
+        ] }
+        global.fetch = vi.fn(async () => classifyResponse(threeBookmarks.map((_, i) => ({ i, category: 'Tech', sub_category }))))
+
+        const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', schema)
+
+        expect(result.every(r => r.category === 'Tech' && r.sub_category === 'General' && !r.proposed)).toBe(true)
+    })
+
+    it('canonicalizes approved plural and spacing variants, including names shared by categories', async () => {
+        const schema = { categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools', 'News Feeds'] },
+            { name: 'Finance', sub_categories: ['News Feeds'] }
+        ] }
+        global.fetch = vi.fn(async () => classifyResponse([
+            { i: 0, category: 'Tech', sub_category: 'Developer Tool' },
+            { i: 1, category: 'Tech', sub_category: 'Developer  Tools' },
+            { i: 2, category: 'Finance', sub_category: 'News Feed' }
+        ]))
+
+        const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', schema)
+
+        expect(result.map(r => r.sub_category)).toEqual(['Developer Tools', 'Developer Tools', 'News Feeds'])
+        expect(result.every(r => !r.proposed)).toBe(true)
+    })
+
     it('keeps a sub_category absent from the schema and flags it as proposed', async () => {
         global.fetch = vi.fn(async () => classifyResponse([
             { i: 0, category: 'Tech & Development', sub_category: 'Web Development' },
@@ -398,7 +478,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', healthySchema)
 
         expect(result.every(r => r.proposed === undefined)).toBe(true)
-        expect(result[0].sub_category).toBe('web development')
+        expect(result[0].sub_category).toBe('Web Development')
     })
 
     it('emits the schema spelling of a category the model wrote in another casing', async () => {
@@ -415,7 +495,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         expect(new Set(result.map(r => r.category))).toEqual(new Set(['Tech & Development']))
     })
 
-    it('coerces an invented category to Other/General', async () => {
+    it('coerces invented and omitted categories to the first approved category', async () => {
         global.fetch = vi.fn(async () => classifyResponse([
             { i: 0, category: 'Totally Made Up', sub_category: 'Something' },
             { i: 1, category: 'Tech & Development', sub_category: 'Databases' },
@@ -424,7 +504,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
 
         const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', healthySchema)
 
-        expect(result[0].category).toBe('Other')
+        expect(result[0].category).toBe('Finance & Crypto')
         expect(result[0].sub_category).toBe('General')
         expect(result[0].proposed).toBeUndefined()
     })
@@ -440,8 +520,8 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         expect(result).toHaveLength(3)
         expect(result[0]).toMatchObject({ category: 'Tech & Development', sub_category: 'General' })
         expect(result[0].proposed).toBeUndefined()
-        expect(result[1]).toMatchObject({ category: 'Other', sub_category: 'General' })
-        expect(result[2]).toMatchObject({ category: 'Other', sub_category: 'General' })
+        expect(result[1]).toMatchObject({ category: 'Finance & Crypto', sub_category: 'General' })
+        expect(result[2]).toMatchObject({ category: 'Finance & Crypto', sub_category: 'General' })
     })
 
     it('preserves clean titles and source fields alongside a proposed subcategory', async () => {
@@ -499,13 +579,12 @@ describe('truncation handling differs between schema design and classification',
         const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Finance'], undefined, '0-5')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        // The three complete categories survive; the half-written fourth is dropped.
-        expect(schema.categories.map(c => c.name)).toEqual(['Finance', 'Tech', 'Travel'])
+        expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
     })
 
     it('re-prompts when a salvaged schema is too narrow to classify the collection against', async () => {
-        // Cut off after category 2 of a 6-category ask: structurally valid but
-        // it would coerce every other bookmark to "Other / General".
+        // Cut off after category 2 of a 6-category ask: structurally valid, but
+        // omitted selected categories would have only their General fallback.
         const truncated = '{"categories":[{"name":"Finance","sub_categories":["Trading","Crypto","Investing"]},'
             + '{"name":"Tech","sub_categories":["Web Dev","AI","DevOp'
         const sixCategories = ['Finance', 'Tech', 'Travel', 'Health', 'Design', 'Shopping']
@@ -519,7 +598,7 @@ describe('truncation handling differs between schema design and classification',
         expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content)
             .toMatch(/covered only 2 categories; at least 3 are needed/)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(sixCategories)
     })
 
     it('still retries a truncated schema when nothing can be recovered', async () => {
@@ -530,7 +609,7 @@ describe('truncation handling differs between schema design and classification',
         const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(2)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
     })
 
     it('never salvages a truncated classification batch, since the tail would be lost bookmarks', async () => {
@@ -590,7 +669,7 @@ describe('native Gemini response path', () => {
         const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Finance'], undefined, '0-5')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        expect(schema.categories.map(c => c.name)).toEqual(['Finance', 'Tech', 'Travel'])
+        expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
     })
 
     it('reassembles a response split across several content parts', async () => {
@@ -601,7 +680,7 @@ describe('native Gemini response path', () => {
         const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
     })
 
     it('treats a safety block as permanent and does not retry it', async () => {
