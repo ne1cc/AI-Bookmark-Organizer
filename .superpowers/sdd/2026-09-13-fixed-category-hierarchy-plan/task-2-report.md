@@ -70,3 +70,42 @@
 - The unrelated untracked file
   `docs/superpowers/plans/2026-09-13-fixed-category-hierarchy-plan.md` was left
   untouched and excluded from both Task 2 commits.
+
+## Fix round 1
+
+### Fix commit
+
+`13e4be1bb723b7808adc598772a472d78b74822e` — `fix(classification): canonicalize approved subcategories`
+
+### Finding addressed
+
+- Schema matching already trims and compares subcategory names
+  case-insensitively, but returned the model's spelling. The normalization now
+  emits the matched schema value (`approvedSub`), so casing and surrounding
+  whitespace variants cannot create sibling folders such as `investing` next
+  to `Investing`.
+- Genuinely unknown subcategories under a valid category remain proposed and
+  still flow through reconciliation unchanged.
+
+### Tests and verification
+
+1. RED: `npm test -- src/services/organizer.test.js -t "places approved subcategories only beneath their selected category"`
+   - 1 test failed as expected: no canonical `Investing` folder existed for
+     ` investing ` and `INVESTING` classifier outputs.
+2. GREEN: same targeted command
+   - 1 test passed.
+3. Focused suite: `npm test -- src/services/organizer.test.js src/services/schema-validation.test.js src/services/subcategory-pipeline.test.js`
+   - 3 files passed; 131 tests passed, 0 failed.
+4. `npm run lint`
+   - Exit 0; 0 errors, with the same four pre-existing `Organizer.jsx`
+     warnings.
+5. Full suite: `npm test`
+   - 15 files passed; 254 tests passed, 0 failed.
+6. `git diff --check`
+   - Exit 0; no whitespace errors.
+
+### Fix-round concerns
+
+- The known mocked API-error console output and pre-existing unawaited
+  assertion warning remain outside this fix's changed lines.
+- The unrelated untracked plan file remains untouched.
