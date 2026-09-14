@@ -70,7 +70,7 @@ function nearestSibling(group, kept) {
  * @param {Object} options - `subfolderTarget` granularity setting.
  * @returns {{ classified: Array, summary: Object }}
  */
-export function reconcileSubcategories(classified, schema, { subfolderTarget = '5-10' } = {}) {
+export function reconcileSubcategories(classified, schema, { subfolderTarget = '1-3' } = {}) {
     const summary = { proposedKept: 0, proposedFolded: 0, merged: 0, orphansFolded: 0, cappedFolded: 0 };
 
     if (!Array.isArray(classified) || classified.length === 0) {
@@ -78,7 +78,7 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
     }
 
     const { max } = subfolderBounds(subfolderTarget);
-    const minCount = subfolderTarget === '10+' ? 2 : 3;
+    const minCount = subfolderTarget === '1-3' || subfolderTarget === '6-10' || subfolderTarget === '10+' ? 2 : 3;
 
     const schemaSubs = new Map(
         (Array.isArray(schema?.categories) ? schema.categories : [])

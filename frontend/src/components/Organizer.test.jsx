@@ -94,6 +94,20 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
     })
 
+    it('shows the matching hierarchy illustration for each subfolder setting', () => {
+        render(<Organizer />)
+
+        const image = screen.getByRole('img', { name: /category and nested subfolder hierarchy/i })
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Balanced (3-6)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-balanced.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Detailed (6-10)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
+    })
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 

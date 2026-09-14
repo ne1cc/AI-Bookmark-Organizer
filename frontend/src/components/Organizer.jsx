@@ -3,6 +3,9 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
+import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
+import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
 
 export const DEFAULT_CATEGORIES = [
     'Work & Career',
@@ -27,6 +30,15 @@ export const SUGGESTED_ADDABLE_CATEGORIES = [
     'Gaming & Esports',
     'Legal, Docs & Admin'
 ];
+
+const SUBFOLDER_TARGET_IDS = ['1-3', '3-6', '6-10'];
+const LEGACY_SUBFOLDER_TARGETS = {
+    '0-5': '1-3',
+    '5-10': '3-6',
+    '10+': '6-10'
+};
+const normalizeSubfolderTarget = (target) =>
+    LEGACY_SUBFOLDER_TARGETS[target] || (SUBFOLDER_TARGET_IDS.includes(target) ? target : '1-3');
 
 export const SCHEMA_SORT_OPTIONS = [
     {
@@ -62,6 +74,12 @@ export const SCHEMA_SORT_OPTIONS = [
         desc: 'Groups bookmarks by domain (e.g. github.com, youtube.com), then title.'
     }
 ];
+
+const SUBFOLDER_EXPLAINER_IMAGES = {
+    '1-3': subfolderHierarchyImage,
+    '3-6': subfolderHierarchyBalancedImage,
+    '6-10': subfolderHierarchyDetailedImage
+};
 
 // Synchronous in-process memory reader (0.05ms latency, zero IPC overhead)
 const getStored = (key, fallback) => {
@@ -201,16 +219,15 @@ export default function Organizer() {
 
     // Subfolder Target Size
     const subfolderTargetOptions = useMemo(() => [
-        { id: '0-5', label: 'Compact (0-5)', description: 'Minimal subfolders' },
-        { id: '5-10', label: 'Balanced (5-10)', description: 'Recommended' },
-        { id: '10+', label: 'Detailed (10+)', description: 'More specific grouping' }
+        { id: '1-3', label: 'Compact (1-3)', description: 'Recommended — only the clearest subgroups' },
+        { id: '3-6', label: 'Balanced (3-6)', description: 'A focused structure for broader collections' },
+        { id: '6-10', label: 'Detailed (6-10)', description: 'More specific grouping for large collections' }
     ], [])
     const [subfolderTarget, setSubfolderTarget] = useState(() => {
         try {
-            const t = localStorage.getItem('subfolderTarget')
-            return t && ['0-5', '5-10', '10+'].includes(t) ? t : '5-10'
+            return normalizeSubfolderTarget(localStorage.getItem('subfolderTarget'))
         } catch {
-            return '5-10'
+            return '1-3'
         }
     })
     const subfolderOptions = subfolderTargetOptions
@@ -423,8 +440,12 @@ export default function Organizer() {
                     try { localStorage.setItem('selectedModel', result.selectedModel) } catch {}
                 }
                 if (result.subfolderTarget) {
-                    setSubfolderTarget(result.subfolderTarget)
-                    try { localStorage.setItem('subfolderTarget', result.subfolderTarget) } catch {}
+                    const normalizedTarget = normalizeSubfolderTarget(result.subfolderTarget)
+                    setSubfolderTarget(normalizedTarget)
+                    try { localStorage.setItem('subfolderTarget', normalizedTarget) } catch {}
+                    if (normalizedTarget !== result.subfolderTarget) {
+                        chrome.storage.local.set({ subfolderTarget: normalizedTarget })
+                    }
                 }
                 if (result.schemaSortOrder && SCHEMA_SORT_OPTIONS.some(opt => opt.id === result.schemaSortOrder)) {
                     setSchemaSortOrder(result.schemaSortOrder)
@@ -1330,6 +1351,13 @@ export default function Organizer() {
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
                             {subfolderOptions.find(opt => opt.id === subfolderTarget)?.description}
+                        </div>
+                        <div className="subfolder-explainer">
+                            <img
+                                className="subfolder-hierarchy-image"
+                                src={SUBFOLDER_EXPLAINER_IMAGES[subfolderTarget] || subfolderHierarchyImage}
+                                alt="Category and nested subfolder hierarchy for the selected organization level"
+                            />
                         </div>
                     </div>
 

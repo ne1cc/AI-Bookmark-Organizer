@@ -55,9 +55,9 @@ describe('subfolderBounds', () => {
         expect(subfolderBounds('10+')).toEqual({ ask: [10, 14], min: 5, max: 16 })
     })
 
-    it('falls back to the balanced default for unknown or missing values', () => {
-        expect(subfolderBounds(undefined)).toEqual(subfolderBounds('5-10'))
-        expect(subfolderBounds('nonsense')).toEqual(subfolderBounds('5-10'))
+    it('falls back to the compact default for unknown or missing values', () => {
+        expect(subfolderBounds(undefined)).toEqual(subfolderBounds('1-3'))
+        expect(subfolderBounds('nonsense')).toEqual(subfolderBounds('1-3'))
     })
 })
 

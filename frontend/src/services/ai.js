@@ -521,13 +521,16 @@ function sampleForSchema(bookmarks, limit = SCHEMA_SAMPLE_LIMIT) {
 // but usable schema would cost a whole extra round-trip), and `max` the ceiling
 // the reconciliation pass enforces after classification.
 export const SUBFOLDER_BOUNDS = {
+    '1-3': { ask: [1, 3], min: 1, max: 3 },
+    '3-6': { ask: [3, 6], min: 2, max: 6 },
+    '6-10': { ask: [6, 10], min: 3, max: 10 },
     '0-5': { ask: [3, 5], min: 2, max: 5 },
     '5-10': { ask: [5, 10], min: 3, max: 10 },
     '10+': { ask: [10, 14], min: 5, max: 16 }
 };
 
 export function subfolderBounds(subfolderTarget) {
-    return SUBFOLDER_BOUNDS[subfolderTarget] || SUBFOLDER_BOUNDS['5-10'];
+    return SUBFOLDER_BOUNDS[subfolderTarget] || SUBFOLDER_BOUNDS['1-3'];
 }
 
 // Categories that exist to absorb outliers. They are allowed to carry no
@@ -550,7 +553,7 @@ const TINY_COLLECTION_THRESHOLD = 40;
 // Validate a model-generated schema and return a cleaned copy alongside any
 // reasons it is unusable. Normalizing here means callers (and the classifier)
 // never see filler subcategories or case-duplicate folder names.
-export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount = Infinity, expectedCategories = null } = {}) {
+export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount = Infinity, expectedCategories = null } = {}) {
     const issues = [];
     const rawCategories = Array.isArray(schema?.categories) ? schema.categories : null;
 
@@ -628,16 +631,19 @@ export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount
     return { ok: issues.length === 0, issues, schema: { categories } };
 }
 
-export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "5-10", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
+export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
     const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
 
     const subfolderRules = {
+        '1-3': 'Keep it very compact — create only 1-3 subfolders for the clearest, genuinely distinct groups. Combine related items into broader folders rather than splitting too finely.',
+        '3-6': 'Create a focused structure of 3-6 subfolders for the clearest groups. Combine closely related topics and avoid one-off folders.',
+        '6-10': 'Create a detailed but scannable structure of 6-10 subfolders. Use specific topics only when each folder has a meaningful group of bookmarks.',
         '0-5': 'Keep it minimal — only create subfolders for truly distinct groups, and err on the side of combining related items into broader folders.',
         '5-10': 'About 7-8 is the sweet spot: enough to be genuinely useful, few enough to scan at a glance. Scale to the content — a content-heavy category can carry more, a sparse one fewer.',
         '10+': 'Be generous with specific subfolders for different topics, so each bookmark has a precise home.'
     };
 
-    const subfolderGuidance = subfolderRules[subfolderTarget] || subfolderRules['5-10'];
+    const subfolderGuidance = subfolderRules[subfolderTarget] || subfolderRules['1-3'];
 
     const schemaSource = sampleForSchema(bookmarks, sampleLimit);
     const sampleNote = schemaSource.length < bookmarks.length
