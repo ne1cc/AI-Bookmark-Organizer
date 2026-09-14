@@ -74,6 +74,15 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('uses compact subfolder organization as the default', () => {
+        render(<Organizer />)
+
+        expect(screen.getByRole('button', { name: 'Compact (1-3)' })).toBeDefined()
+        expect(screen.getByRole('button', { name: 'Balanced (3-6)' })).toBeDefined()
+        expect(screen.getByRole('button', { name: 'Detailed (6-10)' })).toBeDefined()
+        expect(screen.getByRole('button', { name: 'Compact (1-3)' }).style.background).toContain('accent-gradient')
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 
