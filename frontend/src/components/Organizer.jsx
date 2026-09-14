@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
+import { Terminal, RotateCcw, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
-import { saveInputBookmarkFile, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { saveInputBookmarkFile, getInputBookmarkFile, getInputBookmarkFiles, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { OrganizerService } from '../services/organizer'
+import { downloadBookmarks } from '../services/bookmarks_export'
 
-export const DEFAULT_CATEGORIES = [
+export const DEFAULT_CATEGORIES = [];
+
+export const LEGACY_DEFAULT_CATEGORIES = [
     'Work & Career',
     'Finance & Crypto',
     'Design & Media',
@@ -16,6 +20,14 @@ export const DEFAULT_CATEGORIES = [
 ];
 
 export const SUGGESTED_ADDABLE_CATEGORIES = [
+    'Work & Career',
+    'Finance & Crypto',
+    'Design & Media',
+    'Reading & Knowledge',
+    'Entertainment & Social',
+    'Shopping & Tools',
+    'Travel & Lifestyle',
+    'Tech & Development',
     'Health, Fitness & Wellness',
     'AI & Machine Learning',
     'News & Current Affairs',
@@ -161,8 +173,17 @@ export default function Organizer() {
         }
     })
 
-    // Default Categories — instantaneous bootstrap
-    const [categories, setCategories] = useState(() => getStored('categories', DEFAULT_CATEGORIES))
+    // Categories — defaults to empty [] for automatic AI category generation.
+    // If stored value is the legacy 8 default preset, migrate to [] so automatic generation is active.
+    const [categories, setCategories] = useState(() => {
+        const stored = getStored('categories', null);
+        if (!stored || !Array.isArray(stored)) return [];
+        if (stored.length === 8 && stored.every((c, i) => c === LEGACY_DEFAULT_CATEGORIES[i])) {
+            try { localStorage.setItem('categories', JSON.stringify([])); } catch {}
+            return [];
+        }
+        return stored;
+    });
     const [newCategory, setNewCategory] = useState('')
 
     // Suggested Categories not yet in active categories
@@ -218,6 +239,7 @@ export default function Organizer() {
     const logContainerRef = useRef(null)
     const organizerRef = useRef(null)
     const portRef = useRef(null)
+    const cancelTimeoutRef = useRef(null)
 
     // Background job connection & state restoration hook
     useEffect(() => {
@@ -238,6 +260,11 @@ export default function Organizer() {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
+                        } else if (aj.status === 'idle') {
+                            setStatus('idle');
+                            setIsCancelling(false);
+                            setProgress(0);
+                            setBackgroundNotice('');
                         } else if (aj.status === 'complete' && res.organizedData) {
                             organizedResultsRef.current = res.organizedData;
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
@@ -301,7 +328,11 @@ export default function Organizer() {
                             setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
                             setBackgroundNotice('');
                         } else if (state.status === 'idle') {
+                            if (cancelTimeoutRef.current) { clearTimeout(cancelTimeoutRef.current); cancelTimeoutRef.current = null; }
+                            setStatus('idle');
                             setIsCancelling(false);
+                            setProgress(0);
+                            setBackgroundNotice('');
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -319,14 +350,31 @@ export default function Organizer() {
                         setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
                         setBackgroundNotice('');
                     } else if (msg.type === 'JOB_CANCELLED') {
+                        if (cancelTimeoutRef.current) { clearTimeout(cancelTimeoutRef.current); cancelTimeoutRef.current = null; }
                         setStatus('idle');
                         setIsCancelling(false);
                         setProgress(0);
+                        setBackgroundNotice('');
                     }
                 });
 
                 port.onDisconnect.addListener(() => {
                     portRef.current = null;
+                    if (cancelTimeoutRef.current) {
+                        clearTimeout(cancelTimeoutRef.current);
+                        cancelTimeoutRef.current = null;
+                    }
+                    setStatus((currStatus) => {
+                        if (currStatus === 'processing') {
+                            setIsCancelling(false);
+                            setProgress(0);
+                            setBackgroundNotice('');
+                            addLog('Background service worker disconnected. Halting operations.');
+                            return 'idle';
+                        }
+                        return currStatus;
+                    });
+                    setIsCancelling(false);
                 });
             } catch (err) {
                 console.warn('[Organizer] Failed to connect to background channel:', err);
@@ -334,12 +382,43 @@ export default function Organizer() {
         }
 
         return () => {
+            if (cancelTimeoutRef.current) {
+                clearTimeout(cancelTimeoutRef.current);
+                cancelTimeoutRef.current = null;
+            }
             if (portRef.current) {
                 try { portRef.current.disconnect(); } catch {}
                 portRef.current = null;
             }
         };
     }, []);
+
+    useEffect(() => {
+        const handleWindowCloseOrUnload = () => {
+            if (isCancelling) {
+                if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+                    try {
+                        chrome.storage.session.remove(['activeJobState']);
+                    } catch {}
+                }
+                if (portRef.current) {
+                    try {
+                        portRef.current.postMessage({ type: 'CANCEL_JOB' });
+                    } catch {}
+                }
+            }
+        };
+
+        window.addEventListener('beforeunload', handleWindowCloseOrUnload);
+        window.addEventListener('pagehide', handleWindowCloseOrUnload);
+        window.addEventListener('extension-close-requested', handleWindowCloseOrUnload);
+
+        return () => {
+            window.removeEventListener('beforeunload', handleWindowCloseOrUnload);
+            window.removeEventListener('pagehide', handleWindowCloseOrUnload);
+            window.removeEventListener('extension-close-requested', handleWindowCloseOrUnload);
+        };
+    }, [isCancelling]);
 
     // Non-blocking background sync from chrome.storage (runs AFTER UI is already painted)
     useEffect(() => {
@@ -348,9 +427,15 @@ export default function Organizer() {
             chrome.storage.local.get(['apiKey', 'categories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
                 if (!result) return
                 if (result.apiKey && result.apiKey !== apiKey) setApiKey(result.apiKey)
-                if (result.categories && Array.isArray(result.categories) && result.categories.length > 0) {
-                    setCategories(result.categories)
-                    try { localStorage.setItem('categories', JSON.stringify(result.categories)) } catch {}
+                if (result.categories && Array.isArray(result.categories)) {
+                    if (result.categories.length === 8 && result.categories.every((c, i) => c === LEGACY_DEFAULT_CATEGORIES[i])) {
+                        setCategories([]);
+                        try { localStorage.setItem('categories', JSON.stringify([])); } catch {}
+                        chrome.storage.local.set({ categories: [] });
+                    } else {
+                        setCategories(result.categories);
+                        try { localStorage.setItem('categories', JSON.stringify(result.categories)); } catch {}
+                    }
                 }
                 if (result.selectedModel === 'google/gemini-2.5-pro') {
                     setSelectedModel('google/gemini-3.1-pro-preview')
@@ -420,15 +505,7 @@ export default function Organizer() {
         }
     }, [])
 
-    // Warm the lazy organize pipeline after first paint so clicking
-    // Organize is never slower than the old eager bundle.
-    useEffect(() => {
-        const idle = window.requestIdleCallback || (cb => setTimeout(cb, 200))
-        idle(() => {
-            import('../services/organizer')
-            import('../services/bookmarks_export')
-        })
-    }, [])
+
 
     // Save Settings to both in-process memory and chrome.storage
     const updateSetting = useCallback((key, val) => {
@@ -460,11 +537,6 @@ export default function Organizer() {
         setSchemaSortOrder(newOrder)
         updateSetting('schemaSortOrder', newOrder)
         updateSetting('sortAlphabetically', newOrder === 'alpha')
-    }, [updateSetting])
-
-    const handleRemoveDuplicatesToggle = useCallback((enabled) => {
-        setRemoveDuplicates(enabled)
-        updateSetting('removeDuplicates', enabled)
     }, [updateSetting])
 
     const handleCleanTitlesToggle = useCallback((enabled) => {
@@ -509,85 +581,162 @@ export default function Organizer() {
     // File Upload Handlers
     const [uploadedFile, setUploadedFile] = useState(null)
     const [parsedBookmarks, setParsedBookmarks] = useState(null)
-    const [inputFile, setInputFile] = useState(null)
+    const [inputFiles, setInputFiles] = useState([])
+    const inputFile = inputFiles[0] || null
     const fileInputRef = useRef(null)
 
     const addLog = useCallback((message) => {
         setLogs(prev => [...prev, { message, timestamp: new Date() }])
     }, [])
 
-    const processFile = useCallback((file) => {
-        if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
-            setErrorMsg("Please upload a valid bookmarks HTML file.");
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const content = e.target.result;
-            try {
-                const links = parseBookmarks(content);
-                const span = calculateDateSpan(links);
-                setUploadedFile(file);
-                setParsedBookmarks(links);
-                saveInputBookmarkFile({ filename: file.name, html: content, count: links.length, dateSpan: span })
-                    .then((res) => { if (res.saved) setInputFile(res.entry); else addLog('Input file too large to cache (25 MB limit) — organize continues; keep your own copy of the original.'); })
-                    .catch(() => addLog('Could not cache the input file locally.'))
-                if (span) setActiveDateSpan(span);
-                setErrorMsg('');
-                addLog(`Loaded ${file.name} (${links.length.toLocaleString()} bookmarks found${span ? ` · Dates ${span}` : ''})`);
-            } catch (err) {
-                console.error(err);
-                setErrorMsg("Failed to parse bookmarks file.");
+    const readAndCacheFile = useCallback((file) => {
+        return new Promise((resolve, reject) => {
+            if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
+                return reject(new Error(`"${file.name}" is not a valid bookmarks HTML file.`))
             }
-        };
-        reader.readAsText(file);
+
+            const reader = new FileReader()
+            reader.onload = (e) => {
+                const content = e.target.result
+                try {
+                    const links = parseBookmarks(content)
+                    const span = calculateDateSpan(links)
+                    saveInputBookmarkFile({ filename: file.name, html: content, count: links.length, dateSpan: span })
+                        .then((res) => {
+                            if (res.saved) {
+                                if (res.entries) setInputFiles(res.entries)
+                                else if (res.entry) setInputFiles(prev => [res.entry, ...prev.filter(f => f.filename !== file.name)].slice(0, 3))
+                            } else {
+                                addLog(`"${file.name}" too large to cache (25 MB limit) — organize continues; keep your own copy of the original.`)
+                            }
+                            resolve({ file, links, span, content })
+                        })
+                        .catch(() => {
+                            addLog(`Could not cache "${file.name}" locally.`)
+                            resolve({ file, links, span, content })
+                        })
+                } catch (err) {
+                    reject(new Error(`Failed to parse "${file.name}".`))
+                }
+            }
+            reader.onerror = () => reject(new Error(`Failed to read "${file.name}".`))
+            reader.readAsText(file)
+        })
     }, [addLog])
 
+    const processFiles = useCallback(async (fileList) => {
+        const files = Array.from(fileList || []).slice(0, 3)
+        if (files.length === 0) return
+
+        const validFiles = files.filter(f => f.name.endsWith('.html') || f.name.endsWith('.htm'))
+        if (validFiles.length === 0) {
+            setErrorMsg("Please upload a valid bookmarks HTML file.")
+            return
+        }
+
+        setErrorMsg('')
+        let lastSuccessful = null
+        for (const file of validFiles) {
+            try {
+                const result = await readAndCacheFile(file)
+                lastSuccessful = result
+                addLog(`Loaded ${file.name} (${result.links.length.toLocaleString()} bookmarks found${result.span ? ` · Dates ${result.span}` : ''})`)
+            } catch (err) {
+                console.error(err)
+                setErrorMsg(err.message || "Failed to parse bookmarks file.")
+            }
+        }
+
+        if (lastSuccessful) {
+            setUploadedFile(lastSuccessful.file)
+            setParsedBookmarks(lastSuccessful.links)
+            if (lastSuccessful.span) setActiveDateSpan(lastSuccessful.span)
+        }
+    }, [readAndCacheFile, addLog])
+
+    const processFile = useCallback((file) => {
+        if (file) processFiles([file])
+    }, [processFiles])
+
     const handleFileSelect = useCallback(async (e) => {
-        const file = e.target.files[0];
-        if (file) processFile(file);
-    }, [processFile])
+        const files = e.target.files
+        if (files && files.length > 0) processFiles(files)
+    }, [processFiles])
 
     const handleDrop = useCallback((e) => {
-        e.preventDefault();
-        const file = e.dataTransfer.files[0];
-        if (file) processFile(file);
-    }, [processFile])
+        e.preventDefault()
+        const files = e.dataTransfer?.files
+        if (files && files.length > 0) processFiles(files)
+    }, [processFiles])
 
     const handleDragOver = useCallback((e) => {
-        e.preventDefault();
+        e.preventDefault()
     }, [])
 
-    // Restore the cached dropped-in file (spec §12) on mount.
+    // Restore the cached dropped-in files (spec §12) on mount (up to 3).
     useEffect(() => {
-        getInputBookmarkFile()
-            .then((entry) => { if (entry) setInputFile(entry) })
-            .catch(() => {})
+        const fetchInputs = async () => {
+            try {
+                if (typeof getInputBookmarkFiles === 'function') {
+                    const files = await getInputBookmarkFiles()
+                    if (Array.isArray(files) && files.length > 0) {
+                        setInputFiles(files)
+                        return
+                    }
+                }
+                if (typeof getInputBookmarkFile === 'function') {
+                    const single = await getInputBookmarkFile()
+                    if (Array.isArray(single)) setInputFiles(single)
+                    else if (single) setInputFiles([single])
+                    else setInputFiles([])
+                }
+            } catch {
+                setInputFiles([])
+            }
+        }
+        fetchInputs()
     }, [])
 
-    const handleDownloadInput = useCallback(() => {
-        if (inputFile) downloadInputBookmarkFile(inputFile)
-    }, [inputFile])
+    const handleDownloadInput = useCallback((target) => {
+        const fileToDownload = (target && target.html) ? target : (inputFiles[0] || inputFile)
+        if (fileToDownload) downloadInputBookmarkFile(fileToDownload)
+    }, [inputFiles, inputFile])
 
-    const handleReorganizeInput = useCallback(() => {
-        if (!inputFile) return
+    const handleReorganizeInput = useCallback((target) => {
+        const fileToLoad = (target && target.html) ? target : (inputFiles[0] || inputFile)
+        if (!fileToLoad) return
         try {
-            const links = parseBookmarks(inputFile.html)
+            const links = parseBookmarks(fileToLoad.html)
             const span = calculateDateSpan(links)
+            setUploadedFile({ name: fileToLoad.filename })
             setParsedBookmarks(links)
             if (span) setActiveDateSpan(span)
             setErrorMsg('')
-            addLog(`Re-loaded ${inputFile.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
+            addLog(`Re-loaded ${fileToLoad.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
         } catch (err) {
             console.error(err)
             setErrorMsg('Cached input file could not be parsed.')
         }
-    }, [inputFile, addLog])
+    }, [inputFiles, inputFile, addLog])
 
-    const handleRemoveInput = useCallback(async () => {
+    const handleRemoveInput = useCallback(async (idOrFile) => {
+        const id = typeof idOrFile === 'string' ? idOrFile : (idOrFile?.id || idOrFile?.filename)
+        try {
+            if (id) {
+                const remaining = await removeInputBookmarkFile(id)
+                setInputFiles(Array.isArray(remaining) ? remaining : [])
+            } else {
+                await removeInputBookmarkFile()
+                setInputFiles([])
+            }
+        } catch {
+            setInputFiles([])
+        }
+    }, [])
+
+    const handleClearAllInputs = useCallback(async () => {
         try { await removeInputBookmarkFile() } catch {}
-        setInputFile(null)
+        setInputFiles([])
     }, [])
 
     // Auto-scroll logs
@@ -598,7 +747,6 @@ export default function Organizer() {
     }, [logs])
 
     const downloadOrganized = useCallback(async () => {
-        const { downloadBookmarks } = await import('../services/bookmarks_export')
         const doDownload = (data) => {
             const span = calculateDateSpan(data) || lastOrganized?.stats?.dateSpan || lastOrganized?.dateSpan || activeDateSpan;
             addLog(`Downloading ${data.length.toLocaleString()} bookmarks${span ? ` (Dates ${span})` : ''}...`);
@@ -660,6 +808,10 @@ export default function Organizer() {
     }, [addLog, lastOrganized, activeDateSpan])
 
     const handleCancel = useCallback(() => {
+        if (cancelTimeoutRef.current) {
+            clearTimeout(cancelTimeoutRef.current);
+            cancelTimeoutRef.current = null;
+        }
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'CANCEL_JOB' });
@@ -670,9 +822,29 @@ export default function Organizer() {
         }
         setIsCancelling(true);
         addLog('Cancellation requested — halting operations...');
+
+        // Watchdog: If background worker was terminated, crashed or fails to acknowledge within 1.5s,
+        // forcefully unfreeze the UI back to idle.
+        cancelTimeoutRef.current = setTimeout(() => {
+            setIsCancelling(false);
+            setStatus((currStatus) => {
+                if (currStatus === 'processing') {
+                    setProgress(0);
+                    setBackgroundNotice('');
+                    addLog('Cancellation confirmed.');
+                    return 'idle';
+                }
+                return currStatus;
+            });
+            cancelTimeoutRef.current = null;
+        }, 1500);
     }, [addLog]);
 
     const resetApp = useCallback(() => {
+        if (cancelTimeoutRef.current) {
+            clearTimeout(cancelTimeoutRef.current);
+            cancelTimeoutRef.current = null;
+        }
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'RESET_JOB' });
@@ -766,7 +938,6 @@ export default function Organizer() {
                 }
             }
 
-            const { OrganizerService } = await import('../services/organizer')
             organizerRef.current = new OrganizerService(
                 apiKey,
                 categories,
@@ -878,133 +1049,6 @@ export default function Organizer() {
 
     return (
         <div className="glass-panel main-glass-panel">
-
-            {/* API Key Input */}
-            <div className="section-block">
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                    API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
-                    <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat date sorting' : 'Google AI Studio or OpenRouter'}
-                    </span>
-                </label>
-                <input
-                    type="password"
-                    placeholder="AIza... (Google AI Studio) or sk-or-... (OpenRouter)"
-                    value={apiKey}
-                    onChange={(e) => handleApiKeyChange(e.target.value)}
-                    style={{
-                        width: '100%',
-                        padding: '0.75rem',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--surface-solid)',
-                        color: 'var(--text-primary)',
-                        fontSize: '1rem',
-                        outline: 'none',
-                        marginBottom: '0.4rem',
-                        boxSizing: 'border-box'
-                    }}
-                />
-
-                {/* Minimal Quick Links to Get API Keys */}
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: '0.5rem',
-                    marginBottom: '0.65rem',
-                    padding: '0 0.15rem'
-                }}>
-                    <a
-                        href="https://aistudio.google.com/app/apikey"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            color: 'var(--accent)',
-                            fontSize: '0.74rem',
-                            textDecoration: 'none',
-                            opacity: 0.9,
-                            transition: 'opacity 0.2s ease'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
-                    >
-                        <span>Get Google AI Studio Key (Free)</span>
-                        <ExternalLink size={11} />
-                    </a>
-                    <a
-                        href="https://openrouter.ai/keys"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            color: 'var(--accent)',
-                            fontSize: '0.74rem',
-                            textDecoration: 'none',
-                            opacity: 0.9,
-                            transition: 'opacity 0.2s ease'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
-                    >
-                        <span>Get OpenRouter Key</span>
-                        <ExternalLink size={11} />
-                    </a>
-                </div>
-
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--surface-alt)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                        <Lock size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
-                        <span>Your API key is stored locally in your browser.</span>
-                    </div>
-                </div>
-
-                <div style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                    <p style={{ margin: 0, display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                        <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
-                        <span>
-                            Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
-                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
-                            <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
-                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.
-                        </span>
-                    </p>
-                </div>
-            </div>
-
-            {/* Model Selector */}
-            {status === 'idle' && (!flatDateSort || cleanTitles) && (
-                <div className="card-panel section-block">
-                    <label style={{ display: 'block', marginBottom: '0.75rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                        Select AI Model
-                    </label>
-                    <div className="model-selector-grid">
-                        {models.map((model) => (
-                            <button
-                                key={model.id}
-                                onClick={() => handleModelChange(model.id)}
-                                className={`model-select-btn ${selectedModel === model.id ? 'active' : ''}`}
-                            >
-                                <span className="model-name">{model.name}</span>
-                                {model.badge && (
-                                    <span className="model-badge">
-                                        ({model.badge})
-                                    </span>
-                                )}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="model-desc">
-                        {models.find(m => m.id === selectedModel)?.description || models.find(m => m.id === selectedModel)?.desc || '3.1 Flash Lite: Recommended default — ultra-fast latency and minimal token cost.'}
-                    </div>
-                </div>
-            )}
 
             {/* Sort by Date Added (Flat List) — Conditionally Active Flat Pipeline */}
             {status === 'idle' && (
@@ -1150,6 +1194,133 @@ export default function Organizer() {
                 </div>
             )}
 
+            {/* API Key Input */}
+            <div className="section-block">
+                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
+                    API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
+                    <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
+                        {flatDateSort && !cleanTitles ? 'Optional for flat date sorting' : 'Google AI Studio or OpenRouter'}
+                    </span>
+                </label>
+                <input
+                    type="password"
+                    placeholder="AIza... (Google AI Studio) or sk-or-... (OpenRouter)"
+                    value={apiKey}
+                    onChange={(e) => handleApiKeyChange(e.target.value)}
+                    style={{
+                        width: '100%',
+                        padding: '0.75rem',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface-solid)',
+                        color: 'var(--text-primary)',
+                        fontSize: '1rem',
+                        outline: 'none',
+                        marginBottom: '0.4rem',
+                        boxSizing: 'border-box'
+                    }}
+                />
+
+                {/* Minimal Quick Links to Get API Keys */}
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem',
+                    marginBottom: '0.65rem',
+                    padding: '0 0.15rem'
+                }}>
+                    <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            color: 'var(--accent)',
+                            fontSize: '0.74rem',
+                            textDecoration: 'none',
+                            opacity: 0.9,
+                            transition: 'opacity 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
+                    >
+                        <span>Get Google AI Studio Key (Free)</span>
+                        <ExternalLink size={11} />
+                    </a>
+                    <a
+                        href="https://openrouter.ai/keys"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.3rem',
+                            color: 'var(--accent)',
+                            fontSize: '0.74rem',
+                            textDecoration: 'none',
+                            opacity: 0.9,
+                            transition: 'opacity 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
+                    >
+                        <span>Get OpenRouter Key</span>
+                        <ExternalLink size={11} />
+                    </a>
+                </div>
+
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--surface-alt)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
+                        <Lock size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                        <span>Your API key is stored locally in your browser.</span>
+                    </div>
+                </div>
+
+                <div style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+                    <p style={{ margin: 0, display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                        <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
+                        <span>
+                            Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
+                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
+                            <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
+                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.
+                        </span>
+                    </p>
+                </div>
+            </div>
+
+            {/* Model Selector */}
+            {status === 'idle' && (!flatDateSort || cleanTitles) && (
+                <div className="card-panel section-block">
+                    <label style={{ display: 'block', marginBottom: '0.75rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
+                        Select AI Model
+                    </label>
+                    <div className="model-selector-grid">
+                        {models.map((model) => (
+                            <button
+                                key={model.id}
+                                onClick={() => handleModelChange(model.id)}
+                                className={`model-select-btn ${selectedModel === model.id ? 'active' : ''}`}
+                            >
+                                <span className="model-name">{model.name}</span>
+                                {model.badge && (
+                                    <span className="model-badge">
+                                        ({model.badge})
+                                    </span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="model-desc">
+                        {models.find(m => m.id === selectedModel)?.description || models.find(m => m.id === selectedModel)?.desc || '3.1 Flash Lite: Recommended default — ultra-fast latency and minimal token cost.'}
+                    </div>
+                </div>
+            )}
+
             {/* Subfolder & Sorting Strategy Row (2-col grid on wide, stacked on compact) */}
             {status === 'idle' && !flatDateSort && (
                 <div className="settings-grid-row section-block">
@@ -1208,7 +1379,7 @@ export default function Organizer() {
                             </span>
                         </div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                            Choose how bookmarks are ordered inside each AI-generated category folder:
+                            Choose how bookmarks are ordered inside each {categories.length === 0 ? 'AI-generated category' : 'category'} folder:
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -1285,51 +1456,9 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Toggles Row (2-col grid on wide, stacked on compact) */}
+            {/* Clean Titles Toggle */}
             {status === 'idle' && (
-                <div className="settings-grid-row section-block">
-                    {/* Duplicate Removal Toggle */}
-                    <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                        <div>
-                            <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                                Remove Duplicate URLs
-                            </label>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                                Keep one copy of each URL in the organized result; original bookmarks are unchanged
-                            </div>
-                        </div>
-                        <button
-                            role="switch"
-                            aria-label="Remove duplicate URLs"
-                            aria-checked={removeDuplicates}
-                            onClick={() => handleRemoveDuplicatesToggle(!removeDuplicates)}
-                            style={{
-                                width: '44px',
-                                height: '24px',
-                                borderRadius: '12px',
-                                border: '1px solid var(--border)',
-                                background: removeDuplicates ? 'var(--accent)' : 'var(--surface-solid)',
-                                position: 'relative',
-                                cursor: 'pointer',
-                                padding: 0,
-                                flexShrink: 0,
-                                transition: 'background 0.2s ease'
-                            }}
-                        >
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                left: removeDuplicates ? '22px' : '2px',
-                                width: '18px',
-                                height: '18px',
-                                borderRadius: '50%',
-                                background: removeDuplicates ? 'var(--on-accent)' : 'var(--text-muted)',
-                                transition: 'left 0.2s ease'
-                            }} />
-                        </button>
-                    </div>
-
-                    {/* Clean Titles Toggle */}
+                <div className="section-block">
                     <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -1392,7 +1521,7 @@ export default function Organizer() {
             {/* Category Editor */}
             {status === 'idle' && !flatDateSort && (
                 <div className="glass-panel categories-panel section-block">
-                    {/* Header with Title, Count Badge, and Clear All / Reset Action */}
+                    {/* Header with Title, Count Badge, and Clear All Action */}
                     <div className="categories-header">
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600 }}>
@@ -1404,13 +1533,14 @@ export default function Organizer() {
                                 borderRadius: '12px',
                                 background: 'var(--surface-solid)',
                                 border: '1px solid var(--border)',
-                                color: 'var(--text-muted)'
+                                color: categories.length > 0 ? 'var(--accent)' : 'var(--text-muted)',
+                                fontWeight: categories.length > 0 ? 600 : 400
                             }}>
-                                {categories.length} chosen
+                                {categories.length > 0 ? `${categories.length} hard-coded` : 'Automatic (AI-Generated)'}
                             </span>
                         </div>
                         <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            {categories.length > 0 ? (
+                            {categories.length > 0 && (
                                 <button
                                     type="button"
                                     onClick={handleClearAllCategories}
@@ -1427,32 +1557,10 @@ export default function Organizer() {
                                         cursor: 'pointer',
                                         transition: 'all 0.15s ease'
                                     }}
-                                    title="Clear all active categories"
+                                    title="Clear all categories (switch to automatic AI category generation)"
                                 >
                                     <X size={12} />
                                     <span>Clear All</span>
-                                </button>
-                            ) : (
-                                <button
-                                    type="button"
-                                    onClick={handleResetDefaultCategories}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        padding: '0.25rem 0.6rem',
-                                        fontSize: '0.75rem',
-                                        borderRadius: '6px',
-                                        border: '1px solid var(--border)',
-                                        background: 'var(--surface-solid)',
-                                        color: 'var(--accent)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.15s ease'
-                                    }}
-                                    title="Reset to default categories"
-                                >
-                                    <RefreshCw size={12} />
-                                    <span>Reset Defaults</span>
                                 </button>
                             )}
                         </div>
@@ -1513,18 +1621,32 @@ export default function Organizer() {
                     {/* Active Chosen Categories Bin */}
                     {categories.length === 0 ? (
                         <div style={{
-                            padding: '0.85rem',
-                            textAlign: 'center',
-                            fontSize: '0.8rem',
-                            color: 'var(--text-muted)',
+                            padding: '0.9rem 1rem',
+                            textAlign: 'left',
                             background: 'var(--surface-solid)',
                             borderRadius: '8px',
-                            border: '1px dashed var(--border)'
+                            border: '1px dashed var(--border)',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '0.75rem'
                         }}>
-                            No categories chosen. AI will automatically design a structure from your bookmarks, or you can add from the suggestions below.
+                            <Zap size={18} style={{ color: 'var(--accent)', marginTop: '2px', flexShrink: 0 }} />
+                            <div>
+                                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                                    Automatic Category Generation
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+                                    No categories chosen — Gemini will automatically analyze your bookmarks and generate categories. Or click <strong>+</strong> on any suggested category below to lock in hard-coded folders instead.
+                                </div>
+                            </div>
                         </div>
                     ) : (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <Lock size={12} style={{ color: 'var(--accent)' }} />
+                                <span>Hard-coded categories active. Gemini will organize bookmarks into these folders without running inference on potential categories.</span>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                             {categories.map((cat, idx) => (
                                 <div key={idx} style={{
                                     display: 'flex',
@@ -1546,6 +1668,7 @@ export default function Organizer() {
                                     />
                                 </div>
                             ))}
+                            </div>
                         </div>
                     )}
 
@@ -1615,6 +1738,7 @@ export default function Organizer() {
                         ref={fileInputRef}
                         onChange={handleFileSelect}
                         accept=".html,.htm"
+                        multiple
                         style={{ display: 'none' }}
                     />
 
@@ -1648,7 +1772,7 @@ export default function Organizer() {
                         <div>
                             <Upload size={24} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
                             <div style={{ color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                                Drag & drop bookmarks.html here
+                                Drag & drop bookmarks.html here (up to 3 files)
                             </div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                                 or click to browse
@@ -1661,23 +1785,83 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Cached dropped-in input file (spec §12): pristine original kept for re-organize/download */}
-            {status === 'idle' && inputFile && (
+            {/* Cached dropped-in input files (spec §12): pristine originals kept for re-organize/download (up to 3) */}
+            {status === 'idle' && inputFiles.length > 0 && (
                 <div className="input-bookmarks-card section-block">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>Input Bookmarks</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                {inputFile.filename} · {(inputFile.count || 0).toLocaleString()} bookmarks
-                                {inputFile.dateSpan ? ` · Dates ${formatDateSpan(inputFile.dateSpan)}` : ''}
-                                {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: inputFiles.length > 1 ? '0.6rem' : '0.25rem' }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)' }}>
+                            Input Bookmarks {inputFiles.length > 1 ? `(${inputFiles.length}/3)` : ''}
+                        </div>
+                        {inputFiles.length > 1 && (
+                            <button
+                                type="button"
+                                onClick={handleClearAllInputs}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'var(--error)',
+                                    fontSize: '0.75rem',
+                                    cursor: 'pointer',
+                                    padding: '0.1rem 0.3rem',
+                                    textDecoration: 'underline'
+                                }}
+                            >
+                                Clear All
+                            </button>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                        {inputFiles.map((file, idx) => (
+                            <div
+                                key={file.id || `${file.filename}-${file.savedAt}-${idx}`}
+                                style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    flexWrap: 'wrap',
+                                    paddingTop: idx > 0 ? '0.6rem' : 0,
+                                    borderTop: idx > 0 ? '1px solid var(--border)' : 'none'
+                                }}
+                            >
+                                <div style={{ minWidth: 0, flex: '1 1 200px' }}>
+                                    <div style={{ fontSize: '0.82rem', fontWeight: '500', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                                        {file.filename}
+                                    </div>
+                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        {(file.count || 0).toLocaleString()} bookmarks
+                                        {file.dateSpan ? ` · Dates ${formatDateSpan(file.dateSpan)}` : ''}
+                                        {' '}· saved {new Date(file.savedAt).toLocaleString()}
+                                    </div>
+                                </div>
+                                <div className="input-file-actions">
+                                    <button
+                                        className="input-file-action input-file-action-secondary"
+                                        type="button"
+                                        onClick={() => handleDownloadInput(file)}
+                                        title={`Download ${file.filename}`}
+                                    >
+                                        Download
+                                    </button>
+                                    <button
+                                        className="input-file-action input-file-action-primary"
+                                        type="button"
+                                        onClick={() => handleReorganizeInput(file)}
+                                        title={`Organize from ${file.filename}`}
+                                    >
+                                        Re-organize
+                                    </button>
+                                    <button
+                                        className="input-file-action input-file-action-danger"
+                                        type="button"
+                                        onClick={() => handleRemoveInput(file.id || file.filename)}
+                                        title={`Remove ${file.filename}`}
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                        <div className="input-file-actions">
-                            <button className="input-file-action input-file-action-secondary" type="button" onClick={handleDownloadInput} title="Download the original file">Download</button>
-                            <button className="input-file-action input-file-action-primary" type="button" onClick={handleReorganizeInput} title="Organize from the cached original again">Re-organize</button>
-                            <button className="input-file-action input-file-action-danger" type="button" onClick={handleRemoveInput} title="Forget the cached input">Remove</button>
-                        </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -1796,16 +1980,164 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Controls */}
-            <div className="action-button-container section-block" style={{ display: 'flex', justifyContent: 'center' }}>
-                {status === 'complete' ? (
+            {/* Controls (shown when idle or processing) */}
+            {status !== 'complete' && (
+                <div className="action-button-container section-block" style={{ display: 'flex', justifyContent: 'center' }}>
+                    {status === 'processing' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
+                        {activeDateSpan && (
+                            <div style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.4rem',
+                                padding: '0.35rem 0.8rem',
+                                borderRadius: '20px',
+                                background: 'var(--surface-alt)',
+                                border: '1px solid var(--border)',
+                                fontSize: '0.8rem',
+                                color: 'var(--text-secondary)'
+                            }}>
+                                <Calendar size={13} style={{ color: 'var(--accent)' }} />
+                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <button
+                                className="btn-primary btn-in-progress"
+                                disabled
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    cursor: 'wait'
+                                }}
+                            >
+                                <Loader2 size={18} className="spin-icon" />
+                                <span>In Progress... {progress}%</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                disabled={isCancelling}
+                                title="Cancel the organization process"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem',
+                                    padding: '0.8rem 1.25rem',
+                                    borderRadius: '10px',
+                                    border: '1px solid var(--error)',
+                                    background: 'var(--error-soft)',
+                                    color: 'var(--error)',
+                                    fontWeight: '600',
+                                    fontSize: '0.95rem',
+                                    cursor: isCancelling ? 'not-allowed' : 'pointer',
+                                    opacity: isCancelling ? 0.6 : 1,
+                                    transition: 'all 0.2s ease'
+                                }}
+                            >
+                                <Square size={16} fill="currentColor" />
+                                {isCancelling ? 'Cancelling...' : 'Cancel'}
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <button
+                        className="btn-primary"
+                        onClick={startProcess}
+                        disabled={!canStart}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            opacity: !canStart ? 0.5 : 1,
+                            cursor: !canStart ? 'not-allowed' : 'pointer'
+                        }}
+                    >
+                        {flatDateSort ? (
+                            <>
+                                <Clock size={20} />
+                                {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
+                            </>
+                        ) : (
+                            <>
+                                {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}
+                                {uploadedFile ? 'Organize File & Download' : 'Organize My Bookmarks'}
+                            </>
+                        )}
+                    </button>
+                )}
+                </div>
+            )}
+
+            {/* Background Ongoing Progress / Transient Retry Notification */}
+            {status === 'processing' && backgroundNotice && (
+                <div style={{
+                    background: 'var(--success-soft)',
+                    border: '1px solid var(--success)',
+                    color: 'var(--success)',
+                    padding: '0.85rem 1rem',
+                    borderRadius: '8px',
+                    marginBottom: '1.5rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    fontSize: '0.85rem'
+                }}>
+                    <RefreshCw size={18} className="spin-icon" style={{ flexShrink: 0 }} />
+                    <div>
+                        <strong>Background Run Active:</strong> {backgroundNotice}
+                    </div>
+                </div>
+            )}
+
+            {/* Error Message */}
+            {errorMsg && (
+                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <AlertCircle size={20} />
+                    {errorMsg}
+                </div>
+            )}
+
+            {/* Logs / Terminal */}
+            <div
+                className="glass-panel terminal-panel"
+                ref={logContainerRef}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--terminal-muted)', paddingBottom: '0.5rem', color: 'var(--text-muted)' }}>
+                    <Terminal size={16} />
+                    <span>System Output</span>
+                </div>
+
+                {logs.length === 0 && <span style={{ color: 'var(--terminal-muted)' }}>Waiting for start...</span>}
+
+                {logs.map((log, index) => (
+                    <div key={index} style={{ marginBottom: '0.25rem', display: 'flex', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
+                            {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
+                        </span>
+                        <span style={{ overflowWrap: 'anywhere' }}>
+                            {typeof log === 'object' ? log.message : log}
+                        </span>
+                    </div>
+                ))}
+                {status === 'processing' && (
+                    <div className="animate-pulse">_</div>
+                )}
+            </div>
+
+            {/* Final Downloadable Organized Files & Results (shown after the terminal) */}
+            {status === 'complete' && (
+                <div className="glass-panel completed-results-panel section-block" style={{ textAlign: 'center', width: '100%', marginTop: '1.25rem', padding: '1.5rem' }}>
                     <div style={{ textAlign: 'center', width: '100%' }}>
                         <div style={{ marginBottom: '0.75rem', color: 'var(--success)', fontSize: '1.2rem', fontWeight: 'bold' }}>
                             {uploadedFile
                                 ? "File Processed! Check your downloads."
-                                : (flatDateSort
-                                    ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
-                                    : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`)}
+                                : ((lastOrganized?.stats?.folderTitle || lastOrganized?.folderTitle)
+                                    ? `All Done! Check your "${lastOrganized?.stats?.folderTitle || lastOrganized?.folderTitle}" folder in Other Bookmarks.`
+                                    : (flatDateSort
+                                        ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
+                                        : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`))}
                         </div>
                         {!uploadedFile && (
                             <div style={{ marginBottom: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -1980,147 +2312,8 @@ export default function Organizer() {
                             {flatDateSort ? 'Sort Again' : 'Organize Again'}
                         </div>
                     </div>
-                ) : status === 'processing' ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
-                        {activeDateSpan && (
-                            <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                padding: '0.35rem 0.8rem',
-                                borderRadius: '20px',
-                                background: 'var(--surface-alt)',
-                                border: '1px solid var(--border)',
-                                fontSize: '0.8rem',
-                                color: 'var(--text-secondary)'
-                            }}>
-                                <Calendar size={13} style={{ color: 'var(--accent)' }} />
-                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
-                            </div>
-                        )}
-                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-                            <button
-                                className="btn-primary btn-in-progress"
-                                disabled
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    cursor: 'wait'
-                                }}
-                            >
-                                <Loader2 size={18} className="spin-icon" />
-                                <span>In Progress... {progress}%</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleCancel}
-                                disabled={isCancelling}
-                                title="Cancel the organization process"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.4rem',
-                                    padding: '0.8rem 1.25rem',
-                                    borderRadius: '10px',
-                                    border: '1px solid var(--error)',
-                                    background: 'var(--error-soft)',
-                                    color: 'var(--error)',
-                                    fontWeight: '600',
-                                    fontSize: '0.95rem',
-                                    cursor: isCancelling ? 'not-allowed' : 'pointer',
-                                    opacity: isCancelling ? 0.6 : 1,
-                                    transition: 'all 0.2s ease'
-                                }}
-                            >
-                                <Square size={16} fill="currentColor" />
-                                {isCancelling ? 'Cancelling...' : 'Cancel'}
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <button
-                        className="btn-primary"
-                        onClick={startProcess}
-                        disabled={!canStart}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            opacity: !canStart ? 0.5 : 1,
-                            cursor: !canStart ? 'not-allowed' : 'pointer'
-                        }}
-                    >
-                        {flatDateSort ? (
-                            <>
-                                <Clock size={20} />
-                                {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
-                            </>
-                        ) : (
-                            <>
-                                {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}
-                                {uploadedFile ? 'Organize File & Download' : 'Organize My Bookmarks'}
-                            </>
-                        )}
-                    </button>
-                )}
-            </div>
-
-            {/* Background Ongoing Progress / Transient Retry Notification */}
-            {status === 'processing' && backgroundNotice && (
-                <div style={{
-                    background: 'var(--success-soft)',
-                    border: '1px solid var(--success)',
-                    color: 'var(--success)',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '8px',
-                    marginBottom: '1.5rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.6rem',
-                    fontSize: '0.85rem'
-                }}>
-                    <RefreshCw size={18} className="spin-icon" style={{ flexShrink: 0 }} />
-                    <div>
-                        <strong>Background Run Active:</strong> {backgroundNotice}
-                    </div>
                 </div>
             )}
-
-            {/* Error Message */}
-            {errorMsg && (
-                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <AlertCircle size={20} />
-                    {errorMsg}
-                </div>
-            )}
-
-            {/* Logs / Terminal */}
-            <div
-                className="glass-panel terminal-panel"
-                ref={logContainerRef}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--terminal-muted)', paddingBottom: '0.5rem', color: 'var(--text-muted)' }}>
-                    <Terminal size={16} />
-                    <span>System Output</span>
-                </div>
-
-                {logs.length === 0 && <span style={{ color: 'var(--terminal-muted)' }}>Waiting for start...</span>}
-
-                {logs.map((log, index) => (
-                    <div key={index} style={{ marginBottom: '0.25rem', display: 'flex', gap: '0.5rem' }}>
-                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
-                            {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
-                        </span>
-                        <span style={{ overflowWrap: 'anywhere' }}>
-                            {typeof log === 'object' ? log.message : log}
-                        </span>
-                    </div>
-                ))}
-                {status === 'processing' && (
-                    <div className="animate-pulse">_</div>
-                )}
-            </div>
 
         </div>
     )

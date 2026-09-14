@@ -113,11 +113,17 @@ export class BackgroundJobRunner {
             cleanTitles,
             flatDateSort,
             dateSortOrder,
-            schemaSortOrder
+            schemaSortOrder,
+            autoImport = true
         } = config;
 
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;
+        if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+            try {
+                chrome.storage.session.remove(['organizedData']);
+            } catch {}
+        }
         this.currentJob = {
             id: jobId,
             status: 'processing',
@@ -133,6 +139,10 @@ export class BackgroundJobRunner {
         this.startKeepAlive();
         this.persistSessionSnapshot();
         this.notify('status', this.getState());
+
+        if (parsedBookmarks) {
+            this.addLog(`Auto-Import File to Other Bookmarks: ${autoImport ? 'On (top of list)' : 'Off'}`);
+        }
 
         if (flatDateSort) {
             const orderLabel = dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First';
@@ -178,8 +188,10 @@ export class BackgroundJobRunner {
                     if (data.message?.includes('Pausing') || data.message?.includes('Retrying') || data.message?.includes('background')) {
                         this.currentJob.backgroundNotice = data.message;
                     }
-                    if (data.message?.includes('cancelled')) {
+                    if (data.message?.includes('cancelled') || data.message?.includes('Cancelled')) {
                         this.currentJob.status = 'idle';
+                        this.currentJob.progress = 0;
+                        this.currentJob.backgroundNotice = '';
                     }
                 } else if (data.status === 'error') {
                     this.currentJob.errorMsg = data.message;
@@ -205,7 +217,8 @@ export class BackgroundJobRunner {
             cleanTitles,
             flatDateSort,
             dateSortOrder,
-            schemaSortOrder
+            schemaSortOrder,
+            autoImport
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
 
@@ -214,6 +227,8 @@ export class BackgroundJobRunner {
 
             if (this.organizer.isCancelled || !results) {
                 this.currentJob.status = 'idle';
+                this.currentJob.progress = 0;
+                this.currentJob.backgroundNotice = '';
                 this.stopKeepAlive();
                 this.persistSessionSnapshot();
                 this.notify('status', this.getState());
@@ -251,7 +266,7 @@ export class BackgroundJobRunner {
                         } catch { /* ignore session set errors */ }
                     }
                     if (chrome.storage.local) {
-                        chrome.storage.local.set({ organizedMeta: meta });
+                        chrome.storage.local.set({ organizedMeta: meta, organizedData: results });
                     }
                 }
 
@@ -264,6 +279,16 @@ export class BackgroundJobRunner {
 
             return results;
         } catch (err) {
+            if (this.organizer?.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
+                this.currentJob.status = 'idle';
+                this.currentJob.progress = 0;
+                this.currentJob.backgroundNotice = '';
+                this.stopKeepAlive();
+                this.persistSessionSnapshot();
+                this.notify('status', this.getState());
+                this.notify('cancelled', {});
+                return null;
+            }
             console.error('[JobRunner] Execution error:', err);
             this.currentJob.status = 'error';
             this.currentJob.errorMsg = err?.message || 'Failed to complete organization.';
@@ -281,7 +306,8 @@ export class BackgroundJobRunner {
         }
         this.currentJob.status = 'idle';
         this.currentJob.progress = 0;
-        this.addLog('Cancellation requested — halting operations...');
+        this.currentJob.backgroundNotice = '';
+        this.addLog('Cancellation requested — process cancelled.');
         this.stopKeepAlive();
         this.persistSessionSnapshot();
         this.notify('status', this.getState());

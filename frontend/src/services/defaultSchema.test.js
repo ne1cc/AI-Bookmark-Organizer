@@ -24,10 +24,12 @@ describe('curatedSubcategories', () => {
 })
 
 describe('buildFallbackSchema', () => {
-    it('gives every known category real subfolders instead of an empty array', () => {
-        const { schema, curatedCount } = buildFallbackSchema(DEFAULT_CATEGORIES)
+    const sampleCategories = SUGGESTED_ADDABLE_CATEGORIES.slice(0, 8)
 
-        expect(curatedCount).toBe(DEFAULT_CATEGORIES.length)
+    it('gives every known category real subfolders instead of an empty array', () => {
+        const { schema, curatedCount } = buildFallbackSchema(sampleCategories)
+
+        expect(curatedCount).toBe(sampleCategories.length)
         expect(find(schema, 'Finance & Crypto').sub_categories.length).toBeGreaterThanOrEqual(5)
 
         // The exact failure mode this fallback exists to prevent.
@@ -37,17 +39,17 @@ describe('buildFallbackSchema', () => {
     it('prefers subcategories salvaged from the failed AI response', () => {
         const partial = { categories: [{ name: 'Finance & Crypto', sub_categories: ['Options Flow', 'Macro Research'] }] }
 
-        const { schema, curatedCount, carriedCount } = buildFallbackSchema(DEFAULT_CATEGORIES, partial)
+        const { schema, curatedCount, carriedCount } = buildFallbackSchema(sampleCategories, partial)
 
         expect(carriedCount).toBe(1)
-        expect(curatedCount).toBe(DEFAULT_CATEGORIES.length - 1)
+        expect(curatedCount).toBe(sampleCategories.length - 1)
         expect(find(schema, 'Finance & Crypto').sub_categories).toEqual(['Options Flow', 'Macro Research'])
     })
 
     it('ignores salvaged categories that are themselves empty', () => {
         const partial = { categories: [{ name: 'Finance & Crypto', sub_categories: [] }] }
 
-        const { schema, carriedCount } = buildFallbackSchema(DEFAULT_CATEGORIES, partial)
+        const { schema, carriedCount } = buildFallbackSchema(sampleCategories, partial)
 
         expect(carriedCount).toBe(0)
         expect(find(schema, 'Finance & Crypto').sub_categories).toEqual(curatedSubcategories('Finance & Crypto'))

@@ -112,7 +112,8 @@ describe('BackgroundJobRunner', () => {
         );
         expect(globalThis.chrome.storage.local.set).toHaveBeenCalledWith(
             expect.objectContaining({
-                organizedMeta: expect.objectContaining({ count: 2 })
+                organizedMeta: expect.objectContaining({ count: 2 }),
+                organizedData: results
             })
         );
     });

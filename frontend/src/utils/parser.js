@@ -34,10 +34,11 @@ export const parseBookmarks = (htmlContent) => {
         // Basic validation. Deduplication is controlled later by the organizer
         // so the user's toggle works consistently for file and browser modes.
         if (url && !url.startsWith("place:")) {
+            const addDate = a.getAttribute("add_date") || a.getAttribute("ADD_DATE") || a.getAttribute("last_modified") || a.getAttribute("LAST_MODIFIED");
             const entry = {
                 title: a.textContent.trim() || "Untitled",
                 url: url,
-                add_date: a.getAttribute("add_date")
+                add_date: addDate
             };
             const icon = a.getAttribute("icon");
             if (icon) entry.icon = icon;

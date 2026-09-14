@@ -37,9 +37,14 @@ vi.mock('../services/organizer', () => {
 
 vi.mock('../services/input_bookmarks', () => ({
     INPUT_MAX_BYTES: 25 * 1024 * 1024,
-    saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, size: input.html.length, savedAt: 1757000000000 } })),
+    MAX_CACHED_INPUTS: 3,
+    saveInputBookmarkFile: vi.fn(async (input) => {
+        const entry = { ...input, size: input.html.length, savedAt: 1757000000000, id: 'test-id' };
+        return { saved: true, entry, entries: [entry] };
+    }),
     getInputBookmarkFile: vi.fn(async () => null),
-    removeInputBookmarkFile: vi.fn(async () => {}),
+    getInputBookmarkFiles: vi.fn(async () => []),
+    removeInputBookmarkFile: vi.fn(async () => []),
     downloadInputBookmarkFile: vi.fn()
 }))
 
@@ -160,6 +165,22 @@ describe('Organizer Component UI Tests', () => {
         await waitFor(() => {
             expect(screen.getByText(/Organization complete!/i)).toBeDefined()
         })
+    })
+
+    it('renders sort by date added as the first section above API key and AI model selection', () => {
+        const { container } = render(<Organizer />)
+
+        const flatDateCard = container.querySelector('.flat-date-card')
+        const apiKeyInput = screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        const apiKeySection = apiKeyInput.closest('.section-block')
+        const modelSelector = screen.getByText('Select AI Model').closest('.section-block')
+
+        expect(flatDateCard).toBeTruthy()
+        expect(apiKeySection).toBeTruthy()
+        expect(modelSelector).toBeTruthy()
+
+        expect(flatDateCard.compareDocumentPosition(apiKeySection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+        expect(apiKeySection.compareDocumentPosition(modelSelector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
     it('allows toggling flat date sort (0 AI tokens) which makes API key optional', () => {
@@ -471,7 +492,7 @@ describe('In-process and completion date range display', () => {
             }
         }
 
-        render(<Organizer />)
+        const { container } = render(<Organizer />)
 
         const startButton = screen.getByRole('button', { name: /Organize My Bookmarks/i })
         act(() => {
@@ -483,6 +504,11 @@ describe('In-process and completion date range display', () => {
             expect(screen.getByText(/A backup file was also saved to your downloads/i)).toBeDefined()
             expect(screen.getByText(/Date range:/i)).toBeDefined()
             expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i }).getAttribute('title')).toContain('Dates 1/1/2021')
+            const terminal = container.querySelector('.terminal-panel')
+            const completionCard = container.querySelector('.completed-results-panel')
+            expect(terminal).not.toBeNull()
+            expect(completionCard).not.toBeNull()
+            expect(terminal.compareDocumentPosition(completionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
         })
     })
 
@@ -629,6 +655,116 @@ describe('In-process and completion date range display', () => {
 
             expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
         })
+
+        it('recovers immediately to idle when STATUS_UPDATE reports idle', async () => {
+            let messageListener = null
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn((cb) => { messageListener = cb }) },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+
+            global.chrome = {
+                runtime: {
+                    connect: vi.fn(() => mockPort)
+                },
+                storage: {
+                    local: {
+                        get: vi.fn((keys, cb) => cb({})),
+                        set: vi.fn(),
+                        remove: vi.fn()
+                    },
+                    session: {
+                        get: vi.fn((keys, cb) => {
+                            if (keys.includes('activeJobState')) {
+                                cb({
+                                    activeJobState: {
+                                        status: 'processing',
+                                        progress: 45,
+                                        logs: [{ message: 'Working...', timestamp: Date.now() }]
+                                    }
+                                })
+                            } else {
+                                cb({})
+                            }
+                        }),
+                        set: vi.fn()
+                    }
+                }
+            }
+
+            render(<Organizer />)
+
+            await waitFor(() => {
+                expect(screen.getByText(/45%/i)).toBeDefined()
+            })
+
+            // Background sends status: idle
+            act(() => {
+                messageListener({
+                    type: 'STATUS_UPDATE',
+                    payload: { status: 'idle' }
+                })
+            })
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+                expect(screen.queryByText(/45%/i)).toBeNull()
+            })
+        })
+
+        it('cleans up session storage and sends CANCEL_JOB when window close is requested while cancelling', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-close')
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const removeSpy = vi.fn()
+
+            global.chrome = {
+                runtime: {
+                    connect: vi.fn(() => mockPort)
+                },
+                storage: {
+                    local: {
+                        get: vi.fn((keys, cb) => cb({})),
+                        set: vi.fn(),
+                        remove: vi.fn()
+                    },
+                    session: {
+                        get: vi.fn((keys, cb) => cb({})),
+                        set: vi.fn(),
+                        remove: removeSpy
+                    }
+                }
+            }
+
+            render(<Organizer />)
+
+            // Start job then click cancel
+            act(() => {
+                fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+            })
+
+            await waitFor(() => {
+                expect(screen.getByRole('button', { name: /Cancel/i })).toBeDefined()
+            })
+
+            act(() => {
+                fireEvent.click(screen.getByRole('button', { name: /Cancel/i }))
+            })
+
+            // Now extension-close-requested event is fired (e.g. from header X button)
+            act(() => {
+                window.dispatchEvent(new CustomEvent('extension-close-requested'))
+            })
+
+            expect(removeSpy).toHaveBeenCalledWith(['activeJobState'])
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
+        })
     })
 })
 
@@ -698,5 +834,32 @@ describe('Input Bookmarks card', () => {
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
             expect.objectContaining({ html: '<x/>', filename: 'b.html' })
         )
+    })
+
+    it('renders multiple cached inputs (up to 3) and allows individual actions', async () => {
+        chromeWith({})
+        const multiEntries = [
+            { id: '1', filename: 'file1.html', html: '<1/>', size: 4, savedAt: 1757000000000, count: 120, dateSpan: null },
+            { id: '2', filename: 'file2.html', html: '<2/>', size: 4, savedAt: 1757000001000, count: 340, dateSpan: null },
+            { id: '3', filename: 'file3.html', html: '<3/>', size: 4, savedAt: 1757000002000, count: 560, dateSpan: null }
+        ]
+        inputService.getInputBookmarkFiles.mockResolvedValue(multiEntries)
+        const { container, getAllByText } = render(<Organizer />)
+        await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('Input Bookmarks (3/3)')
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file1.html')
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file2.html')
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('file3.html')
+        const downloadBtns = getAllByText('Download')
+        expect(downloadBtns).toHaveLength(3)
+        fireEvent.click(downloadBtns[1]) // click download on file2
+        expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
+            expect.objectContaining({ filename: 'file2.html' })
+        )
+
+        const removeBtns = getAllByText('Remove')
+        expect(removeBtns).toHaveLength(3)
+        fireEvent.click(removeBtns[0]) // click remove on file1
+        expect(inputService.removeInputBookmarkFile).toHaveBeenCalledWith('1')
     })
 })

@@ -7,9 +7,9 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 - One-Click Organizing: Automatically sorts hundreds or thousands of messy bookmarks into clear, logical folders.
 - No Duplicate Folders: Plans the full folder layout first before sorting, so you never get redundant folders like "Tech Articles" and "Tech News".
 - Choose Folder Detail: Pick how many subfolders you want:
-  - Compact (0 to 5 subfolders per topic) for simple, broad categories.
-  - Balanced (5 to 10 subfolders) for everyday collections (recommended).
-  - Detailed (10+ subfolders) for deep, topic-specific organization.
+  - Compact (1 to 3 subfolders per category) for simple, broad organization (recommended).
+  - Balanced (3 to 6 subfolders) for everyday collections.
+  - Detailed (6 to 10 subfolders) for large, topic-rich collections.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
 - Model Options: Choose the Gemini model that fits your needs:
   - Gemini 3.1 Flash Lite: Fast, low cost, and great for most collections (default).
@@ -20,7 +20,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 - Clean Up Titles: Optionally shortens long, cluttered webpage titles and strips tracking text.
 - Keeps Original Dates: Moves bookmarks directly so your original "date added" timestamps are never lost or overwritten.
 - Automatic Safety Backup: Automatically saves an HTML backup of your bookmarks to your Downloads folder before making changes.
-- Remove Duplicates: Detects repeated links and removes duplicates, keeping the oldest copy.
+- Delete Duplicate URLs (Free): In browser mode, scans the existing bookmark tree and, after confirmation, deletes newer copies of exact duplicate URLs while keeping the oldest copy. No API key or uploaded file is required.
 - View Bookmark Date Ranges: Shows the full date range of your collection (e.g. 2021 to 2026) in the status banner and completion screens.
 - Two Ways to Organize:
   - Browser Mode: Organizes your active browser bookmarks into a new dated folder (e.g. "AI Organized Bookmarks-YYYY-MM-DD") under Other Bookmarks.
@@ -37,6 +37,8 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 3. Design: The AI reviews your collection and creates a clean folder layout.
 4. Sort: Links are placed into their best matching folders.
 5. Finish: In browser mode, bookmarks are placed into a new dated folder in your browser. In file mode, your organized bookmark file is ready to download.
+
+To only clean duplicate URLs, leave the file upload area empty and use **Delete duplicates**. The cleanup is local to the browser and does not use AI tokens.
 
 ## Installation
 
@@ -110,6 +112,7 @@ Your data stays private:
 - File Card Management: Uploaded bookmark files are saved in the extension with one-click buttons to download the original, re-organize, or delete.
 - Full Firefox Support: Native support for Firefox Sidebar with automated build and packaging scripts.
 - Keep Oldest Copy on Deduplication: When duplicate removal is enabled, the oldest saved link is preserved.
+- Free Browser Cleanup: Delete duplicate URLs directly from the existing browser bookmark tree without an API key or uploaded file.
 - Date Range Visibility: Clear date spans are displayed across all screens so you can see the age range of your bookmarks.
 - Clear Completion Details: Shows the exact folder name created in your browser and notes the backup download.
 

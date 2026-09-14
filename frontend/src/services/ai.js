@@ -173,6 +173,8 @@ function summarizeApiError(response, errorText) {
 
 // Determine if an error is retryable (transient) vs permanent
 export function isRetryableError(error, statusCode) {
+    if (error?.isCancelled) return false;
+
     // Explicitly flagged (e.g. malformed/truncated model output): the request
     // succeeded but the response was unusable — a fresh attempt may differ.
     if (error?.retryable) return true;
@@ -203,7 +205,7 @@ export function isRetryableError(error, statusCode) {
 
 // Check if an error was caused by a network drop, timeout, or unreachable host
 export function isNetworkError(error) {
-    if (!error) return false;
+    if (!error || error?.isCancelled) return false;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
     if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
 
@@ -226,7 +228,7 @@ export function isNetworkError(error) {
 
 // Check if an error was caused by rate limits / quota exhaustion
 export function isRateLimitError(error) {
-    if (!error) return false;
+    if (!error || error?.isCancelled) return false;
     const statusCode = error.statusCode;
     if (statusCode === 429) return true;
     const msg = (error.message || '').toLowerCase();
@@ -326,19 +328,55 @@ const REQUEST_TIMEOUT_MS = 30000;
 async function fetchWithTimeout(url, options = {}, isCancelled = null) {
     const controller = new AbortController();
     let cancelTimer = null;
+    let removeCancelListener = null;
+
+    const checkCancelled = () => {
+        if (!isCancelled) return false;
+        if (typeof isCancelled === 'function') return Boolean(isCancelled());
+        if (isCancelled?.aborted) return true;
+        if (isCancelled?.signal?.aborted) return true;
+        return Boolean(isCancelled);
+    };
+
+    const abortWithCancel = () => {
+        const cancelErr = new Error('Operation cancelled.');
+        cancelErr.isCancelled = true;
+        try {
+            controller.abort(cancelErr);
+        } catch {
+            controller.abort();
+        }
+    };
+
+    if (checkCancelled()) {
+        abortWithCancel();
+        const err = new Error('Operation cancelled.');
+        err.isCancelled = true;
+        throw err;
+    }
 
     const timer = setTimeout(() => {
         controller.abort(new Error("request timeout"));
     }, REQUEST_TIMEOUT_MS);
 
+    const signal = isCancelled instanceof AbortSignal ? isCancelled : isCancelled?.signal;
+    if (signal) {
+        if (signal.aborted) {
+            abortWithCancel();
+        } else {
+            signal.addEventListener('abort', abortWithCancel, { once: true });
+            removeCancelListener = () => signal.removeEventListener('abort', abortWithCancel);
+        }
+    } else if (typeof isCancelled?.onCancel === 'function') {
+        removeCancelListener = isCancelled.onCancel(abortWithCancel);
+    }
+
     if (typeof isCancelled === 'function') {
         cancelTimer = setInterval(() => {
             if (isCancelled()) {
-                const cancelErr = new Error('Operation cancelled.');
-                cancelErr.isCancelled = true;
-                controller.abort(cancelErr);
+                abortWithCancel();
             }
-        }, 150);
+        }, 10);
     }
 
     try {
@@ -365,9 +403,17 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
         }
 
         return bodyJson;
+    } catch (err) {
+        if (checkCancelled() || err?.isCancelled || (controller.signal.aborted && checkCancelled())) {
+            const cancelErr = new Error('Operation cancelled.');
+            cancelErr.isCancelled = true;
+            throw cancelErr;
+        }
+        throw err;
     } finally {
         clearTimeout(timer);
         if (cancelTimer) clearInterval(cancelTimer);
+        if (removeCancelListener) removeCancelListener();
     }
 }
 
@@ -412,13 +458,16 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
     return parseModelResponse(data, { salvageTruncated });
 }
 
-// Generic retry wrapper with exponential backoff, rate-limit cooldowns, jitter, Retry-After header support, and cancellation
+// Generic retry wrapper with exponential backoff, rate-limit cooldowns, jitter, Retry-After header support, and instantaneous cancellation
 export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCancelled = null, onRetry = null) {
     let attempt = 1;
 
     const checkCancelled = () => {
         if (!isCancelled) return false;
-        return typeof isCancelled === 'function' ? isCancelled() : Boolean(isCancelled);
+        if (typeof isCancelled === 'function') return Boolean(isCancelled());
+        if (isCancelled?.aborted) return true;
+        if (isCancelled?.signal?.aborted) return true;
+        return Boolean(isCancelled);
     };
 
     while (true) {
@@ -431,8 +480,10 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
         try {
             return await fn();
         } catch (error) {
-            if (error?.isCancelled) {
-                throw error;
+            if (error?.isCancelled || checkCancelled()) {
+                const cancelErr = new Error('Operation cancelled.');
+                cancelErr.isCancelled = true;
+                throw cancelErr;
             }
 
             // Extract status code if available
@@ -469,18 +520,61 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
                 }
             }
 
-            let elapsed = 0;
-            const stepMs = 200;
-            while (elapsed < delayMs) {
-                if (checkCancelled()) {
+            if (checkCancelled()) {
+                const err = new Error('Operation cancelled.');
+                err.isCancelled = true;
+                throw err;
+            }
+
+            // Cancellable sleep: aborts instantly on signal or cancellation callback, and polls every 10ms as fallback
+            await new Promise((resolve, reject) => {
+                let timer = null;
+                let checkTimer = null;
+                let removeListener = null;
+
+                const cleanup = () => {
+                    if (timer) clearTimeout(timer);
+                    if (checkTimer) clearInterval(checkTimer);
+                    if (removeListener) removeListener();
+                };
+
+                const abortSleep = () => {
+                    cleanup();
                     const err = new Error('Operation cancelled.');
                     err.isCancelled = true;
-                    throw err;
+                    reject(err);
+                };
+
+                if (checkCancelled()) {
+                    abortSleep();
+                    return;
                 }
-                const sleepTime = Math.min(stepMs, delayMs - elapsed);
-                await new Promise(resolve => setTimeout(resolve, sleepTime));
-                elapsed += sleepTime;
-            }
+
+                timer = setTimeout(() => {
+                    cleanup();
+                    resolve();
+                }, delayMs);
+
+                const signal = isCancelled instanceof AbortSignal ? isCancelled : isCancelled?.signal;
+                if (signal) {
+                    if (signal.aborted) {
+                        abortSleep();
+                        return;
+                    }
+                    signal.addEventListener('abort', abortSleep, { once: true });
+                    removeListener = () => signal.removeEventListener('abort', abortSleep);
+                } else if (typeof isCancelled?.onCancel === 'function') {
+                    removeListener = isCancelled.onCancel(abortSleep);
+                }
+
+                if (typeof isCancelled === 'function') {
+                    checkTimer = setInterval(() => {
+                        if (checkCancelled()) {
+                            abortSleep();
+                        }
+                    }, 10);
+                }
+            });
 
             if (checkCancelled()) {
                 const err = new Error('Operation cancelled.');
@@ -518,13 +612,17 @@ function sampleForSchema(bookmarks, limit = SCHEMA_SAMPLE_LIMIT) {
 // but usable schema would cost a whole extra round-trip), and `max` the ceiling
 // the reconciliation pass enforces after classification.
 export const SUBFOLDER_BOUNDS = {
+    '1-3': { ask: [1, 3], min: 1, max: 3 },
+    '3-6': { ask: [3, 6], min: 2, max: 6 },
+    '6-10': { ask: [6, 10], min: 3, max: 10 },
+    // Legacy values remain readable for existing callers and stored jobs.
     '0-5': { ask: [3, 5], min: 2, max: 5 },
     '5-10': { ask: [5, 10], min: 3, max: 10 },
     '10+': { ask: [10, 14], min: 5, max: 16 }
 };
 
 export function subfolderBounds(subfolderTarget) {
-    return SUBFOLDER_BOUNDS[subfolderTarget] || SUBFOLDER_BOUNDS['5-10'];
+    return SUBFOLDER_BOUNDS[subfolderTarget] || SUBFOLDER_BOUNDS['1-3'];
 }
 
 // Categories that exist to absorb outliers. They are allowed to carry no
@@ -547,7 +645,7 @@ const TINY_COLLECTION_THRESHOLD = 40;
 // Validate a model-generated schema and return a cleaned copy alongside any
 // reasons it is unusable. Normalizing here means callers (and the classifier)
 // never see filler subcategories or case-duplicate folder names.
-export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount = Infinity, expectedCategories = null } = {}) {
+export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount = Infinity, expectedCategories = null } = {}) {
     const issues = [];
     const rawCategories = Array.isArray(schema?.categories) ? schema.categories : null;
 
@@ -625,21 +723,34 @@ export function validateSchema(schema, { subfolderTarget = '5-10', bookmarkCount
     return { ok: issues.length === 0, issues, schema: { categories } };
 }
 
-export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "5-10", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
+export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
     const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
 
     const subfolderRules = {
+        '1-3': 'Keep it very compact — create only 1-3 subfolders for the clearest, genuinely distinct groups. Combine related items into broader folders rather than splitting too finely.',
+        '3-6': 'Create a focused structure of 3-6 subfolders for the clearest groups. Combine closely related topics and avoid one-off folders.',
+        '6-10': 'Create a detailed but scannable structure of 6-10 subfolders. Use specific topics only when each folder has a meaningful group of bookmarks.',
         '0-5': 'Keep it minimal — only create subfolders for truly distinct groups, and err on the side of combining related items into broader folders.',
         '5-10': 'About 7-8 is the sweet spot: enough to be genuinely useful, few enough to scan at a glance. Scale to the content — a content-heavy category can carry more, a sparse one fewer.',
         '10+': 'Be generous with specific subfolders for different topics, so each bookmark has a precise home.'
     };
 
-    const subfolderGuidance = subfolderRules[subfolderTarget] || subfolderRules['5-10'];
+    const subfolderGuidance = subfolderRules[subfolderTarget] || subfolderRules['1-3'];
 
     const schemaSource = sampleForSchema(bookmarks, sampleLimit);
     const sampleNote = schemaSource.length < bookmarks.length
         ? `\n    NOTE: The list below is a representative sample of ${schemaSource.length} bookmarks drawn evenly from the full collection. Design the structure for the ENTIRE collection of ${bookmarks.length}.\n`
         : '';
+
+    const hasHardCodedCategories = Array.isArray(baseCategories) && baseCategories.length > 0;
+
+    const categoryGuidance = hasHardCodedCategories
+        ? `HARD-CODED TOP-LEVEL CATEGORIES (STRICT - DO NOT INVENT NEW CATEGORIES):\n    The user has specified hard-coded categories. You MUST use ONLY these exact top-level categories:\n    ${JSON.stringify(baseCategories)}\n    Do NOT invent, add, merge, remove, or rename top-level categories. The top-level categories are fixed and hard-coded.\n    Your task is ONLY to design ${askMin}-${askMax} distinct, relevant subcategories inside EACH of these hard-coded categories based on the bookmarks provided.`
+        : `TOP-LEVEL CATEGORIES (AUTOMATIC AI GENERATION):\n    Analyze the bookmarks and design 8-10 broad, clearly distinct top-level categories. Every bookmark must have a natural home.`;
+
+    const rule4 = hasHardCodedCategories
+        ? `4. Top-level categories: STRICTLY use the provided hard-coded categories. Do NOT invent new top-level categories.`
+        : `4. Top-level categories: aim for 8-10 broad, clearly distinct categories. Every bookmark must have a natural home.`;
 
     const buildPrompt = (issues) => {
         const correction = issues?.length
@@ -662,11 +773,10 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
-    PREFERRED TOP-LEVEL CATEGORIES (a starting point — adapt to the actual bookmarks):
-    ${JSON.stringify(baseCategories)}
+    ${categoryGuidance}
 
     STRUCTURE RULES
-    4. Top-level categories: aim for 8-10 broad, clearly distinct categories. Every bookmark must have a natural home.
+    ${rule4}
     5. NON-REDUNDANCY IS CRITICAL. Sub-categories within a category MUST be mutually exclusive. Never create near-duplicates or synonyms as separate folders. Collapse "Tech News" + "Tech Articles" + "Tech Blogs" + "Tech Reports" into ONE folder. Collapse "Career Advice" + "Career Pathways" + "Career Roles" into ONE folder. Collapse "JS" + "JavaScript" into ONE. If two folder names could plausibly hold the same bookmark, merge them.
     6. Group by the user's INTENT, not surface keywords. Ask "why did they save this?" Links saved for the same purpose belong together even when their titles look different.
 
@@ -824,4 +934,3 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
         });
     }, 5, 1500, isCancelled, onRetry);
 }
-

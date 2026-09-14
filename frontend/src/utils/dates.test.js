@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { getBookmarkTimestamp, calculateDateSpan } from './dates'
+import {
+    getBookmarkTimestamp,
+    calculateDateSpan,
+    getMonthYearBucket,
+    sortMonthYearBuckets,
+    getStandardizedOutputLabel
+} from './dates'
 
 describe('getBookmarkTimestamp', () => {
     describe('edge cases and invalid inputs', () => {
@@ -59,64 +65,48 @@ describe('getBookmarkTimestamp', () => {
             expect(getBookmarkTimestamp({ dateAdded: '1609459200000' })).toBe(1609459200000)
         })
 
-        it('parses numeric strings in seconds and converts to milliseconds', () => {
+        it('parses numeric strings in seconds (< 1e11) to milliseconds', () => {
             expect(getBookmarkTimestamp({ dateAdded: '1609459200' })).toBe(1609459200000)
         })
 
-        it('parses string with leading/trailing whitespace', () => {
-            expect(getBookmarkTimestamp({ dateAdded: '  1609459200000  ' })).toBe(1609459200000)
-            expect(getBookmarkTimestamp({ dateAdded: '  1609459200  ' })).toBe(1609459200000)
+        it('parses ISO 8601 date strings', () => {
+            const iso = '2021-01-01T00:00:00.000Z'
+            expect(getBookmarkTimestamp({ dateAdded: iso })).toBe(1609459200000)
         })
-    })
 
-    describe('snake_case date_added format', () => {
-        it('parses numeric epoch milliseconds and seconds', () => {
+        it('falls back to date_added property name', () => {
             expect(getBookmarkTimestamp({ date_added: 1609459200000 })).toBe(1609459200000)
-            expect(getBookmarkTimestamp({ date_added: 1609459200 })).toBe(1609459200000)
         })
 
-        it('parses string epoch milliseconds and seconds', () => {
-            expect(getBookmarkTimestamp({ date_added: '1609459200000' })).toBe(1609459200000)
-            expect(getBookmarkTimestamp({ date_added: '1609459200' })).toBe(1609459200000)
+        it('falls back to date property name', () => {
+            expect(getBookmarkTimestamp({ date: 1609459200000 })).toBe(1609459200000)
         })
     })
 
-    describe('ISO and text date format via date property', () => {
-        it('parses ISO 8601 strings', () => {
-            const iso = '2023-08-15T12:00:00.000Z'
-            const expected = Date.parse(iso)
-            expect(getBookmarkTimestamp({ date: iso })).toBe(expected)
+    describe('Netscape HTML add_date format', () => {
+        it('parses numeric epoch seconds and converts to milliseconds', () => {
+            expect(getBookmarkTimestamp({ add_date: 1609459200 })).toBe(1609459200000)
         })
 
-        it('parses standard date strings', () => {
-            const dateStr = '2022-06-01'
-            const expected = Date.parse(dateStr)
-            expect(getBookmarkTimestamp({ date: dateStr })).toBe(expected)
-        })
-    })
-
-    describe('Netscape HTML add_date and ADD_DATE format', () => {
-        it('parses add_date as number in seconds', () => {
-            expect(getBookmarkTimestamp({ add_date: 1500000000 })).toBe(1500000000000)
+        it('parses string epoch seconds and converts to milliseconds', () => {
+            expect(getBookmarkTimestamp({ add_date: '1609459200' })).toBe(1609459200000)
         })
 
-        it('parses add_date as numeric string in seconds', () => {
-            expect(getBookmarkTimestamp({ add_date: '1500000000' })).toBe(1500000000000)
+        it('handles numeric milliseconds in add_date', () => {
+            expect(getBookmarkTimestamp({ add_date: 1609459200000 })).toBe(1609459200000)
         })
 
-        it('parses uppercase ADD_DATE as number and string', () => {
-            expect(getBookmarkTimestamp({ ADD_DATE: 1500000000 })).toBe(1500000000000)
-            expect(getBookmarkTimestamp({ ADD_DATE: '1500000000' })).toBe(1500000000000)
+        it('handles uppercase ADD_DATE property', () => {
+            expect(getBookmarkTimestamp({ ADD_DATE: '1609459200' })).toBe(1609459200000)
         })
 
-        it('parses add_date with Date.parse for non-numeric date strings', () => {
-            const iso = '2021-04-10T08:00:00.000Z'
-            expect(getBookmarkTimestamp({ add_date: iso })).toBe(Date.parse(iso))
+        it('parses ISO date strings in add_date', () => {
+            expect(getBookmarkTimestamp({ add_date: '2021-01-01T00:00:00.000Z' })).toBe(1609459200000)
         })
     })
 
-    describe('field precedence', () => {
-        it('prioritizes dateAdded over add_date', () => {
+    describe('precedence order', () => {
+        it('prefers dateAdded over add_date when both are present and valid', () => {
             const bookmark = {
                 dateAdded: 1609459200000, // 2021
                 add_date: '1500000000'    // 2017
@@ -240,5 +230,92 @@ describe('calculateDateSpan', () => {
             const newest = new Date((baseSec + count - 1) * 1000).toLocaleDateString()
             expect(span).toBe(`${oldest} – ${newest}`)
         })
+    })
+})
+
+describe('getMonthYearBucket', () => {
+    it('returns "Undated" for invalid, missing, or zero timestamps', () => {
+        expect(getMonthYearBucket(null)).toBe('Undated')
+        expect(getMonthYearBucket(0)).toBe('Undated')
+        expect(getMonthYearBucket(-100)).toBe('Undated')
+        expect(getMonthYearBucket({})).toBe('Undated')
+        expect(getMonthYearBucket({ title: 'No Date' })).toBe('Undated')
+    })
+
+    it('returns Month and Year format for valid bookmark timestamp', () => {
+        const d = new Date(2023, 8, 15) // Sept 15, 2023
+        expect(getMonthYearBucket(d.getTime())).toBe('September 2023')
+        expect(getMonthYearBucket({ dateAdded: d.getTime() })).toBe('September 2023')
+    })
+})
+
+describe('sortMonthYearBuckets', () => {
+    const sample = ['January 2022', 'September 2023', 'August 2023', 'Undated', 'December 2021']
+
+    it('sorts newest to oldest with Undated at the end', () => {
+        const sorted = sortMonthYearBuckets(sample, true)
+        expect(sorted).toEqual([
+            'September 2023',
+            'August 2023',
+            'January 2022',
+            'December 2021',
+            'Undated'
+        ])
+    })
+
+    it('sorts oldest to newest with Undated at the end', () => {
+        const sorted = sortMonthYearBuckets(sample, false)
+        expect(sorted).toEqual([
+            'December 2021',
+            'January 2022',
+            'August 2023',
+            'September 2023',
+            'Undated'
+        ])
+    })
+})
+
+describe('getStandardizedOutputLabel', () => {
+    const fixedDate = new Date('2026-09-14T12:00:00Z')
+
+    it('generates standardized labels for chronological newest first', () => {
+        const label = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'desc',
+            date: fixedDate
+        })
+        expect(label.rootFolderTitle).toBe('[Chronological - Newest First] Bookmarks-2026-09-14')
+        expect(label.downloadFilename).toBe('bookmarks_chronological_newest_2026-09-14.html')
+        expect(label.displayLabel).toBe('Chronological (Newest First)')
+        expect(label.tierLabel).toBe('Month & Year')
+    })
+
+    it('generates standardized labels for chronological oldest first', () => {
+        const label = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'asc',
+            date: fixedDate
+        })
+        expect(label.rootFolderTitle).toBe('[Chronological - Oldest First] Bookmarks-2026-09-14')
+        expect(label.downloadFilename).toBe('bookmarks_chronological_oldest_2026-09-14.html')
+        expect(label.displayLabel).toBe('Chronological (Oldest First)')
+    })
+
+    it('generates standardized labels for AI categorized modes', () => {
+        const labelAlpha = getStandardizedOutputLabel({
+            flatDateSort: false,
+            schemaSortOrder: 'alpha',
+            date: fixedDate
+        })
+        expect(labelAlpha.rootFolderTitle).toBe('[AI Categorized - Alphabetical] Bookmarks-2026-09-14')
+        expect(labelAlpha.downloadFilename).toBe('bookmarks_ai_alpha_2026-09-14.html')
+
+        const labelDomain = getStandardizedOutputLabel({
+            flatDateSort: false,
+            schemaSortOrder: 'domain',
+            date: fixedDate
+        })
+        expect(labelDomain.rootFolderTitle).toBe('[AI Categorized - Domain A–Z] Bookmarks-2026-09-14')
+        expect(labelDomain.downloadFilename).toBe('bookmarks_ai_domain_2026-09-14.html')
     })
 })

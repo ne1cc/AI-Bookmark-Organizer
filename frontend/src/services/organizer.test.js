@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { removeDuplicateUrls, checkUrlReachable, filterReachableBookmarks, OrganizerService, getBookmarkTimestamp, getBookmarkDomain, calculateDateSpan, buildUrlIndex, dedupeFromIndex } from './organizer'
+import { removeDuplicateUrls, checkUrlReachable, filterReachableBookmarks, OrganizerService, getBookmarkTimestamp, getBookmarkDomain, calculateDateSpan, buildUrlIndex, dedupeFromIndex, removeBrowserDuplicates } from './organizer'
 import * as ai from './ai'
 import { classifyBatch, generateSchema, withRetry, geminiModelId, isNetworkError, isRateLimitError, isRetryableError } from './ai'
 import * as bookmarksExport from './bookmarks_export'
@@ -118,6 +118,98 @@ describe('buildUrlIndex and dedupeFromIndex', () => {
         const { survivors, doomed } = dedupeFromIndex(idless, buildUrlIndex(idless))
         expect(survivors).toHaveLength(1)
         expect(doomed).toHaveLength(0)
+    })
+})
+
+describe('removeBrowserDuplicates', () => {
+    afterEach(() => {
+        delete global.chrome
+        vi.restoreAllMocks()
+    })
+
+    it('returns zeroes when getBookmarks returns empty or null', async () => {
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue([])
+        const result = await removeBrowserDuplicates()
+        expect(result).toEqual({ totalScanned: 0, duplicatesRemoved: 0, failedCount: 0 })
+    })
+
+    it('returns zeroes removed when all links are unique', async () => {
+        const fakeTree = [
+            {
+                id: '0',
+                children: [
+                    { id: '1', title: 'Site 1', url: 'https://site1.com', dateAdded: 100 },
+                    { id: '2', title: 'Site 2', url: 'https://site2.com', dateAdded: 200 }
+                ]
+            }
+        ]
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(fakeTree)
+        const removeSpy = vi.spyOn(bookmarksService, 'removeBookmark').mockResolvedValue()
+        const result = await removeBrowserDuplicates()
+        expect(result).toEqual({ totalScanned: 2, duplicatesRemoved: 0, failedCount: 0 })
+        expect(removeSpy).not.toHaveBeenCalled()
+    })
+
+    it('identifies duplicates, saves preWriteBackup snapshot, and deletes doomed nodes', async () => {
+        const fakeTree = [
+            {
+                id: '0',
+                children: [
+                    { id: '1', title: 'Alpha Old', url: 'https://alpha.com', dateAdded: 1000 },
+                    { id: '2', title: 'Alpha Dup 1', url: 'https://alpha.com', dateAdded: 2000 },
+                    { id: '3', title: 'Alpha Dup 2', url: 'https://alpha.com', dateAdded: 3000 },
+                    { id: '4', title: 'Beta Unique', url: 'https://beta.com', dateAdded: 1500 }
+                ]
+            }
+        ]
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(fakeTree)
+        const removeSpy = vi.spyOn(bookmarksService, 'removeBookmark').mockResolvedValue()
+
+        const localSetSpy = vi.fn((data, cb) => cb && cb())
+        global.chrome = {
+            storage: {
+                local: {
+                    set: localSetSpy
+                }
+            }
+        }
+
+        const result = await removeBrowserDuplicates()
+        expect(result).toEqual({ totalScanned: 4, duplicatesRemoved: 2, failedCount: 0 })
+
+        // Pre-write backup was stored
+        expect(localSetSpy).toHaveBeenCalledTimes(1)
+        const savedPayload = localSetSpy.mock.calls[0][0]
+        expect(savedPayload.preWriteBackup).toBeDefined()
+        expect(savedPayload.preWriteBackup.count).toBe(4)
+
+        // Oldest node (id: '1') survives, doomed nodes ('2' and '3') are removed
+        expect(removeSpy).toHaveBeenCalledTimes(2)
+        expect(removeSpy).toHaveBeenCalledWith('2')
+        expect(removeSpy).toHaveBeenCalledWith('3')
+        expect(removeSpy).not.toHaveBeenCalledWith('1')
+        expect(removeSpy).not.toHaveBeenCalledWith('4')
+    })
+
+    it('tracks failed deletions and returns net duplicates removed', async () => {
+        const fakeTree = [
+            {
+                id: '0',
+                children: [
+                    { id: '1', title: 'Site', url: 'https://site.com', dateAdded: 1000 },
+                    { id: '2', title: 'Site Dup 1', url: 'https://site.com', dateAdded: 2000 },
+                    { id: '3', title: 'Site Dup 2', url: 'https://site.com', dateAdded: 3000 }
+                ]
+            }
+        ]
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(fakeTree)
+        vi.spyOn(bookmarksService, 'removeBookmark').mockImplementation(async (id) => {
+            if (id === '3') throw new Error('Permission denied')
+            return
+        })
+
+        const result = await removeBrowserDuplicates({ snapshot: false })
+        expect(result).toEqual({ totalScanned: 3, duplicatesRemoved: 1, failedCount: 1 })
     })
 })
 
@@ -553,6 +645,38 @@ describe('withRetry resilient retry and cancellation', () => {
         await vi.advanceTimersByTimeAsync(200)
         await rejection
 
+        expect(fn).toHaveBeenCalledTimes(1)
+    })
+
+    it('aborts immediately and tags isCancelled when cancelled during execution or retry', async () => {
+        let callCount = 0
+        const fn = vi.fn().mockImplementation(async () => {
+            callCount++
+            const err = new Error('Some retryable error')
+            err.statusCode = 500
+            throw err
+        })
+
+        const isCancelled = () => true
+
+        const promise = withRetry(fn, 5, 1500, isCancelled)
+        await expect(promise).rejects.toMatchObject({
+            message: 'Operation cancelled.',
+            isCancelled: true
+        })
+        expect(callCount).toBe(0)
+    })
+
+    it('immediately throws cancellation error if error caught has isCancelled true', async () => {
+        const cancelErr = new Error('Operation cancelled.')
+        cancelErr.isCancelled = true
+        const fn = vi.fn().mockRejectedValue(cancelErr)
+
+        const promise = withRetry(fn, 5, 1500, null)
+        await expect(promise).rejects.toMatchObject({
+            message: 'Operation cancelled.',
+            isCancelled: true
+        })
         expect(fn).toHaveBeenCalledTimes(1)
     })
 })
@@ -1343,6 +1467,95 @@ describe('OrganizerService flat chronological date sorting', () => {
         expect(results.map(b => b.url).sort()).toEqual(['https://dupe.com', 'https://unique.com'])
     })
 
+    it('organizes browser bookmarks chronologically with labeled root folder and MECE Month & Year subfolders', async () => {
+        const store = new FakeBookmarkStore();
+        store.addFolder('2', 'other-root', 'Other Bookmarks');
+        // November 2023
+        store.addUrl('1', '101', 'https://nov2023.com', 'Nov 2023 Link', 1700000000000);
+        // July 2017
+        store.addUrl('1', '102', 'https://jul2017.com', 'Jul 2017 Link', 1500000000000);
+        // Undated
+        store.addUrl('1', '103', 'https://undated.com', 'Undated Link', 0);
+
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree());
+
+        const createdFolders = [];
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const id = `folder-${title}`;
+            createdFolders.push({ parentId, title, id });
+            store.addFolder(parentId, id, title);
+            return { id, title };
+        });
+        wireStore(store);
+
+        const service = new OrganizerService(
+            'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
+            '5-10', true, false, false,
+            true,  // flatDateSort
+            'desc' // Newest First
+        );
+        service.snapshotProvider = async () => {};
+
+        const results = await service.start(null);
+
+        expect(results).toHaveLength(3);
+        expect(service.stats.folderTitle).toMatch(/^\[Chronological - Newest First\] Bookmarks-\d{4}-\d{2}-\d{2}$/);
+        expect(results.filename).toMatch(/^bookmarks_chronological_newest_\d{4}-\d{2}-\d{2}\.html$/);
+
+        // Subfolders created inside root folder: November 2023, July 2017, Undated
+        const rootFolder = createdFolders.find(f => f.title === service.stats.folderTitle);
+        expect(rootFolder).toBeDefined();
+
+        const subfolderTitles = createdFolders.filter(f => f.parentId === rootFolder.id).map(f => f.title);
+        expect(subfolderTitles).toEqual(['November 2023', 'July 2017', 'Undated']);
+
+        // Verify bookmark node parents in FakeBookmarkStore
+        expect(store.node('101').parentId).toBe('folder-November 2023');
+        expect(store.node('102').parentId).toBe('folder-July 2017');
+        expect(store.node('103').parentId).toBe('folder-Undated');
+    });
+
+    it('organizes in AI categorized mode with standardized root folder title and filename', async () => {
+        const store = new FakeBookmarkStore();
+        store.addFolder('2', 'other-root', 'Other Bookmarks');
+        store.addUrl('1', '201', 'https://tech.com', 'Tech Link', 1700000000000);
+
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree());
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [{ name: 'Tech', sub_categories: [] }]
+        });
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { id: '201', title: 'Tech Link', url: 'https://tech.com', category: 'Tech', sub_category: 'General' }
+        ]);
+
+        const createdFolders = [];
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const id = `folder-${title}`;
+            createdFolders.push({ parentId, title, id });
+            store.addFolder(parentId, id, title);
+            return { id, title };
+        });
+        wireStore(store);
+
+        const service = new OrganizerService(
+            'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
+            '5-10', true, false, false,
+            false, // AI Categorized mode
+            'desc'
+        );
+        service.schemaSortOrder = 'date-desc';
+        service.snapshotProvider = async () => {};
+
+        const results = await service.start(null);
+
+        expect(results).toHaveLength(1);
+        expect(service.stats.folderTitle).toMatch(/^\[AI Categorized - Newest First\] Bookmarks-\d{4}-\d{2}-\d{2}$/);
+        expect(results.filename).toMatch(/^bookmarks_ai_newest_\d{4}-\d{2}-\d{2}\.html$/);
+
+        const rootFolder = createdFolders.find(f => f.title === service.stats.folderTitle);
+        expect(rootFolder).toBeDefined();
+    });
+
     it('post-write cancellation reports a partially reorganized state', async () => {
         const store = new FakeBookmarkStore()
         store.addFolder('2', 'chron-root-123', 'Chronological Bookmarks')
@@ -1371,18 +1584,17 @@ describe('OrganizerService flat chronological date sorting', () => {
 })
 
 describe('Category Presets and Suggestions', () => {
-    it('orders Work & Career first and Tech & Development last in default categories', () => {
-        expect(DEFAULT_CATEGORIES[0]).toBe('Work & Career')
-        expect(DEFAULT_CATEGORIES[DEFAULT_CATEGORIES.length - 1]).toBe('Tech & Development')
+    it('defaults to empty categories array for automatic AI categorization', () => {
+        expect(DEFAULT_CATEGORIES).toEqual([])
     })
 
-    it('provides exactly 10 unique common suggested addable categories with no overlap in defaults', () => {
-        expect(SUGGESTED_ADDABLE_CATEGORIES).toHaveLength(10)
+    it('provides 18 unique suggested addable categories with Work & Career first', () => {
+        expect(SUGGESTED_ADDABLE_CATEGORIES).toHaveLength(18)
         const uniqueSet = new Set(SUGGESTED_ADDABLE_CATEGORIES)
-        expect(uniqueSet.size).toBe(10)
-        for (const sug of SUGGESTED_ADDABLE_CATEGORIES) {
-            expect(DEFAULT_CATEGORIES).not.toContain(sug)
-        }
+        expect(uniqueSet.size).toBe(18)
+        expect(SUGGESTED_ADDABLE_CATEGORIES[0]).toBe('Work & Career')
+        expect(SUGGESTED_ADDABLE_CATEGORIES[7]).toBe('Tech & Development')
+        expect(SUGGESTED_ADDABLE_CATEGORIES[17]).toBe('Legal, Docs & Admin')
     })
 })
 
