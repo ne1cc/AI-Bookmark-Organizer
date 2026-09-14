@@ -74,6 +74,17 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('lets browser-mode organization explain the missing API key instead of disabling the action', () => {
+        render(<Organizer />)
+
+        const organizeButton = screen.getByRole('button', { name: 'Organize My Bookmarks' })
+        expect(organizeButton.disabled).toBe(false)
+
+        fireEvent.click(organizeButton)
+
+        expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 

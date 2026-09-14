@@ -874,7 +874,11 @@ export default function Organizer() {
         }
     }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan]);
 
-    const canStart = (flatDateSort && !cleanTitles) || Boolean(apiKey);
+    // Keep the primary action available before a key is entered so browser
+    // mode can explain the remaining requirement instead of looking broken.
+    // The uploaded bookmark file remains optional and browser bookmarks are
+    // the default source.
+    const canStart = status === 'idle' && !isCancelling;
 
     return (
         <div className="glass-panel main-glass-panel">
