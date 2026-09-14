@@ -4,6 +4,11 @@ __pycache__/
 *.DS_Store
 node_modules/
 
+# Workflow and Superpowers artifacts
+.github/workflows/
+.superpowers/
+docs/superpowers/
+
 # Generated Data
 all_bookmarks.html
 organized_bookmarks_clean.html
