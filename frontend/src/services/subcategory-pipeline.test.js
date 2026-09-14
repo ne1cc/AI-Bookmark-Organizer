@@ -166,9 +166,13 @@ describe('subcategory pipeline regression', () => {
             ['https://example.com/kyoto', ['Personal', 'Travel']],
             ['https://example.com/lisbon', ['Personal', 'Travel']]
         ])
+        let schemaPrompt
         const fetchMock = vi.fn(async (_url, options) => {
             const prompt = promptOf(options)
-            if (isSchemaCall(prompt)) return jsonResponse(inferredSchema)
+            if (isSchemaCall(prompt)) {
+                schemaPrompt = prompt
+                return jsonResponse(inferredSchema)
+            }
 
             const classified = batchFromPrompt(prompt).map(({ i, url }) => {
                 const [category, sub_category] = assignments.get(url)
@@ -184,6 +188,10 @@ describe('subcategory pipeline regression', () => {
             subfolderTarget: '1-3'
         })
 
+        expect(schemaPrompt).toBeDefined()
+        for (const { url } of inferredBookmarks) expect(schemaPrompt).toContain(url)
+        expect(results).toHaveLength(inferredBookmarks.length)
+        expect(new Set(results.map(item => item.url))).toEqual(new Set(inferredBookmarks.map(item => item.url)))
         expect(new Set(results.map(item => item.category))).toEqual(
             new Set(['Engineering', 'Research', 'Personal'])
         )
