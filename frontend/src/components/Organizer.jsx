@@ -1032,7 +1032,7 @@ export default function Organizer() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        aria-label="Toggle Sort by Date Added"
+                                        aria-label="Toggle Sort by Date Added (Flat List)"
                                         onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                                         style={{
                                             display: 'block',

@@ -182,7 +182,7 @@ describe('Organizer Component UI Tests', () => {
         const flatToggle = screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
-        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by Date Added' })
+        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by Date Added (Flat List)' })
         act(() => {
             fireEvent.click(titleButton)
         })
