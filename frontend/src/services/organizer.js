@@ -279,7 +279,7 @@ export class OrganizerService {
     }
 
     isInferenceMode() {
-        return this.inferCategories && (!Array.isArray(this.categories) || this.categories.length === 0);
+        return Boolean(this.inferCategories);
     }
 
     async moveItems(pairs) {
@@ -806,7 +806,12 @@ export class OrganizerService {
                 this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate categories automatically...' });
             }
             if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
-                this.onProgress({ status: 'info', message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.` });
+                this.onProgress({
+                    status: 'info',
+                    message: inferenceMode
+                        ? `Large collection: analyzing all ${activeLinks.length.toLocaleString()} bookmarks to infer the folder structure. All bookmarks will then be classified.`
+                        : `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
+                });
             }
 
             let schema;

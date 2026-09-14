@@ -89,6 +89,7 @@ describe('BackgroundJobRunner', () => {
         const config = {
             apiKey: 'AIzaSyFakeKey',
             categories: ['Tech'],
+            inferCategories: false,
             selectedModel: 'google/gemini-3.8-flash',
             subfolderTarget: '5-10',
             sortAlphabetically: true,
@@ -164,6 +165,53 @@ describe('BackgroundJobRunner', () => {
             true
         );
         expect(runner.getState().logs.map(log => log.message)).toContain('Category Source: AI inferred from bookmarks');
+    });
+
+    it('keeps inferred taxonomy in memory without nesting it in Chrome storage payloads', async () => {
+        const originalImplementation = OrganizerService.getMockImplementation();
+        const generatedResults = [{
+            title: 'Example',
+            url: 'https://example.com',
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail'
+        }];
+        const generatedStats = {
+            categoriesCount: 1,
+            categoryBreakdown: { 'Generated Topic': 1 }
+        };
+
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.start = vi.fn(async () => {
+                onProgress({ status: 'info', message: '  • Generated Topic (Generated Detail)' });
+                return generatedResults;
+            });
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = generatedStats;
+        });
+
+        try {
+            await runner.startJob({
+                apiKey: 'AIzaSyFakeKey',
+                categories: ['Dormant Manual Category'],
+                inferCategories: true,
+                flatDateSort: false
+            });
+
+            expect(runner.getResults()).toEqual(generatedResults);
+            expect(runner.getState().stats.categoryBreakdown).toEqual({ 'Generated Topic': 1 });
+            expect(runner.getState().logs.some(log => log.message.includes('Generated Detail'))).toBe(true);
+
+            const persistedPayloads = [
+                ...globalThis.chrome.storage.local.set.mock.calls,
+                ...globalThis.chrome.storage.session.set.mock.calls
+            ].map(([payload]) => payload);
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic');
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail');
+        } finally {
+            OrganizerService.mockImplementation(originalImplementation);
+        }
     });
 
     it('keeps service worker alive during job and stops keep-alive on completion', async () => {

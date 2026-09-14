@@ -825,6 +825,7 @@ export default function Organizer() {
         }
         setIsCancelling(false);
         cancelRequestedRef.current = false;
+        let reportedErrorMessage = '';
 
         try {
             setStatus('processing');
@@ -977,6 +978,7 @@ export default function Organizer() {
                             setIsCancelling(false);
                         }
                     } else if (data.status === 'error') {
+                        reportedErrorMessage = data.message || '';
                         setErrorMsg(data.message);
                         setBackgroundNotice('');
                         setStatus('error');
@@ -1029,7 +1031,8 @@ export default function Organizer() {
                     setActiveDateSpan(finalSpan);
                 }
                 setLastOrganized(meta);
-                if (typeof chrome !== 'undefined' && chrome.storage) {
+                const shouldPersistRun = flatDateSort || !inferCategories;
+                if (shouldPersistRun && typeof chrome !== 'undefined' && chrome.storage) {
                     // Save bookmark tree into memory-based session storage (RAM) so local LevelDB remains tiny (<5KB)
                     if (chrome.storage.session) {
                         try {
@@ -1048,7 +1051,7 @@ export default function Organizer() {
 
         } catch (err) {
             console.error(err);
-            setErrorMsg("Failed to start process.");
+            setErrorMsg(reportedErrorMessage || err?.message || "Failed to start process.");
             setStatus('error');
         } finally {
             setIsCancelling(false);

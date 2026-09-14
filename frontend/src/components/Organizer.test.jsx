@@ -109,9 +109,18 @@ describe('Organizer Component UI Tests', () => {
     it('does not persist categories generated for an inferred run', async () => {
         localStorage.setItem('apiKey', 'sk-or-test-inferred-run')
         OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.stats = {
+                categoriesCount: 1,
+                categoryBreakdown: { 'Generated Topic': 1 }
+            }
             this.start = vi.fn(async () => {
                 act(() => onProgress({ status: 'done', message: 'Organization complete!' }))
-                return [{ title: 'Item 1', url: 'https://example.com', category: 'Generated Topic' }]
+                return [{
+                    title: 'Item 1',
+                    url: 'https://example.com',
+                    category: 'Generated Topic',
+                    sub_category: 'Generated Detail'
+                }]
             })
             this.cancel = vi.fn()
             this.isCancelled = false
@@ -123,6 +132,31 @@ describe('Organizer Component UI Tests', () => {
         await waitFor(() => expect(screen.getByText(/Organization complete!/i)).toBeDefined())
         expect(localStorage.getItem('categories')).toBeNull()
         expect(global.chrome.storage.local.set.mock.calls.some(([entry]) => Object.hasOwn(entry, 'categories'))).toBe(false)
+        const persistedPayloads = [
+            ...global.chrome.storage.local.set.mock.calls,
+            ...global.chrome.storage.session.set.mock.calls
+        ].map(([payload]) => payload)
+        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
+        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+    })
+
+    it('preserves an actionable inference error from the in-panel runner', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-inference-error')
+        const actionableMessage = 'Could not infer categories from your bookmarks: the AI returned only Other. Try again with a different model.'
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.start = vi.fn(async () => {
+                act(() => onProgress({ status: 'error', message: actionableMessage }))
+                throw new Error('the AI returned only Other')
+            })
+            this.cancel = vi.fn()
+            this.isCancelled = false
+        })
+
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        await waitFor(() => expect(screen.getByText(actionableMessage)).toBeDefined())
+        expect(screen.queryByText('Failed to start process.')).toBeNull()
     })
 
     it('requires a manual category before manual AI organization starts', () => {

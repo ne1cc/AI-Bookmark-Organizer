@@ -65,6 +65,14 @@ const wireStore = (store) => {
     vi.spyOn(bookmarksService, 'getBookmarkChildren').mockImplementation((pid) => store.childrenOf(pid));
 };
 
+// Most organizer tests exercise the pre-existing manual path. Make that mode
+// explicit now that the production constructor defaults new callers to inference.
+const createOrganizerService = (...args) => {
+    const constructorArgs = [...args];
+    if (constructorArgs[11] === undefined) constructorArgs[11] = false;
+    return new OrganizerService(...constructorArgs);
+};
+
 describe('FakeBookmarkStore', () => {
     it('FakeBookmarkStore move splices children and preserves dateAdded', async () => {
         const store = new FakeBookmarkStore()
@@ -267,7 +275,7 @@ describe('filterReachableBookmarks', () => {
 
 describe('OrganizerService adaptive batch sizes', () => {
     it('uses larger batch sizes up to 50 for faster processing with Flash models', () => {
-        const service = new OrganizerService('test-key', [], () => {}, 'google/gemini-3.8-flash')
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.8-flash')
 
         expect(service.calculateAdaptiveBatchSize(30)).toBe(30)
         expect(service.calculateAdaptiveBatchSize(150)).toBe(45)
@@ -397,12 +405,12 @@ describe('OrganizerService cleanTitles integration', () => {
     })
 
     it('defaults cleanTitles to false when omitted', () => {
-        const service = new OrganizerService('test-key', [], () => {})
+        const service = createOrganizerService('test-key', [], () => {})
         expect(service.cleanTitles).toBe(false)
     })
 
     it('stores cleanTitles as true when passed in constructor', () => {
-        const service = new OrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, true)
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, true)
         expect(service.cleanTitles).toBe(true)
     })
 
@@ -417,7 +425,7 @@ describe('OrganizerService cleanTitles integration', () => {
             { title: 'Original Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
         ])
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {})
+        const service = createOrganizerService('test-key', ['Tech'], () => {})
 
         const bookmarks = [{ title: 'Original Tech', url: 'https://example.com' }]
         await service.start(bookmarks)
@@ -444,7 +452,7 @@ describe('OrganizerService cleanTitles integration', () => {
             { title: 'Clean Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
         ])
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -484,7 +492,7 @@ describe('OrganizerService cleanTitles integration', () => {
                 { title: 'Clean Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
             ])
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -873,7 +881,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
     })
 
     it('defaults model to google/gemini-3.1-flash-lite in constructor', () => {
-        const service = new OrganizerService('test-key', ['Tech'], () => {})
+        const service = createOrganizerService('test-key', ['Tech'], () => {})
         expect(service.model).toBe('google/gemini-3.1-flash-lite')
     })
 
@@ -909,7 +917,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
                 bookmarks.slice(5).map(b => ({ ...b, category: 'Engineering', sub_category: 'Backend' }))
             )
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // classifyBatch called 4 times: initial, retry-full, sub-batch 1, sub-batch 2
@@ -954,7 +962,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
 
-        const service = new OrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(results).toHaveLength(4)
@@ -972,7 +980,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'generateSchema').mockImplementation(async () => {
             service.cancel()
@@ -999,7 +1007,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async () => {
             service.cancel()
@@ -1023,7 +1031,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async (b, key, sch, m, c, isCanc, onRetry) => {
             // Simulate rate-limit notification from withRetry
@@ -1069,7 +1077,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(notFoundError)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5
@@ -1100,7 +1108,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(networkError)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5 when network fails
@@ -1134,7 +1142,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(rateLimitErr)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5 on rate limits
@@ -1152,7 +1160,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             const progressEvents = []
             const onProgress = (evt) => progressEvents.push(evt)
 
-            const service = new OrganizerService('test-key', ['Tech'], onProgress)
+            const service = createOrganizerService('test-key', ['Tech'], onProgress)
             const bookmarks = [{ title: 'Site', url: 'https://example.com' }]
             const result = await service.start(bookmarks)
 
@@ -1192,7 +1200,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             { title: 'Site 3', url: 'https://site3.com' }
         ]
 
-        const service = new OrganizerService('test-key', ['Tech', 'News'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech', 'News'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(service.stats.categoryBreakdown).toEqual({
@@ -1284,7 +1292,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Middle', url: 'https://middle.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             onProgress,
@@ -1320,7 +1328,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Middle', url: 'https://middle.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1351,7 +1359,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'New Article - Site', url: 'https://new.com', add_date: '1700000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1377,7 +1385,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Mango', url: 'https://mango.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1401,7 +1409,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Unique Page', url: 'https://unique.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1430,7 +1438,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         vi.spyOn(bookmarksService, 'createBookmark')
         wireStore(store)
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, true, false,
             true,  // flatDateSort
@@ -1458,7 +1466,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Chronological Bookmarks' })
         wireStore(store)
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, true, false,
             true, 'desc'
@@ -1497,7 +1505,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         });
         wireStore(store);
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, false, false,
             true,  // flatDateSort
@@ -1546,7 +1554,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         });
         wireStore(store);
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, false, false,
             false, // AI Categorized mode
@@ -1582,7 +1590,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         })
 
         const messages = []
-        const service = new OrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -1593,6 +1601,56 @@ describe('OrganizerService flat chronological date sorting', () => {
 })
 
 describe('OrganizerService inferred category runs', () => {
+    it('keeps saved manual categories dormant whenever inference is enabled', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Generated Topic', sub_categories: ['Generated Detail'] }]
+        }
+        const generateInferred = vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        const generateManual = vi.spyOn(ai, 'generateSchema')
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'Example', url: 'https://example.com', category: 'Generated Topic', sub_category: 'Generated Detail' }
+        ])
+
+        const service = createOrganizerService(
+            'test-key', ['Saved Manual Category'], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+        await service.start([{ title: 'Example', url: 'https://example.com' }])
+
+        expect(generateInferred).toHaveBeenCalled()
+        expect(generateManual).not.toHaveBeenCalled()
+        expect(classify.mock.calls[0][2]).toEqual(inferred)
+    })
+
+    it('reports full-collection analysis instead of sampled analysis in inference mode', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Generated Topic', sub_categories: ['Generated Detail'] }]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(bookmark => ({
+            ...bookmark,
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail'
+        })))
+        const messages = []
+        const bookmarks = Array.from({ length: 205 }, (_, index) => ({
+            title: `Bookmark ${index + 1}`,
+            url: `https://example.com/${index + 1}`
+        }))
+        const service = createOrganizerService(
+            'test-key', ['Dormant Manual Category'], event => messages.push(event.message),
+            undefined, undefined, undefined, undefined, undefined, false,
+            undefined, undefined, true
+        )
+
+        await service.start(bookmarks)
+
+        expect(messages).toContain('Large collection: analyzing all 205 bookmarks to infer the folder structure. All bookmarks will then be classified.')
+        expect(messages.some(message => message?.includes('sample of 200'))).toBe(false)
+    })
+
     it('classifies against the run-scoped inferred schema instead of replacing it with Other', async () => {
         vi.clearAllMocks()
         const inferred = {
@@ -1606,7 +1664,7 @@ describe('OrganizerService inferred category runs', () => {
             { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
         ])
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', [], vi.fn(), undefined, undefined, undefined,
             undefined, undefined, false, undefined, undefined, true
         )
@@ -1621,7 +1679,7 @@ describe('OrganizerService inferred category runs', () => {
         vi.spyOn(ai, 'generateInferredSchema').mockRejectedValue(new Error('invalid schema'))
         const classify = vi.spyOn(ai, 'classifyBatch')
         const progress = vi.fn()
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', [], progress, undefined, undefined, undefined,
             undefined, undefined, false, undefined, undefined, true
         )
@@ -1645,7 +1703,7 @@ describe('OrganizerService inferred category runs', () => {
         const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
             { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
         ])
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Engineering'], vi.fn(), undefined, undefined, undefined,
             undefined, undefined, false, undefined, undefined, false
         )
@@ -1671,7 +1729,7 @@ describe('OrganizerService inferred category runs', () => {
         globalThis.chrome = { storage: { local: { set: storageSet } } }
 
         try {
-            const service = new OrganizerService(
+            const service = createOrganizerService(
                 'test-key', [], vi.fn(), undefined, undefined, undefined,
                 undefined, undefined, false, undefined, undefined, true
             )
@@ -1766,7 +1824,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Newest Design', url: 'https://design.com/newest', add_date: '1800000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech', 'Design'],
             () => {},
@@ -1799,7 +1857,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Older Tech', url: 'https://tech.com/old', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1826,7 +1884,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'ArXiv Paper', url: 'https://arxiv.org/abs/1234' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1859,7 +1917,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Beta Tech', url: 'https://tech.com/beta' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1945,7 +2003,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Newest Link', url: 'https://new.com', add_date: '1700000000' }
         ]
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
         const results = await service.start(bookmarks)
 
         const oldestDate = new Date(1500000000000).toLocaleDateString()
@@ -1964,7 +2022,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Older Bookmark', url: 'https://older.com', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1996,7 +2054,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Oldest Tech', url: 'https://tech.com/oldest', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -2065,7 +2123,7 @@ describe('schema fallback path reporting', () => {
         const spy = vi.spyOn(ai, 'generateSchema').mockImplementation(generateSchemaImpl)
 
         const events = []
-        const service = new OrganizerService('test-key', ['Engineering', 'Finance', 'Travel'], (e) => events.push(e))
+        const service = createOrganizerService('test-key', ['Engineering', 'Finance', 'Travel'], (e) => events.push(e))
         await service.start(bookmarks)
 
         return { spy, events, messages: events.map(e => e.message).filter(Boolean) }
@@ -2145,7 +2203,7 @@ describe('fixed hierarchy placement and export', () => {
         wireStore(store)
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
             store.node(parentId).children.find(n => !n.url && n.title === title))
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {})
         service.snapshotProvider = async () => {}
 
         await service.start(null)
@@ -2183,7 +2241,7 @@ describe('fixed hierarchy placement and export', () => {
             return found || store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = new OrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
+        const service = createOrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
         service.snapshotProvider = async () => {}
         const browserResults = await service.start(null)
         const fileResults = await service.start([...classifications.keys()].map(id => ({ ...store.node(id) })))
@@ -2227,7 +2285,7 @@ describe('fixed hierarchy placement and export', () => {
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
             store.node(parentId).children.find(n => !n.url && n.title === title) || store.addFolder(parentId, `folder-${parentId}-${title}`, title))
 
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {})
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
         const tech = [...store.nodes.values()].find(n => !n.url && n.title === 'Tech')
@@ -2262,7 +2320,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, id, title)
         })
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2300,7 +2358,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2327,7 +2385,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2352,7 +2410,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.move(id, dest)
         })
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2371,7 +2429,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = new OrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2390,7 +2448,7 @@ describe('Phase B reorder pass and idempotency', () => {
         store.addUrl('f1', '11', 'https://b.com', 'B', 1600000000000)
         wireStore(store)
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite')
         await service.reorderFolder('f1', ['10', '11', '12'])
 
         const childIds = (await store.childrenOf('f1')).map(c => c.id)
@@ -2409,14 +2467,14 @@ describe('Phase B reorder pass and idempotency', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Chronological Bookmarks' })
         wireStore(store)
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {} // installed for real in Task 7
 
         await service.start(null)
         const opsAfterFirst = store.ops.length
         expect(opsAfterFirst).toBeGreaterThan(0)
 
-        const service2 = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service2 = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service2.snapshotProvider = async () => {}
         await service2.start(null)
 
@@ -2439,7 +2497,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         wireStore(store)
         const downloadSpy = vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         await service.start(null)
 
         expect(downloadSpy).toHaveBeenCalledTimes(1)
@@ -2454,7 +2512,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         wireStore(store)
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => { throw new Error('disk full') }
         const results = await service.start(null)
 

@@ -19,6 +19,7 @@ export class BackgroundJobRunner {
         this.keepAliveTimer = null;
         this.subscribers = new Set();
         this.cachedResults = null;
+        this.persistJobState = true;
     }
 
     getState() {
@@ -72,6 +73,7 @@ export class BackgroundJobRunner {
     }
 
     persistSessionSnapshot() {
+        if (!this.persistJobState) return;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.set({
@@ -117,6 +119,7 @@ export class BackgroundJobRunner {
             inferCategories = true,
             autoImport = true
         } = config;
+        this.persistJobState = flatDateSort || !inferCategories;
 
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;
@@ -261,7 +264,7 @@ export class BackgroundJobRunner {
                     this.currentJob.activeDateSpan = finalSpan;
                 }
 
-                if (typeof chrome !== 'undefined' && chrome.storage) {
+                if (this.persistJobState && typeof chrome !== 'undefined' && chrome.storage) {
                     if (chrome.storage.session) {
                         try {
                             chrome.storage.session.set({ organizedData: results });

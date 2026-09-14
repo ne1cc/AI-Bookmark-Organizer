@@ -197,10 +197,39 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(withCatchAll, { subfolderTarget: '5-10', bookmarkCount: 3000 })
+        const result = validateSchema(withCatchAll, {
+            subfolderTarget: '5-10',
+            bookmarkCount: 3000,
+            expectedCategories: withCatchAll.categories.map(category => category.name)
+        })
 
         expect(result.ok).toBe(true)
         expect(result.schema.categories.map(c => c.name)).toContain('Other')
+    })
+
+    it('rejects an inferred schema whose only top-level category is Other', () => {
+        const result = validateSchema(
+            { categories: [{ name: 'Other', sub_categories: [] }] },
+            { bookmarkCount: 12, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toMatch(/catch-all.*Other/i)
+    })
+
+    it('rejects catch-all top-level entries mixed into an inferred schema', () => {
+        const result = validateSchema(
+            {
+                categories: [
+                    ...healthySchema.categories,
+                    { name: 'Archive', sub_categories: [] }
+                ]
+            },
+            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toMatch(/catch-all.*Archive/i)
     })
 
     it('flags a structure that is flat on average even when each category clears the floor', () => {

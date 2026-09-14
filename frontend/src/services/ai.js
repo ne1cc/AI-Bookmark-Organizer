@@ -596,6 +596,15 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };
     }
 
+    if (expectedCategories === null) {
+        const catchAllNames = categories
+            .filter(category => isCatchAllCategory(category.name))
+            .map(category => category.name);
+        if (catchAllNames.length > 0) {
+            issues.push(`catch-all top-level categories are not allowed in an inferred schema: ${catchAllNames.join(', ')}`);
+        }
+    }
+
     // A truncated response leaves omitted selected categories with only their
     // General fallback. Require enough breadth to avoid losing useful structure,
     // but never demand more categories than the user selected.
