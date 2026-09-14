@@ -4,7 +4,7 @@
 
 **Goal:** In the idle-state "Sort by Date Added (Flat List)" card, make the card title and the chronological-direction readout clickable. No behavior change to the existing toggle switch or the Newest/Oldest First segmented buttons.
 
-**Branch:** `chore/sort-by-date-clickable` (base = origin/main `954997f`). Work happens in the worktree checked out at that branch. Related context: `fix/date-sort-direction-label` (unmerged, test-only) locks in the readout string "Newest bookmarks at the top" — this plan's test must include that same assertion so that branch stays redundant.
+**Branch:** `feat/clickable-date-sort-controls` (base = origin/main `954997f`; renamed from `chore/sort-by-date-clickable` to reflect the actual changes). Work happens in the worktree checked out at that branch. Related context: `fix/date-sort-direction-label` (unmerged, test-only) locks in the readout string "Newest bookmarks at the top" — this plan's test must include that same assertion so that branch stays redundant.
 
 **Spec:** none (chore task, user-approved scope: "Both" — title toggles mode, readout flips direction). Rulings made without a spec are provisional.
 
