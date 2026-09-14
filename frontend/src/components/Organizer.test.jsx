@@ -174,6 +174,7 @@ describe('Organizer Component UI Tests', () => {
         expect(flatToggle.getAttribute('aria-checked')).toBe('true')
 
         expect(screen.getByText(/Optional for flat date sorting/i)).toBeDefined()
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
     })
 
     it('provides cancel button during processing that invokes organizer.cancel()', async () => {
