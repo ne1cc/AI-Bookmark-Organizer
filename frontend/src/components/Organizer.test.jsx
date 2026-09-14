@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-libra
 import Organizer from './Organizer'
 import { OrganizerService } from '../services/organizer'
 import * as inputService from '../services/input_bookmarks'
+import * as bookmarksExport from '../services/bookmarks_export'
 
 vi.mock('../services/organizer', () => {
     return {
@@ -42,6 +43,10 @@ vi.mock('../services/input_bookmarks', () => ({
     getInputBookmarkHtml: vi.fn(async () => null),
     removeInputBookmarkFile: vi.fn(async () => {}),
     downloadInputBookmarkFile: vi.fn()
+}))
+
+vi.mock('../services/bookmarks_export', () => ({
+    downloadBookmarks: vi.fn()
 }))
 
 describe('Organizer Component UI Tests', () => {
@@ -746,6 +751,73 @@ describe('In-process and completion date range display', () => {
                 expect(screen.getByText(/Classifying batch 2\/4 in background/i)).toBeDefined()
                 expect(screen.getByRole('button', { name: /Cancel/i })).toBeDefined()
             })
+        })
+
+        it('requests and downloads completed inferred results from background memory after reconnecting', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const generatedResults = [{
+                title: 'Generated result',
+                url: 'https://example.com/generated',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+            const meta = {
+                count: 1,
+                savedAt: 1757890000000,
+                stats: {
+                    categoriesCount: 1,
+                    categoryBreakdown: { 'Generated Topic': 1 },
+                    dateSpan: '1/1/2024 – 2/1/2024'
+                },
+                dateSpan: '1/1/2024 – 2/1/2024'
+            }
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            await waitFor(() => {
+                expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+            })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_123', status: 'complete', progress: 100 }
+                }))
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS',
+                    payload: { results: generatedResults, meta }
+                }))
+            })
+
+            const downloadButton = await screen.findByRole('button', { name: /Download Organized Bookmarks/i })
+            fireEvent.click(downloadButton)
+
+            await waitFor(() => {
+                expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(generatedResults)
+            })
+            const persistedPayloads = [
+                ...global.chrome.storage.local.set.mock.calls,
+                ...global.chrome.storage.session.set.mock.calls
+            ].map(([payload]) => payload)
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
         })
 
         it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {

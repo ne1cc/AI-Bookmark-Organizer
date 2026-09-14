@@ -79,6 +79,7 @@ describe('BackgroundJobRunner', () => {
         expect(state.progress).toBe(0);
         expect(state.logs).toEqual([]);
         expect(state.activeDateSpan).toBeNull();
+        expect(state.completedAt).toBeNull();
         expect(runner.getResults()).toBeNull();
     });
 
@@ -119,6 +120,7 @@ describe('BackgroundJobRunner', () => {
         expect(results).toHaveLength(2);
         expect(runner.getState().status).toBe('complete');
         expect(runner.getState().progress).toBe(100);
+        expect(runner.getState().completedAt).toEqual(expect.any(Number));
         expect(runner.getResults()).toEqual(results);
 
         // Should have stored organizedData in session and organizedMeta in local

@@ -232,6 +232,60 @@ describe('validateSchema', () => {
         expect(result.issues.join(' ')).toMatch(/catch-all.*Archive/i)
     })
 
+    it.each([
+        'Misc',
+        'Misc.',
+        'Miscellaneous',
+        'Miscellaneous Items',
+        'Various',
+        'Various Topics',
+        'Assorted',
+        'Assorted Links',
+        'Everything Else',
+        'Other Stuff',
+        'Others',
+        'Catch-All',
+        'Unsorted',
+        'Unclassified',
+        'None'
+    ])('rejects inferred filler top-level category "%s"', (fillerName) => {
+        const result = validateSchema(
+            {
+                categories: [
+                    ...healthySchema.categories,
+                    {
+                        name: fillerName,
+                        sub_categories: ['Fallback One', 'Fallback Two', 'Fallback Three']
+                    }
+                ]
+            },
+            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toContain(fillerName)
+    })
+
+    it('does not apply inferred filler-name rejection to an explicit manual category', () => {
+        const manualSchema = {
+            categories: [
+                ...healthySchema.categories,
+                {
+                    name: 'Miscellaneous',
+                    sub_categories: ['Household Records', 'Reference Links', 'Saved Reading']
+                }
+            ]
+        }
+
+        const result = validateSchema(manualSchema, {
+            subfolderTarget: '5-10',
+            bookmarkCount: 3000,
+            expectedCategories: manualSchema.categories.map(category => category.name)
+        })
+
+        expect(result.ok).toBe(true)
+    })
+
     it('flags a structure that is flat on average even when each category clears the floor', () => {
         const spread = {
             categories: [

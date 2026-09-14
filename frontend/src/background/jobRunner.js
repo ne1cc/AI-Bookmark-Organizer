@@ -13,7 +13,8 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
         this.organizer = null;
         this.keepAliveTimer = null;
@@ -86,7 +87,8 @@ export class BackgroundJobRunner {
                         backgroundNotice: this.currentJob.backgroundNotice,
                         errorMsg: this.currentJob.errorMsg,
                         stats: this.currentJob.stats,
-                        count: this.currentJob.count
+                        count: this.currentJob.count,
+                        completedAt: this.currentJob.completedAt
                     }
                 });
             } catch {
@@ -137,7 +139,8 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
 
         this.startKeepAlive();
@@ -243,6 +246,7 @@ export class BackgroundJobRunner {
 
             if (results && results.length > 0) {
                 this.cachedResults = results;
+                const completedAt = Date.now();
                 const stats = this.organizer?.stats || results.stats || null;
                 const finalSpan = stats?.dateSpan || this.currentJob.activeDateSpan || calculateDateSpan(results);
                 const enrichedStats = {
@@ -251,7 +255,7 @@ export class BackgroundJobRunner {
                 };
                 const meta = {
                     count: results.length,
-                    savedAt: Date.now(),
+                    savedAt: completedAt,
                     stats: enrichedStats,
                     ...(finalSpan ? { dateSpan: finalSpan } : {})
                 };
@@ -260,6 +264,7 @@ export class BackgroundJobRunner {
                 this.currentJob.progress = 100;
                 this.currentJob.stats = enrichedStats;
                 this.currentJob.count = results.length;
+                this.currentJob.completedAt = completedAt;
                 if (finalSpan) {
                     this.currentJob.activeDateSpan = finalSpan;
                 }
@@ -331,7 +336,8 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {

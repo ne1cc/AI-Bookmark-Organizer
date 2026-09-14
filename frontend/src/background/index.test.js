@@ -136,4 +136,56 @@ describe('Background Service Worker Entry Point', () => {
 
         startSpy.mockRestore();
     });
+
+    it('returns completed results from jobRunner memory without writing them to storage', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const results = [{
+            title: 'Generated result',
+            url: 'https://example.com/generated',
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail'
+        }];
+        const state = {
+            id: 'job_123',
+            status: 'complete',
+            count: 1,
+            completedAt: 1757890000000,
+            stats: { categoriesCount: 1, categoryBreakdown: { 'Generated Topic': 1 } },
+            activeDateSpan: '1/1/2024 – 2/1/2024'
+        };
+        const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(results);
+        vi.spyOn(freshRunner, 'getState').mockReturnValue(state);
+
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        port.postMessage.mockClear();
+
+        const messageHandler = port.onMessage.addListener.mock.calls[0][0];
+        messageHandler({ type: 'GET_RESULTS' });
+
+        expect(getResultsSpy).toHaveBeenCalledOnce();
+        expect(port.postMessage).toHaveBeenCalledWith({
+            type: 'JOB_RESULTS',
+            payload: {
+                results,
+                meta: {
+                    count: 1,
+                    savedAt: 1757890000000,
+                    stats: state.stats,
+                    dateSpan: '1/1/2024 – 2/1/2024'
+                }
+            }
+        });
+        expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+    });
 });

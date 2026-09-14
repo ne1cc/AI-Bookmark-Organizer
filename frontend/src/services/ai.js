@@ -537,6 +537,29 @@ export function subfolderBounds(subfolderTarget) {
 // subcategories of their own, so they never fail validation.
 const CATCH_ALL_CATEGORIES = new Set(['other', 'archive', 'uncategorized', 'general']);
 
+// In inferred mode, reject a broader family of names whose only purpose is
+// absorbing bookmarks that the model did not place topically. Keep this
+// separate from CATCH_ALL_CATEGORIES so explicit manual categories retain
+// their existing validation behavior.
+const INFERRED_FILLER_CATEGORIES = new Set([
+    ...CATCH_ALL_CATEGORIES,
+    'others',
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'everything else',
+    'other stuff',
+    'catch all',
+    'uncategorised',
+    'unclassified',
+    'unsorted',
+    'unknown',
+    'none'
+]);
+const INFERRED_FILLER_PREFIXES = new Set(['misc', 'miscellaneous', 'various', 'assorted', 'other', 'others']);
+const INFERRED_FILLER_SUFFIXES = new Set(['item', 'items', 'link', 'links', 'topic', 'topics', 'stuff', 'content', 'bookmark', 'bookmarks']);
+
 // Subcategory names carrying no organizational information. They are stripped
 // before counting, so a "schema" of nothing but "General" reads as flat —
 // which is exactly what it is, and exactly the bug we are guarding against.
@@ -544,6 +567,21 @@ const FILLER_SUBCATEGORIES = new Set(['general', 'other', 'misc', 'miscellaneous
 
 function isCatchAllCategory(name) {
     return CATCH_ALL_CATEGORIES.has((name || '').trim().toLowerCase());
+}
+
+function isInferredFillerCategory(name) {
+    const normalized = (name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (INFERRED_FILLER_CATEGORIES.has(normalized)) return true;
+
+    const [prefix, ...suffixes] = normalized.split(' ');
+    return INFERRED_FILLER_PREFIXES.has(prefix)
+        && suffixes.length > 0
+        && suffixes.every(suffix => INFERRED_FILLER_SUFFIXES.has(suffix));
 }
 
 // A collection this small cannot support a rich structure — one real
@@ -598,7 +636,7 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
 
     if (expectedCategories === null) {
         const catchAllNames = categories
-            .filter(category => isCatchAllCategory(category.name))
+            .filter(category => isInferredFillerCategory(category.name))
             .map(category => category.name);
         if (catchAllNames.length > 0) {
             issues.push(`catch-all top-level categories are not allowed in an inferred schema: ${catchAllNames.join(', ')}`);

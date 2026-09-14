@@ -342,6 +342,9 @@ export default function Organizer() {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
+                            if (!organizedResultsRef.current) {
+                                try { port.postMessage({ type: 'GET_RESULTS' }); } catch {}
+                            }
                             if (!organizedResultsRef.current && chrome.storage?.session) {
                                 chrome.storage.session.get(['organizedData'], (sRes) => {
                                     if (sRes?.organizedData) {
@@ -364,6 +367,20 @@ export default function Organizer() {
                                 setProgress(0);
                                 setBackgroundNotice('');
                             }
+                        }
+                    } else if (msg.type === 'JOB_RESULTS') {
+                        const { results, meta } = msg.payload || {};
+                        if (Array.isArray(results) && results.length > 0) {
+                            organizedResultsRef.current = results;
+                            if (meta) {
+                                setLastOrganized(meta);
+                                const span = meta.stats?.dateSpan || meta.dateSpan;
+                                if (span) setActiveDateSpan(span);
+                            }
+                            setStatus('complete');
+                            setProgress(100);
+                            setBackgroundNotice('');
+                            scheduleReturnToMenu();
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -391,6 +408,11 @@ export default function Organizer() {
                 port.onDisconnect.addListener(() => {
                     portRef.current = null;
                 });
+
+                // Results from inferred runs intentionally live only in the
+                // service worker. Ask for them after every connection so a
+                // reopened panel can recover a completed run without storage.
+                try { port.postMessage({ type: 'GET_RESULTS' }); } catch {}
             } catch (err) {
                 console.warn('[Organizer] Failed to connect to background channel:', err);
             }
