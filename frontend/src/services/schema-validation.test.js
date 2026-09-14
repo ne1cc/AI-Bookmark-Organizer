@@ -449,6 +449,34 @@ describe('generateInferredSchema', () => {
         expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
+    it('reports inferred schema correction through onRetry', async () => {
+        const flat = { categories: [{ name: 'Links', sub_categories: [] }] }
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(flat)))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
+
+        const events = []
+        const schema = await generateInferredSchema(
+            manyBookmarks,
+            'sk-or-test-key',
+            undefined,
+            '5-10',
+            null,
+            (event) => events.push(event)
+        )
+
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+        expect(schema).toEqual(healthySchema)
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({
+            attempt: 1,
+            delayMs: 0,
+            isRateLimit: false,
+            isSchemaCorrection: true
+        })
+        expect(events[0].error.message).toMatch(/subcategories|flat/i)
+    })
+
     it('passes cancellation and retry callbacks through to inferred generation', async () => {
         const isCancelled = vi.fn(() => true)
         const onRetry = vi.fn()

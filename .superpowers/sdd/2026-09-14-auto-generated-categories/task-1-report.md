@@ -23,3 +23,15 @@ Implemented and committed.
 ## Concerns
 
 - Full-project ESLint still reports one pre-existing error in `frontend/src/components/RemoveDuplicatesButton.jsx:81` (`err` is defined but never used), plus four unrelated warnings. No lint issues were found in the changed files.
+
+## Fix Round 1
+
+Addressed reviewer feedback by adding a correction-path test for `generateInferredSchema`. The test returns an invalid first schema and a valid second schema, then verifies the single `onRetry` event contains `attempt: 1`, `delayMs: 0`, `isRateLimit: false`, `isSchemaCorrection: true`, and a validation error.
+
+No production behavior was changed.
+
+Verification output:
+
+- Focused inferred-schema tests: 4 passed.
+- Covering AI/schema and organizer suites: 158 passed across 2 test files.
+- Changed-file ESLint check and `git diff --check`: passed.
