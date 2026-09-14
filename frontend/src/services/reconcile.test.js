@@ -29,6 +29,20 @@ describe('canonicalKey', () => {
 })
 
 describe('reconcileSubcategories', () => {
+    it.each([0, 1])('prefers the approved spelling even when it appears only %i times', (approvedCount) => {
+        const classified = [
+            ...items('Tech', 'Developer Tool', 4, { proposed: true }),
+            ...items('Tech', 'developer  tools', 2, { proposed: true }),
+            ...items('Tech', 'Developer Tools', approvedCount)
+        ]
+        const approved = { categories: [{ name: 'Tech', sub_categories: ['Developer Tools'] }] }
+
+        const result = reconcileSubcategories(classified, approved)
+
+        expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['Developer Tools']))
+        expect(result.summary.proposedKept).toBe(0)
+    })
+
     it('is a no-op on empty or non-array input', () => {
         expect(reconcileSubcategories([], schema).classified).toEqual([])
         expect(reconcileSubcategories(null, schema).classified).toEqual([])

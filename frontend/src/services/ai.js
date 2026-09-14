@@ -1,3 +1,6 @@
+import { buildAuthoritativeSchema } from './defaultSchema';
+import { canonicalKey } from './subcategoryIdentity';
+
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
     "Content-Type": "application/json",
@@ -578,9 +581,9 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
             if (typeof rawSub !== 'string') continue;
             const sub = rawSub.trim();
             if (!sub) continue;
-            const subKey = sub.toLowerCase();
+            const subKey = canonicalKey(sub);
             // Filler names and a subcategory echoing its own parent add no structure.
-            if (FILLER_SUBCATEGORIES.has(subKey) || subKey === key) continue;
+            if (FILLER_SUBCATEGORIES.has(sub.toLowerCase()) || subKey === canonicalKey(name)) continue;
             if (seenSubs.has(subKey)) continue;
             seenSubs.add(subKey);
             sub_categories.push(sub);
@@ -593,12 +596,12 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };
     }
 
-    // Breadth matters as much as depth. A truncated response that salvages
-    // cleanly still narrows the whole run: every bookmark outside the surviving
-    // categories is coerced to "Other" during classification. Tiny collections
-    // are exempt for the same reason they get a relaxed subcategory floor.
+    // A truncated response leaves omitted selected categories with only their
+    // General fallback. Require enough breadth to avoid losing useful structure,
+    // but never demand more categories than the user selected.
+    // Tiny collections are exempt, as with the relaxed subcategory floor.
     const floor = Array.isArray(expectedCategories) && expectedCategories.length > 0
-        ? Math.max(3, Math.ceil(expectedCategories.length / 2))
+        ? Math.min(expectedCategories.length, Math.max(3, Math.ceil(expectedCategories.length / 2)))
         : 3;
     if (bookmarkCount >= TINY_COLLECTION_THRESHOLD && categories.length < floor) {
         issues.push(`the response covered only ${categories.length} categories; at least ${floor} are needed`);
@@ -668,11 +671,11 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
-    PREFERRED TOP-LEVEL CATEGORIES (a starting point — adapt to the actual bookmarks):
+    FIXED TOP-LEVEL CATEGORIES (use every name exactly as written; do not rename, omit, or add categories):
     ${JSON.stringify(baseCategories)}
 
     STRUCTURE RULES
-    4. Top-level categories: aim for 8-10 broad, clearly distinct categories. Every bookmark must have a natural home.
+    4. The fixed top-level categories above are authoritative. Design subcategories inside each one; every bookmark must have a natural home.
     5. NON-REDUNDANCY IS CRITICAL. Sub-categories within a category MUST be mutually exclusive. Never create near-duplicates or synonyms as separate folders. Collapse "Tech News" + "Tech Articles" + "Tech Blogs" + "Tech Reports" into ONE folder. Collapse "Career Advice" + "Career Pathways" + "Career Roles" into ONE folder. Collapse "JS" + "JavaScript" into ONE. If two folder names could plausibly hold the same bookmark, merge them.
     6. Group by the user's INTENT, not surface keywords. Ask "why did they save this?" Links saved for the same purpose belong together even when their titles look different.
 
@@ -684,7 +687,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     QUALITY BAR
     10. No orphan folders: every sub-category should plausibly hold several bookmarks. Never create a folder for a single link — merge it into the nearest fit.
     11. Categories themselves must not overlap either. Each bookmark should have exactly ONE obvious destination, never two or three.
-    12. A genuine outlier that fits no category belongs in an "Other" category. Do NOT distort the structure to force-fit it, and do NOT invent a filler subcategory for it.
+    12. A genuine outlier still belongs in the closest fixed top-level category. Use its "General" subcategory when no specific subcategory fits; do not add an "Other" category or invent a filler subcategory.
 
     OUTPUT — return ONLY this JSON, no markdown fences, no commentary:
     {
@@ -714,7 +717,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: baseCategories };
 
     const first = validateSchema(await attempt(null), options);
-    if (first.ok) return first.schema;
+    if (first.ok) return buildAuthoritativeSchema(baseCategories, first.schema);
 
     // One corrective round-trip naming exactly what was wrong. Models that
     // return a flat structure usually fix it when told so explicitly.
@@ -723,7 +726,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     }
 
     const second = validateSchema(await attempt(first.issues), options);
-    if (second.ok) return second.schema;
+    if (second.ok) return buildAuthoritativeSchema(baseCategories, second.schema);
 
     const error = new Error(`the AI returned a folder structure without usable subcategories (${second.issues.join('; ')})`);
     error.schemaInvalid = true;
@@ -731,6 +734,52 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     // caller merges them with curated defaults rather than starting from zero.
     error.partialSchema = second.schema;
     throw error;
+}
+
+// A non-empty authoritative schema always starts with a user-selected category.
+// Falling back there preserves the fixed hierarchy when a model response is
+// malformed or a terminal request failure leaves no classification to trust.
+export function fallbackCategoryForSchema(schema) {
+    const category = (Array.isArray(schema?.categories) ? schema.categories : [])
+        .find(c => typeof c?.name === 'string' && c.name.trim());
+    return category?.name || 'Other';
+}
+
+// Resolve an AI classification against the approved two-level schema. A
+// subcategory already owned by another category is not a new proposal: it is
+// an invalid category/subcategory pair and belongs in the selected category's
+// General bucket instead. Truly new names remain proposals for reconciliation.
+export function normalizeClassificationForSchema(entry, schema) {
+    const approvedCategories = (Array.isArray(schema?.categories) ? schema.categories : [])
+        .filter(c => typeof c?.name === 'string' && c.name.trim());
+    const fallbackCategory = fallbackCategoryForSchema(schema);
+    const schemaCategories = new Map(
+        approvedCategories.map(c => [
+            c.name.trim().toLowerCase(),
+            {
+                name: c.name,
+                subs: new Map((Array.isArray(c.sub_categories) ? c.sub_categories : [])
+                    .filter(s => typeof s === 'string' && s.trim())
+                    .map(s => [canonicalKey(s), s]))
+            }
+        ])
+    );
+
+    const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
+    const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
+    const known = schemaCategories.get(rawCategory.toLowerCase());
+    if (!known) return { category: fallbackCategory, sub_category: 'General', proposed: false };
+    if (!rawSub) return { category: known.name, sub_category: 'General', proposed: false };
+
+    const subKey = canonicalKey(rawSub);
+    const approvedSub = known.subs.get(subKey);
+    if (approvedSub) return { category: known.name, sub_category: approvedSub, proposed: false };
+
+    const belongsToAnotherCategory = [...schemaCategories.values()]
+        .some(candidate => candidate !== known && candidate.subs.has(subKey));
+    if (belongsToAnotherCategory) return { category: known.name, sub_category: 'General', proposed: false };
+
+    return { category: known.name, sub_category: rawSub, proposed: rawSub.toLowerCase() !== 'general' };
 }
 
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
@@ -753,7 +802,7 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
     2. CATEGORY is fixed: you MUST use a "category" string EXACTLY as written in the schema above (same spelling, casing, spacing). Never invent a new category.
     3. SUB_CATEGORY: strongly prefer one written exactly as in the schema. The schema was designed from a sample, so it may miss a real theme. If at least 3 bookmarks in THIS batch share a clear, specific theme that no schema sub-category captures well, you MAY introduce ONE new sub_category for them under the correct existing category. Name it in Title Case, 1-3 words, and make sure it is not a synonym or near-duplicate of a sub-category already in the schema.
     4. Use "General" as the sub_category ONLY when a bookmark genuinely belongs in the category but fits no sub-category at all — neither an existing one nor a new one worth creating. This should be rare.
-    5. If a bookmark fits no category at all, classify it as category "Other" with sub_category "General".
+    5. If a bookmark fits no category at all, choose the closest approved category and use sub_category "General". Never add an "Other" category unless it is already in the approved schema.
     6. Every bookmark must be classified exactly once. Refer to each bookmark ONLY by its index "i" — do NOT repeat titles or urls in your output.${titleInstruction}
 
     Return JSON object: ${returnSchema}
@@ -779,46 +828,10 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
             }
         }
 
-        // Categories stay strictly schema-bound; only sub-categories may be
-        // proposed (rule 3). Look up the approved names once per batch. The
-        // canonical spelling is carried alongside the sub-set: matching
-        // case-insensitively but emitting the model's own casing would give one
-        // category two sibling top-level folders in both write paths.
-        const schemaCategories = new Map(
-            (Array.isArray(schema?.categories) ? schema.categories : [])
-                .filter(c => typeof c?.name === 'string')
-                .map(c => [
-                    c.name.trim().toLowerCase(),
-                    {
-                        name: c.name.trim(),
-                        subs: new Set((Array.isArray(c.sub_categories) ? c.sub_categories : [])
-                            .filter(s => typeof s === 'string')
-                            .map(s => s.trim().toLowerCase()))
-                    }
-                ])
-        );
-
         return bookmarks.map((b, i) => {
             const entry = byIndex.get(i);
             const hasCleanTitle = cleanTitles && typeof entry?.clean_title === 'string' && entry.clean_title.trim().length > 0;
-
-            const rawCategory = typeof entry?.category === 'string' ? entry.category.trim() : '';
-            const rawSub = typeof entry?.sub_category === 'string' ? entry.sub_category.trim() : '';
-
-            // An invented category is rejected outright — the schema's top level
-            // is the user's own configured list, so a novel one is a mistake.
-            const known = schemaCategories.get(rawCategory.toLowerCase());
-            const category = known ? known.name : 'Other';
-            const sub_category = (known && rawSub) ? rawSub : 'General';
-
-            // A sub-category absent from the schema is the model exercising
-            // rule 3. Flag it so reconciliation can keep it only if enough
-            // bookmarks landed there across all batches.
-            const proposed = Boolean(
-                known &&
-                sub_category !== 'General' &&
-                !known.subs.has(sub_category.toLowerCase())
-            );
+            const { category, sub_category, proposed } = normalizeClassificationForSchema(entry, schema);
 
             return {
                 ...b,

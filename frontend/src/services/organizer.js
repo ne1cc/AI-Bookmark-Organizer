@@ -1,8 +1,8 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId } from './bookmarks';
-import { generateSchema, classifyBatch, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories } from './reconcile';
-import { buildFallbackSchema } from './defaultSchema';
+import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
@@ -343,15 +343,16 @@ export class OrganizerService {
             }
 
             console.error(`Batch ${label} failed on second pass:`, err);
+            const fallbackCategory = fallbackCategoryForSchema(schema);
             this.onProgress({
                 status: 'warning',
                 message: isNetwork
-                    ? `Batch ${label} could not be classified due to network issues (${err.message}). Its ${batchData.length} bookmarks were filed under Other → General so none are lost.`
-                    : `Batch ${label} could not be classified (${err.message}). Its ${batchData.length} bookmarks were filed under Other → General so none are lost.`
+                    ? `Batch ${label} could not be classified due to network issues (${err.message}). Its ${batchData.length} bookmarks were filed under ${fallbackCategory} → General so none are lost.`
+                    : `Batch ${label} could not be classified (${err.message}). Its ${batchData.length} bookmarks were filed under ${fallbackCategory} → General so none are lost.`
             });
             return batchData.map(b => ({
                 ...b,
-                category: 'Other',
+                category: fallbackCategory,
                 sub_category: 'General'
             }));
         }
@@ -749,6 +750,11 @@ export class OrganizerService {
                 return null;
             }
 
+            // The selected categories are authoritative even when an adapter or
+            // a recovery path supplies the schema. Classifiers and placement
+            // below therefore share the same two-level source of truth.
+            schema = buildAuthoritativeSchema(this.categories, schema);
+
             const total = activeLinks.length;
             let processed = 0;
 
@@ -844,7 +850,10 @@ export class OrganizerService {
                 return null;
             }
 
-            classifiedActive = results.flat().filter(Boolean);
+            classifiedActive = results.flat().filter(Boolean).map(item => {
+                const { category, sub_category, proposed } = normalizeClassificationForSchema(item, schema);
+                return { ...item, category, sub_category, ...(proposed ? { proposed: true } : {}) };
+            });
 
             // Batches run concurrently and cannot see each other, so this is the
             // first point where the whole set of subcategories is visible —
@@ -871,7 +880,10 @@ export class OrganizerService {
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
-        if (this.schemaSortOrder && this.schemaSortOrder !== 'none') {
+        const categoryRank = new Map(buildAuthoritativeSchema(this.categories).categories
+            .map((category, index) => [category.name, index]));
+        const sortContents = this.schemaSortOrder && this.schemaSortOrder !== 'none';
+        if (sortContents) {
             const sortLabels = {
                 'alpha': 'Alphabetical (A–Z)',
                 'date-desc': 'Date Added (Newest First)',
@@ -883,54 +895,56 @@ export class OrganizerService {
                 status: 'info',
                 message: `Sorting folder contents (${sortLabel})...`
             });
-
-            finalResults.sort((a, b) => {
-                // Keep categories and sub-categories grouped and alphabetized
-                const catDiff = (a.category || '').localeCompare(b.category || '');
-                if (catDiff !== 0) return catDiff;
-                const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
-                if (subDiff !== 0) return subDiff;
-
-                // Sort bookmarks within each folder according to chosen schema
-                switch (this.schemaSortOrder) {
-                    case 'date-desc': {
-                        const timeA = getBookmarkTimestamp(a);
-                        const timeB = getBookmarkTimestamp(b);
-                        if (timeA > 0 && timeB > 0) {
-                            if (timeA !== timeB) return timeB - timeA;
-                        } else if (timeA > 0) {
-                            return -1;
-                        } else if (timeB > 0) {
-                            return 1;
-                        }
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'date-asc': {
-                        const timeA = getBookmarkTimestamp(a);
-                        const timeB = getBookmarkTimestamp(b);
-                        if (timeA > 0 && timeB > 0) {
-                            if (timeA !== timeB) return timeA - timeB;
-                        } else if (timeA > 0) {
-                            return -1;
-                        } else if (timeB > 0) {
-                            return 1;
-                        }
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'domain': {
-                        const domainA = getBookmarkDomain(a);
-                        const domainB = getBookmarkDomain(b);
-                        const domainDiff = domainA.localeCompare(domainB);
-                        if (domainDiff !== 0) return domainDiff;
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'alpha':
-                    default: {
-                        return (a.title || '').localeCompare(b.title || '');
-                    }
-                }
-            });
         }
+
+        finalResults.sort((a, b) => {
+            // Selected category order applies even when content sorting is off.
+            const catDiff = (categoryRank.get(a.category) ?? categoryRank.size)
+                - (categoryRank.get(b.category) ?? categoryRank.size);
+            if (catDiff !== 0) return catDiff;
+            if (!sortContents) return 0;
+            const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
+            if (subDiff !== 0) return subDiff;
+
+            // Sort bookmarks within each folder according to chosen schema
+            switch (this.schemaSortOrder) {
+                case 'date-desc': {
+                    const timeA = getBookmarkTimestamp(a);
+                    const timeB = getBookmarkTimestamp(b);
+                    if (timeA > 0 && timeB > 0) {
+                        if (timeA !== timeB) return timeB - timeA;
+                    } else if (timeA > 0) {
+                        return -1;
+                    } else if (timeB > 0) {
+                        return 1;
+                    }
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'date-asc': {
+                    const timeA = getBookmarkTimestamp(a);
+                    const timeB = getBookmarkTimestamp(b);
+                    if (timeA > 0 && timeB > 0) {
+                        if (timeA !== timeB) return timeA - timeB;
+                    } else if (timeA > 0) {
+                        return -1;
+                    } else if (timeB > 0) {
+                        return 1;
+                    }
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'domain': {
+                    const domainA = getBookmarkDomain(a);
+                    const domainB = getBookmarkDomain(b);
+                    const domainDiff = domainA.localeCompare(domainB);
+                    if (domainDiff !== 0) return domainDiff;
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+                case 'alpha':
+                default: {
+                    return (a.title || '').localeCompare(b.title || '');
+                }
+            }
+        });
 
         if (this.isCancelled) {
             this.onProgress({ status: 'warning', message: 'Process cancelled.' });
@@ -1005,6 +1019,11 @@ export class OrganizerService {
             for (const [parentId, expectedIds] of byFolder) {
                 await this.reorderFolder(parentId, expectedIds);
             }
+            // Reused folders retain their old positions until explicitly moved.
+            const categoryIds = [...categoryRank.keys()]
+                .map(category => createdFolders[category]?.id)
+                .filter(id => id != null);
+            await this.reorderFolder(rootFolder.id, categoryIds);
         }
 
         if (this.isCancelled) {

@@ -38,7 +38,8 @@ vi.mock('../services/organizer', () => {
 vi.mock('../services/input_bookmarks', () => ({
     INPUT_MAX_BYTES: 25 * 1024 * 1024,
     saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, size: input.html.length, savedAt: 1757000000000 } })),
-    getInputBookmarkFile: vi.fn(async () => null),
+    getInputBookmarkMeta: vi.fn(async () => null),
+    getInputBookmarkHtml: vi.fn(async () => null),
     removeInputBookmarkFile: vi.fn(async () => {}),
     downloadInputBookmarkFile: vi.fn()
 }))
@@ -74,6 +75,25 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('explains the single Other category fallback after clearing the selection', () => {
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
+
+        expect(screen.getByText(/No categories chosen.*single "Other" category/)).toBeDefined()
+        expect(screen.queryByText(/AI will automatically design a structure/)).toBeNull()
+    })
+
+    it('lets browser-mode organization explain the missing API key instead of disabling the action', () => {
+        render(<Organizer />)
+
+        const organizeButton = screen.getByRole('button', { name: 'Organize My Bookmarks' })
+        expect(organizeButton.disabled).toBe(false)
+
+        fireEvent.click(organizeButton)
+
+        expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
+    })
+
     it('shows the matching hierarchy illustration for each subfolder setting', () => {
         render(<Organizer />)
 
@@ -85,6 +105,7 @@ describe('Organizer Component UI Tests', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Detailed (6-10)' }))
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
+    })
     })
 
     it('allows entering API key and persists to localStorage', () => {
@@ -187,6 +208,7 @@ describe('Organizer Component UI Tests', () => {
         expect(flatToggle.getAttribute('aria-checked')).toBe('true')
 
         expect(screen.getByText(/Optional for flat date sorting/i)).toBeDefined()
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
     })
 
     it('provides cancel button during processing that invokes organizer.cancel()', async () => {
@@ -591,12 +613,23 @@ describe('In-process and completion date range display', () => {
             })
         })
 
-        it('dispatches START_JOB and CANCEL_JOB over port to service worker when connected', async () => {
+        it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {
             localStorage.setItem('apiKey', 'sk-or-test-port')
 
+            const listeners = []
             const mockPort = {
-                postMessage: vi.fn(),
-                onMessage: { addListener: vi.fn() },
+                postMessage: vi.fn((msg) => {
+                    if (msg?.type === 'START_JOB') {
+                        listeners.forEach((fn) => fn({ type: 'JOB_ACK', payload: {} }))
+                    }
+                }),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn((fn) => {
+                        const idx = listeners.indexOf(fn)
+                        if (idx !== -1) listeners.splice(idx, 1)
+                    })
+                },
                 onDisconnect: { addListener: vi.fn() },
                 disconnect: vi.fn()
             }
@@ -622,7 +655,8 @@ describe('In-process and completion date range display', () => {
 
             expect(global.chrome.runtime.connect).toHaveBeenCalledWith({ name: 'organizer-channel' })
 
-            act(() => {
+            const callsBefore = OrganizerService.mock.calls.length
+            await act(async () => {
                 fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
             })
 
@@ -634,6 +668,8 @@ describe('In-process and completion date range display', () => {
                     })
                 })
             )
+            expect(screen.getByText(/acknowledged the job/i)).toBeDefined()
+            expect(OrganizerService.mock.calls.length).toBe(callsBefore)
 
             // Click Cancel
             act(() => {
@@ -642,13 +678,69 @@ describe('In-process and completion date range display', () => {
 
             expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
         })
+
+        it('falls back to an in-panel run with live progress when the service worker never acknowledges START_JOB', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-fallback')
+            vi.useFakeTimers()
+
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'info', message: 'Processing uploaded file...' }) })
+                        act(() => { onProgress({ status: 'processing', message: 'Classifying batch 1/3...', percent: 25 }) })
+                        act(() => { onProgress({ status: 'done', message: 'Organization complete!' }) })
+                        return [{ title: 'Item 1', url: 'https://example.com/1' }]
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const listeners = []
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: {
+                        addListener: vi.fn((fn) => listeners.push(fn)),
+                        removeListener: vi.fn((fn) => {
+                            const idx = listeners.indexOf(fn)
+                            if (idx !== -1) listeners.splice(idx, 1)
+                        })
+                    },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                expect(screen.getByText(/did not acknowledge the job/i)).toBeDefined()
+                expect(screen.getByText(/Processing uploaded file\.\.\./i)).toBeDefined()
+                expect(screen.getByText(/Classifying batch 1\/3\.\.\./i)).toBeDefined()
+                expect(screen.getByText(/Organization complete!/i)).toBeDefined()
+                expect(silentPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
+                expect(silentPort.disconnect).toHaveBeenCalled()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
     })
 })
 
 describe('Input Bookmarks card', () => {
-    const cachedEntry = { filename: 'b.html', html: '<x/>', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
+    const cachedMeta = { filename: 'b.html', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
 
-    beforeEach(() => { inputService.getInputBookmarkFile.mockResolvedValue(null) })
+    beforeEach(() => { inputService.getInputBookmarkMeta.mockResolvedValue(null) })
     afterEach(() => { vi.clearAllMocks(); cleanup(); delete global.chrome })
 
     const chromeWith = (local = {}) => {
@@ -676,7 +768,7 @@ describe('Input Bookmarks card', () => {
 
     it('renders the cached input as a card with Download, Re-organize, Remove', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         expect(container.querySelector('.input-bookmarks-card').textContent).toContain('b.html')
@@ -694,7 +786,7 @@ describe('Input Bookmarks card', () => {
 
     it('Remove clears the card and calls the service', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Remove'))
@@ -704,12 +796,13 @@ describe('Input Bookmarks card', () => {
 
     it('Download emits the pristine original', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Download'))
+        // The card holds metadata only; the service fetches the cached HTML itself.
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
-            expect.objectContaining({ html: '<x/>', filename: 'b.html' })
+            expect.objectContaining({ filename: 'b.html' })
         )
     })
 })
