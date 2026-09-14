@@ -74,13 +74,17 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
-    it('uses compact subfolder organization as the default', () => {
+    it('shows the matching hierarchy illustration for each subfolder setting', () => {
         render(<Organizer />)
 
-        expect(screen.getByRole('button', { name: 'Compact (1-3)' })).toBeDefined()
-        expect(screen.getByRole('button', { name: 'Balanced (3-6)' })).toBeDefined()
-        expect(screen.getByRole('button', { name: 'Detailed (6-10)' })).toBeDefined()
-        expect(screen.getByRole('button', { name: 'Compact (1-3)' }).style.background).toContain('accent-gradient')
+        const image = screen.getByRole('img', { name: /category and nested subfolder hierarchy/i })
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Balanced (3-6)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-balanced.png')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Detailed (6-10)' }))
+        expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
     })
 
     it('allows entering API key and persists to localStorage', () => {

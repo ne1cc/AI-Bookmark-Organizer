@@ -3,6 +3,9 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
+import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
+import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
 
 export const DEFAULT_CATEGORIES = [
     'Work & Career',
@@ -71,6 +74,12 @@ export const SCHEMA_SORT_OPTIONS = [
         desc: 'Groups bookmarks by domain (e.g. github.com, youtube.com), then title.'
     }
 ];
+
+const SUBFOLDER_EXPLAINER_IMAGES = {
+    '1-3': subfolderHierarchyImage,
+    '3-6': subfolderHierarchyBalancedImage,
+    '6-10': subfolderHierarchyDetailedImage
+};
 
 // Synchronous in-process memory reader (0.05ms latency, zero IPC overhead)
 const getStored = (key, fallback) => {
@@ -1195,6 +1204,13 @@ export default function Organizer() {
                         </div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
                             {subfolderOptions.find(opt => opt.id === subfolderTarget)?.description}
+                        </div>
+                        <div className="subfolder-explainer">
+                            <img
+                                className="subfolder-hierarchy-image"
+                                src={SUBFOLDER_EXPLAINER_IMAGES[subfolderTarget] || subfolderHierarchyImage}
+                                alt="Category and nested subfolder hierarchy for the selected organization level"
+                            />
                         </div>
                     </div>
 
