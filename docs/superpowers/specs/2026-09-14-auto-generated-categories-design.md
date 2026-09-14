@@ -10,7 +10,7 @@ When no manual categories are selected, let the AI infer a useful category and s
 - Existing saved manual categories remain unchanged.
 - “Infer categories” is a persisted toggle in Customize Categories.
 - While inference is enabled, manual category input, chips, clear/reset actions, and suggested-category actions are disabled and visually muted. Existing manual selections are preserved but ignored only when the inferred mode is active.
-- Inference is used when the manual category list is empty. If inference is disabled and the list is empty, organizing is blocked with a prompt to add at least one category.
+- Inference is used whenever the toggle is enabled; any saved manual categories remain dormant. If inference is disabled and the manual list is empty, organizing is blocked with a prompt to add at least one category.
 - Generated category names and schema are run-scoped. They are not written to `chrome.storage` or used to replace the manual category list.
 
 ## AI and organizer behavior
