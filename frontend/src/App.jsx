@@ -7,7 +7,7 @@ import { X } from 'lucide-react'
 import ZoomControl from './components/ZoomControl'
 
 function App() {
-  const { theme, setTheme } = useTheme()
+  const { theme, isMinimal, setTheme } = useTheme()
   const { zoom, increase, decrease, reset } = useZoom()
 
   const handleClose = () => {
@@ -21,7 +21,7 @@ function App() {
   }
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isMinimal ? 'is-minimal-mode' : ''}`}>
       <header className="app-header">
         {/* Top bar: remove duplicates on top left, theme toggle + close on top right */}
         <div className="header-top">
@@ -47,6 +47,11 @@ function App() {
           <h1 className="header-title">
             AI Bookmark Organizer
           </h1>
+          {isMinimal && (
+            <span className="minimal-mode-badge" title="Extra Minimal Redesign Active">
+              MINIMAL
+            </span>
+          )}
           <p className="header-subtitle">
             Transform your chaos into a curated library
           </p>
@@ -54,7 +59,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        <Organizer />
+        <Organizer isMinimal={isMinimal} />
       </main>
     </div>
   )

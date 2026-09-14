@@ -8,7 +8,7 @@ function getSystemTheme() {
         : 'light'
 }
 
-// Resolve a mode ('dark' | 'light' | 'system') to an actual theme and apply it.
+// Resolve a mode ('dark' | 'light' | 'minimal' | 'system') to an actual theme and apply it.
 function applyTheme(mode) {
     const resolved = mode === 'system' ? getSystemTheme() : mode
     document.documentElement.setAttribute('data-theme', resolved)
@@ -25,8 +25,8 @@ function getInitialTheme() {
 
 /**
  * Theme controller. Returns the chosen mode, the resolved theme actually
- * shown, and a setter. Persists to chrome.storage (with localStorage fallback)
- * and reacts to OS changes while in "system" mode.
+ * shown, isMinimal boolean flag, and a setter. Persists to chrome.storage
+ * (with localStorage fallback) and reacts to OS changes while in "system" mode.
  */
 export function useTheme() {
     const [theme, setThemeState] = useState(getInitialTheme)
@@ -63,5 +63,5 @@ export function useTheme() {
         }
     }, [])
 
-    return { theme, resolved, setTheme }
+    return { theme, resolved, isMinimal: resolved === 'minimal', setTheme }
 }

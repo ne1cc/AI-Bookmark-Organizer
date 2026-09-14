@@ -1,24 +1,36 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import App from './App'
 
 vi.mock('./components/Organizer', () => ({
-    default: () => <div data-testid="mock-organizer">Organizer Component</div>
+    default: ({ isMinimal }) => (
+        <div data-testid="organizer-stub" data-minimal={String(isMinimal)}>
+            Organizer Component
+        </div>
+    )
 }))
 
-describe('App Component Layout', () => {
+describe('App Component Layout & Theme Integration', () => {
     beforeEach(() => {
         localStorage.clear()
+        document.documentElement.removeAttribute('data-theme')
+        vi.clearAllMocks()
         global.chrome = {
             storage: {
+                local: {
+                    get: vi.fn((keys, cb) => cb?.({})),
+                    set: vi.fn((obj, cb) => cb?.()),
+                    remove: vi.fn((keys, cb) => cb?.()),
+                },
                 session: {
-                    get: vi.fn((keys, cb) => cb({ activeJobState: { status: 'idle' } }))
+                    get: vi.fn((keys, cb) => cb?.({ activeJobState: { status: 'idle' } })),
+                    set: vi.fn((obj, cb) => cb?.()),
                 },
                 onChanged: {
                     addListener: vi.fn(),
-                    removeListener: vi.fn()
-                }
-            }
+                    removeListener: vi.fn(),
+                },
+            },
         }
     })
 
@@ -93,5 +105,46 @@ describe('App Component Layout', () => {
 
         fireEvent.click(reset)
         expect(reset.textContent).toBe('100%')
+    })
+
+    it('renders the application with theme toggle and main title', () => {
+        render(<App />)
+        expect(screen.getByText('AI Bookmark Organizer')).toBeDefined()
+        expect(screen.getByRole('radio', { name: 'Extra Minimal' })).toBeDefined()
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light')
+        expect(screen.queryByText('MINIMAL')).toBeNull()
+
+        const stub = screen.getByTestId('organizer-stub')
+        expect(stub.getAttribute('data-minimal')).toBe('false')
+    })
+
+    it('switches to Extra Minimal theme when selected in ThemeToggle', () => {
+        render(<App />)
+
+        const minimalBtn = screen.getByRole('radio', { name: 'Extra Minimal' })
+        fireEvent.click(minimalBtn)
+
+        expect(document.documentElement.getAttribute('data-theme')).toBe('minimal')
+        expect(screen.getByText('MINIMAL')).toBeDefined()
+        expect(localStorage.getItem('themeMode')).toBe('minimal')
+
+        const stub = screen.getByTestId('organizer-stub')
+        expect(stub.getAttribute('data-minimal')).toBe('true')
+    })
+
+    it('removes minimal badge when switching back from Minimal to Dark or Light', () => {
+        render(<App />)
+
+        const minimalBtn = screen.getByRole('radio', { name: 'Extra Minimal' })
+        fireEvent.click(minimalBtn)
+        expect(screen.getByText('MINIMAL')).toBeDefined()
+
+        const darkBtn = screen.getByRole('radio', { name: 'Dark' })
+        fireEvent.click(darkBtn)
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+        expect(screen.queryByText('MINIMAL')).toBeNull()
+
+        const stub = screen.getByTestId('organizer-stub')
+        expect(stub.getAttribute('data-minimal')).toBe('false')
     })
 })

@@ -1,15 +1,16 @@
 import { createElement } from 'react'
-import { Sun, Moon, Monitor } from 'lucide-react'
+import { Sun, Moon, Minimize2, Monitor } from 'lucide-react'
 
 const options = [
     { id: 'light', icon: Sun, label: 'Light' },
     { id: 'dark', icon: Moon, label: 'Dark' },
+    { id: 'minimal', icon: Minimize2, label: 'Extra Minimal' },
     { id: 'system', icon: Monitor, label: 'System' },
 ]
 
 /**
  * Minimalist segmented control for theme selection.
- * Light / Dark / System — driven by the useTheme hook.
+ * Light / Dark / Extra Minimal / System — driven by the useTheme hook.
  */
 export default function ThemeToggle({ theme, setTheme }) {
     return (
