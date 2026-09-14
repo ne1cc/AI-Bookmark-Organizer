@@ -179,8 +179,9 @@ export default function Organizer() {
         }
     })
 
-    // Default Categories — instantaneous bootstrap
-    const [categories, setCategories] = useState(() => getStored('categories', DEFAULT_CATEGORIES))
+    // Manual categories remain saved even while run-scoped inference is active.
+    const [categories, setCategories] = useState(() => getStored('categories', []))
+    const [inferCategories, setInferCategories] = useState(() => getStored('inferCategories', true))
     const [newCategory, setNewCategory] = useState('')
 
     // Suggested Categories not yet in active categories
@@ -424,12 +425,16 @@ export default function Organizer() {
     useEffect(() => {
         const startTime = performance.now()
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-            chrome.storage.local.get(['apiKey', 'categories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
+            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
                 if (!result) return
                 if (result.apiKey && result.apiKey !== apiKey) setApiKey(result.apiKey)
-                if (result.categories && Array.isArray(result.categories) && result.categories.length > 0) {
+                if (Array.isArray(result.categories)) {
                     setCategories(result.categories)
                     try { localStorage.setItem('categories', JSON.stringify(result.categories)) } catch {}
+                }
+                if (typeof result.inferCategories === 'boolean') {
+                    setInferCategories(result.inferCategories)
+                    try { localStorage.setItem('inferCategories', JSON.stringify(result.inferCategories)) } catch {}
                 }
                 if (result.selectedModel === 'google/gemini-2.5-pro') {
                     setSelectedModel('google/gemini-3.1-pro-preview')
@@ -553,6 +558,11 @@ export default function Organizer() {
     const handleCleanTitlesToggle = useCallback((enabled) => {
         setCleanTitles(enabled)
         updateSetting('cleanTitles', enabled)
+    }, [updateSetting])
+
+    const handleInferCategoriesToggle = useCallback((enabled) => {
+        setInferCategories(enabled)
+        updateSetting('inferCategories', enabled)
     }, [updateSetting])
 
     const handleFlatDateSortToggle = useCallback((enabled) => {
@@ -803,6 +813,11 @@ export default function Organizer() {
             setErrorMsg(`Please enter your Google AI Studio or OpenRouter API Key.`);
             return;
         }
+        if (!flatDateSort && !inferCategories && categories.length === 0) {
+            setErrorMsg('Add at least one category or turn on Infer categories.')
+            setStatus('error')
+            return
+        }
 
         if (completionTimerRef.current) {
             clearTimeout(completionTimerRef.current);
@@ -887,6 +902,7 @@ export default function Organizer() {
                                 config: {
                                     apiKey,
                                     categories,
+                                    inferCategories,
                                     selectedModel,
                                     subfolderTarget,
                                     sortAlphabetically,
@@ -982,7 +998,8 @@ export default function Organizer() {
                 cleanTitles,
                 flatDateSort,
                 dateSortOrder,
-                schemaSortOrder
+                schemaSortOrder,
+                inferCategories
             );
 
             // Pass parsed bookmarks if file mode, otherwise null (browser mode)
@@ -1036,7 +1053,7 @@ export default function Organizer() {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -1603,22 +1620,36 @@ export default function Organizer() {
                             <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600 }}>
                                 Customize Categories
                             </h3>
-                            <span style={{
-                                fontSize: '0.72rem',
-                                padding: '0.15rem 0.5rem',
-                                borderRadius: '12px',
-                                background: 'var(--surface-solid)',
-                                border: '1px solid var(--border)',
-                                color: 'var(--text-muted)'
-                            }}>
-                                {categories.length} chosen
-                            </span>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                            <div style={{ maxWidth: '19rem' }}>
+                                <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', fontWeight: 600 }}>Infer categories</div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
+                                    AI creates categories from this run’s bookmarks. Manual choices stay saved but inactive.
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-label="Infer categories"
+                                aria-checked={inferCategories}
+                                onClick={() => handleInferCategoriesToggle(!inferCategories)}
+                                style={{ width: '44px', height: '24px', borderRadius: '12px', border: '1px solid var(--border)', background: inferCategories ? 'var(--accent)' : 'var(--surface-solid)', position: 'relative', cursor: 'pointer', padding: 0, flexShrink: 0, transition: 'background 0.2s ease' }}
+                            >
+                                <span style={{ position: 'absolute', top: '2px', left: inferCategories ? '22px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: inferCategories ? 'var(--on-accent)' : 'var(--text-muted)', transition: 'left 0.2s ease' }} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div aria-disabled={inferCategories} style={{ opacity: inferCategories ? 0.58 : 1, filter: inferCategories ? 'blur(0.2px)' : 'none', pointerEvents: inferCategories ? 'none' : 'auto', transition: 'opacity 0.2s ease' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.8rem' }}>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{categories.length} chosen</span>
+                            <div style={{ display: 'flex', gap: '0.4rem' }}>
                             {categories.length > 0 ? (
                                 <button
                                     type="button"
                                     onClick={handleClearAllCategories}
+                                    disabled={inferCategories}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -1641,6 +1672,7 @@ export default function Organizer() {
                                 <button
                                     type="button"
                                     onClick={handleResetDefaultCategories}
+                                    disabled={inferCategories}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -1661,7 +1693,7 @@ export default function Organizer() {
                                 </button>
                             )}
                         </div>
-                    </div>
+                        </div>
 
                     {/* Custom Category Input */}
                     <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
@@ -1669,6 +1701,7 @@ export default function Organizer() {
                             type="text"
                             placeholder="Add custom category..."
                             value={newCategory}
+                            disabled={inferCategories}
                             onChange={(e) => setNewCategory(e.target.value)}
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && newCategory.trim()) {
@@ -1689,6 +1722,7 @@ export default function Organizer() {
                         />
                         <button
                             type="button"
+                            disabled={inferCategories}
                             onClick={() => {
                                 if (newCategory.trim()) {
                                     handleAddCategory(newCategory);
@@ -1726,7 +1760,7 @@ export default function Organizer() {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No categories chosen. Bookmarks will use a single "Other" category, or you can add categories from the suggestions below.
+                            No manual categories selected. Add categories from the suggestions below when Infer categories is off.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -1743,12 +1777,9 @@ export default function Organizer() {
                                     color: 'var(--text-secondary)'
                                 }}>
                                     <span>{cat}</span>
-                                    <X
-                                        size={14}
-                                        style={{ cursor: 'pointer', color: 'var(--error)' }}
-                                        onClick={() => handleRemoveCategory(idx)}
-                                        title={`Remove "${cat}"`}
-                                    />
+                                    <button type="button" disabled={inferCategories} onClick={() => handleRemoveCategory(idx)} title={`Remove "${cat}"`} style={{ display: 'flex', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--error)' }}>
+                                        <X size={14} />
+                                    </button>
                                 </div>
                             ))}
                         </div>
@@ -1767,8 +1798,10 @@ export default function Organizer() {
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
                                 {availableSuggestions.map((sug) => (
-                                    <div
+                                    <button
+                                        type="button"
                                         key={sug}
+                                        disabled={inferCategories}
                                         onClick={() => handleAddCategory(sug)}
                                         style={{
                                             display: 'flex',
@@ -1798,11 +1831,12 @@ export default function Organizer() {
                                             size={14}
                                             style={{ color: 'var(--success)', flexShrink: 0 }}
                                         />
-                                    </div>
+                                    </button>
                                 ))}
                             </div>
                         </div>
                     )}
+                    </div>
                 </div>
             )}
 

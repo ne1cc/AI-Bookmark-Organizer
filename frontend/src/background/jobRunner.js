@@ -114,6 +114,7 @@ export class BackgroundJobRunner {
             flatDateSort,
             dateSortOrder,
             schemaSortOrder,
+            inferCategories = true,
             autoImport = true
         } = config;
 
@@ -218,7 +219,7 @@ export class BackgroundJobRunner {
             flatDateSort,
             dateSortOrder,
             schemaSortOrder,
-            autoImport
+            inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
 

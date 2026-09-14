@@ -75,12 +75,65 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
-    it('explains the single Other category fallback after clearing the selection', () => {
+    it('defaults new installs to inferred categories with no manual selection', () => {
         render(<Organizer />)
-        fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
 
-        expect(screen.getByText(/No categories chosen.*single "Other" category/)).toBeDefined()
-        expect(screen.queryByText(/AI will automatically design a structure/)).toBeNull()
+        expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked')).toBe('true')
+        expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
+        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
+    })
+
+    it('persists disabling inferred categories and restores the saved manual controls', () => {
+        localStorage.setItem('categories', JSON.stringify(['Work']))
+        render(<Organizer />)
+
+        const inferToggle = screen.getByRole('switch', { name: /Infer categories/i })
+        fireEvent.click(inferToggle)
+
+        expect(inferToggle.getAttribute('aria-checked')).toBe('false')
+        expect(localStorage.getItem('inferCategories')).toBe('false')
+        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ inferCategories: false })
+        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(false)
+        expect(screen.getByText('Work')).toBeDefined()
+    })
+
+    it('hydrates an empty manual selection without changing the saved inference mode', () => {
+        global.chrome.storage.local.get.mockImplementation((keys, cb) => cb({ categories: [], inferCategories: false }))
+        render(<Organizer />)
+
+        expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked')).toBe('false')
+        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(false)
+        expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
+    })
+
+    it('does not persist categories generated for an inferred run', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-inferred-run')
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.start = vi.fn(async () => {
+                act(() => onProgress({ status: 'done', message: 'Organization complete!' }))
+                return [{ title: 'Item 1', url: 'https://example.com', category: 'Generated Topic' }]
+            })
+            this.cancel = vi.fn()
+            this.isCancelled = false
+        })
+
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        await waitFor(() => expect(screen.getByText(/Organization complete!/i)).toBeDefined())
+        expect(localStorage.getItem('categories')).toBeNull()
+        expect(global.chrome.storage.local.set.mock.calls.some(([entry]) => Object.hasOwn(entry, 'categories'))).toBe(false)
+    })
+
+    it('requires a manual category before manual AI organization starts', () => {
+        localStorage.setItem('apiKey', 'sk-or-test-manual-empty')
+        render(<Organizer />)
+
+        fireEvent.click(screen.getByRole('switch', { name: /Infer categories/i }))
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        expect(screen.getByText('Add at least one category or turn on Infer categories.')).toBeDefined()
+        expect(OrganizerService).not.toHaveBeenCalled()
     })
 
     it('lets browser-mode organization explain the missing API key instead of disabling the action', () => {
@@ -712,7 +765,7 @@ describe('In-process and completion date range display', () => {
                 expect.objectContaining({
                     type: 'START_JOB',
                     payload: expect.objectContaining({
-                        config: expect.objectContaining({ apiKey: 'sk-or-test-port' })
+                        config: expect.objectContaining({ apiKey: 'sk-or-test-port', inferCategories: true })
                     })
                 })
             )
@@ -776,6 +829,7 @@ describe('In-process and completion date range display', () => {
                 expect(screen.getByText(/Processing uploaded file\.\.\./i)).toBeDefined()
                 expect(screen.getByText(/Classifying batch 1\/3\.\.\./i)).toBeDefined()
                 expect(screen.getByText(/Organization complete!/i)).toBeDefined()
+                expect(OrganizerService.mock.calls.at(-1).at(-1)).toBe(true)
                 expect(silentPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
                 expect(silentPort.disconnect).toHaveBeenCalled()
             } finally {
