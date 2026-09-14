@@ -96,15 +96,28 @@ const mockAi = ({ schemaResponses, distort = null, provider = 'openrouter' }) =>
     })
 }
 
-const runOrganizer = async (fetchMock, { subfolderTarget = '5-10', provider = 'openrouter', input = bookmarks } = {}) => {
+const runOrganizer = async (fetchMock, {
+    subfolderTarget = '5-10',
+    provider = 'openrouter',
+    input = bookmarks,
+    categories = [...new Set(fixture.map(b => b.expected_category))],
+    inferCategories = false
+} = {}) => {
     global.fetch = fetchMock
     const logs = []
     const service = new OrganizerService(
         API_KEYS[provider],
-        [...new Set(fixture.map(b => b.expected_category))],
+        categories,
         (e) => logs.push(e),
         'google/gemini-3.1-flash-lite',
-        subfolderTarget
+        subfolderTarget,
+        true,
+        true,
+        false,
+        false,
+        'desc',
+        undefined,
+        inferCategories
     )
     const results = await service.start(input)
     return { results, logs, service, messages: logs.map(l => l.message).filter(Boolean) }
@@ -127,6 +140,57 @@ describe('subcategory pipeline regression', () => {
     afterEach(() => {
         global.fetch = originalFetch
         vi.restoreAllMocks()
+    })
+
+    it('retains inferred category names and subcategory pairs through the complete pipeline', async () => {
+        const inferredSchema = {
+            categories: [
+                { name: 'Engineering', sub_categories: ['Frontend'] },
+                { name: 'Research', sub_categories: ['Papers'] },
+                { name: 'Personal', sub_categories: ['Travel'] }
+            ]
+        }
+        const inferredBookmarks = [
+            { title: 'React', url: 'https://react.dev' },
+            { title: 'Vue', url: 'https://vuejs.org' },
+            { title: 'Attention Is All You Need', url: 'https://arxiv.org/abs/1706.03762' },
+            { title: 'BERT', url: 'https://arxiv.org/abs/1810.04805' },
+            { title: 'Kyoto Guide', url: 'https://example.com/kyoto' },
+            { title: 'Lisbon Guide', url: 'https://example.com/lisbon' }
+        ]
+        const assignments = new Map([
+            ['https://react.dev', ['Engineering', 'Frontend']],
+            ['https://vuejs.org', ['Engineering', 'Frontend']],
+            ['https://arxiv.org/abs/1706.03762', ['Research', 'Papers']],
+            ['https://arxiv.org/abs/1810.04805', ['Research', 'Papers']],
+            ['https://example.com/kyoto', ['Personal', 'Travel']],
+            ['https://example.com/lisbon', ['Personal', 'Travel']]
+        ])
+        const fetchMock = vi.fn(async (_url, options) => {
+            const prompt = promptOf(options)
+            if (isSchemaCall(prompt)) return jsonResponse(inferredSchema)
+
+            const classified = batchFromPrompt(prompt).map(({ i, url }) => {
+                const [category, sub_category] = assignments.get(url)
+                return { i, category, sub_category }
+            })
+            return jsonResponse({ classified })
+        })
+
+        const { results } = await runOrganizer(fetchMock, {
+            input: inferredBookmarks,
+            categories: [],
+            inferCategories: true,
+            subfolderTarget: '1-3'
+        })
+
+        expect(new Set(results.map(item => item.category))).toEqual(
+            new Set(['Engineering', 'Research', 'Personal'])
+        )
+        expect(new Set(results.map(item => `${item.category}/${item.sub_category}`))).toEqual(
+            new Set(['Engineering/Frontend', 'Research/Papers', 'Personal/Travel'])
+        )
+        expect(results).not.toContainEqual(expect.objectContaining({ category: 'Other' }))
     })
 
     it('produces real subfolders across categories and places every bookmark exactly once', async () => {
