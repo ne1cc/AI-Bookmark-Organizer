@@ -969,7 +969,7 @@ export default function Organizer() {
                     <p style={{ margin: 0, display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
                         <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
                         <span>
-                            Powered by <strong>Google Gemini</strong>. Paste a key from{' '}
+                            Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
                             <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
                             <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
                             automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.

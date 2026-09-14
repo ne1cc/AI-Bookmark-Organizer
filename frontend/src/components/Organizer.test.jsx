@@ -67,11 +67,10 @@ describe('Organizer Component UI Tests', () => {
         delete global.chrome
     })
 
-    it('renders the initial UI with Powered by Google Gemini', () => {
+    it('renders the initial UI with Gemini AI models info', () => {
         render(<Organizer />)
 
-        expect(screen.getByText(/Powered by/i)).toBeDefined()
-        expect(screen.getByText(/Google Gemini/i)).toBeDefined()
+        expect(screen.getByText(/Gemini AI/i)).toBeDefined()
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 

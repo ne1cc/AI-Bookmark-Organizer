@@ -1,159 +1,135 @@
-# AI Bookmark Organizer (Chrome & Firefox Extension)
+# AI Bookmark Organizer (Chrome and Firefox Extension)
 
-Turn years of messy, unsorted bookmarks into a clean, browsable folder structure in one click — powered by Google Gemini via Google AI Studio or OpenRouter. Runs entirely in your browser's side panel (Chrome) or sidebar (Firefox): no account, no server, no data collection.
+Turn messy, unsorted bookmarks into a clean, organized folder structure in one click using AI (via Google AI Studio or OpenRouter). Runs locally in your browser side panel (Chrome) or sidebar (Firefox) with no account needed, no tracking, and no external servers.
 
-## 🚀 Features
+## Features
 
-- **One-Click Organization** — Reads your browser bookmarks and sorts hundreds or thousands of links into intuitive categories and subfolders automatically.
-- **Two-Phase AI Pipeline** — First generates a single global folder schema from your *entire* collection, then classifies every bookmark against that fixed schema. This eliminates the redundant near-duplicate folders ("Tech News" vs. "Tech Articles") that naive batch-by-batch classification produces.
-- **Adjustable Folder Granularity** — Choose how detailed the structure should be:
-  - **Compact (0–5)** subfolders per category — minimal, broad folders
-  - **Balanced (5–10)** — the recommended default
-  - **Detailed (10+)** — fine-grained, topic-specific folders
-- **Custom & Suggested Categories** — Start from 10 curated defaults (Technology & Coding, News & Research, Finance & Business, …), add your own custom categories, pick from instant suggested category badges (Health & Wellness, AI & ML, Recipes, Gaming, etc.), or use the 1-click "Clear All Categories" button.
-- **Model Selection** — Pick the Gemini model that fits your needs: **3.1 Flash Lite** (ultra-fast latency & minimal cost, recommended default), **3.8 Flash** (balanced intelligence for everyday collections), or **3.1 Pro Preview** (complex taxonomies & rich nested structures).
-- **Intra-Folder Content Sorting** — Choose how bookmarks are sorted inside each category folder:
-  - **Alphabetical (A–Z)**
-  - **Date Added (Newest First)**
-  - **Date Added (Oldest First)**
-  - **Website / Domain (A–Z)**
-- **Flat Chronological Date Sorting (0 AI Tokens)** — Optional offline mode to compile all bookmarks strictly by timestamp without folders or AI schema design (100% offline & free).
-- **Clean Titles with AI** — Optional smart title rewriting to shorten bloated URL titles and strip boilerplate tracking tags.
-- **Two Input Modes**
-  - **Browser mode**: Organizes your live bookmarks into a dated folder (e.g. `AI Organized Bookmarks-YYYY-MM-DD` or `Chronological Bookmarks-YYYY-MM-DD`) under *Other Bookmarks*.
-  - **File mode**: Drag & drop any exported `bookmarks.html`, get back a cleaned-up, importable HTML file — works with bookmarks from any browser with memory-bounded favicon preservation.
-- **Input Bookmarks Management** — Dropped or uploaded bookmark files are cached locally in extension storage. An interactive **Input Bookmarks card** displays file metadata, bookmark count, and date span, with 1-click actions to **Download** (pristine original file), **Re-organize**, or **Remove**.
-- **Original Date Preservation via In-Place Moves** — Uses `chrome.bookmarks.move` rather than re-creating bookmarks, ensuring original `dateAdded` timestamps remain 100% intact across reorganization.
-- **Mandatory Pre-Write Safety Snapshot** — Automatically exports a safety backup HTML file to your Downloads folder before making any changes in browser mode, guaranteeing zero risk of data loss.
-- **Oldest-Survivor Deduplication** — When duplicate URL detection is enabled, the oldest bookmark entry survives to retain longevity and date provenance.
-- **Comprehensive Date Range Visibility** — Oldest-to-newest date ranges are displayed across the app: in the input file card, live progress pills, last-run banner, schema drawer header, completion stats pill, and download file metadata.
-- **Accurate Completion Feedback** — The completion banner explicitly names the created dated folder under *Other Bookmarks* and confirms the safety backup download.
-- **Multi-Browser Support** — Runs natively on both **Google Chrome** (MV3 Side Panel) and **Mozilla Firefox** (MV3 Sidebar).
-- **Persistent Background Execution** — Organization runs reliably in the background service worker even if the side panel or sidebar is closed. Reopening seamlessly reconnects to live progress and logs, and a native desktop notification alerts you when complete.
-- **Failure Isolation & Resilient Retries** — Individual bookmark move failures are isolated without aborting the run and surfaced in the logs/stats pill. Bookmarks are classified in concurrent batches with automatic rate-limit backoff, sub-batch subdivision, and a live Cancel button.
-- **Light / Dark / System Themes** — Clean modern UI with a slate-blue palette derived from the app icon, with a one-click theme toggle.
+- One-Click Organizing: Automatically sorts hundreds or thousands of messy bookmarks into clear, logical folders.
+- No Duplicate Folders: Plans the full folder layout first before sorting, so you never get redundant folders like "Tech Articles" and "Tech News".
+- Choose Folder Detail: Pick how many subfolders you want:
+  - Compact (0 to 5 subfolders per topic) for simple, broad categories.
+  - Balanced (5 to 10 subfolders) for everyday collections (recommended).
+  - Detailed (10+ subfolders) for deep, topic-specific organization.
+- Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
+- Model Options: Choose the Gemini model that fits your needs:
+  - Gemini 3.1 Flash Lite: Fast, low cost, and great for most collections (default).
+  - Gemini 3.8 Flash: Balanced speed and categorization quality.
+  - Gemini 3.1 Pro Preview: Best for very large or complex bookmark collections.
+- Sort Inside Folders: Order links inside each folder alphabetically, by date added (newest or oldest first), or by website name.
+- Sort by Date (Free, Offline): A fast offline mode that sorts all bookmarks into a simple date timeline without using any AI tokens.
+- Clean Up Titles: Optionally shortens long, cluttered webpage titles and strips tracking text.
+- Keeps Original Dates: Moves bookmarks directly so your original "date added" timestamps are never lost or overwritten.
+- Automatic Safety Backup: Automatically saves an HTML backup of your bookmarks to your Downloads folder before making changes.
+- Remove Duplicates: Detects repeated links and removes duplicates, keeping the oldest copy.
+- View Bookmark Date Ranges: Shows the full date range of your collection (e.g. 2021 to 2026) in the status banner and completion screens.
+- Two Ways to Organize:
+  - Browser Mode: Organizes your active browser bookmarks into a new dated folder (e.g. "AI Organized Bookmarks-YYYY-MM-DD") under Other Bookmarks.
+  - File Mode: Drag and drop an exported bookmarks HTML file from any browser and download an organized file back.
+- Saved Input File Card: Uploaded files stay available in the extension so you can re-organize, redownload the untouched original, or remove the file anytime.
+- Works in Chrome and Firefox: Runs in the Chrome Side Panel or the Firefox Sidebar.
+- Background Processing: Continues working even if you close the side panel or sidebar, and sends a desktop notification when done.
+- Light, Dark, and System Themes: Clean design that matches your system or preference.
 
-## ⚙️ How It Works
+## How It Works
 
-1. **Read** — Collects bookmarks from your browser (or an uploaded HTML file). Only titles and URLs are used.
-2. **Snapshot** — In browser mode, automatically writes a safety backup HTML file to your Downloads before any bookmarks are moved.
-3. **Design** — Gemini analyzes the full collection and proposes a non-redundant two-level folder schema, guided by your category and granularity preferences.
-4. **Classify** — Bookmarks are classified in parallel batches against that fixed schema, so every link lands in exactly one folder.
-5. **Write & Move** — In browser mode, bookmarks are moved into their dated destination folder preserving original timestamps. In file mode, an organized HTML file is prepared for instant download.
+1. Read: The extension reads your bookmarks (or an uploaded HTML bookmark file).
+2. Backup: In browser mode, it saves a backup HTML file to your Downloads folder first.
+3. Design: The AI reviews your collection and creates a clean folder layout.
+4. Sort: Links are placed into their best matching folders.
+5. Finish: In browser mode, bookmarks are placed into a new dated folder in your browser. In file mode, your organized bookmark file is ready to download.
 
-## 📥 Installation
+## Installation
 
-You can install this extension manually by downloading the latest release.
+### Chrome
 
-**➡️ [Download the latest release (v1.2.1)](https://github.com/ne1cc/Bookmark-Organizer-Chrome-Extension/releases/latest)**
+1. Download the latest release zip (bookmark-organizer-chrome-v*.zip) from the Releases page.
+2. Unzip the file on your computer.
+3. Open Chrome and go to `chrome://extensions`.
+4. Turn on Developer mode (toggle in the top-right corner).
+5. Click Load unpacked and select the unzipped folder.
+6. Click the extension icon in your toolbar to open the Side Panel.
 
-### Chrome Installation
-1. **Download**: Grab the latest release zip from the [Releases page](https://github.com/ne1cc/Bookmark-Organizer-Chrome-Extension/releases/latest).
-2. **Unzip**: Extract the zip file to a folder on your computer.
-3. **Open Chrome Extensions**:
-   - Type `chrome://extensions` in your address bar.
-   - Enable **Developer mode** (top right switch).
-4. **Load**:
-   - Click **Load unpacked**.
-   - Select the unzipped folder (or `dist` folder if building from source).
-5. **Done!** The extension icon will appear in your toolbar. Click it to open the Side Panel.
+Requires Chrome 114 or newer.
 
-> Requires Chrome 114 or newer (uses the Side Panel API).
+### Firefox
 
-### Firefox Installation
-1. Build from source using `npm run build:firefox` or package via `npm run package:firefox`.
-2. Open `about:debugging#/runtime/this-firefox` in Firefox.
-3. Click **Load Temporary Add-on…** and select `dist/manifest.json`.
-4. The extension will open in Firefox's Sidebar.
+1. Download the latest release zip (bookmark-organizer-firefox-v*.zip) from the Releases page.
+2. Open Firefox and go to `about:debugging#/runtime/this-firefox`.
+3. Click Load Temporary Add-on and select `manifest.json` from the unzipped folder.
+4. The extension opens directly in the Firefox Sidebar.
 
 ### Build from Source
+
 ```bash
 git clone https://github.com/ne1cc/Bookmark-Organizer-Chrome-Extension.git
 cd Bookmark-Organizer-Chrome-Extension/frontend
 npm install
 
-# Build both browsers at once:
+# Build both browsers:
 npm run build:all
 
 # Or build individually:
-npm run build:chrome    # Outputs unpacked extension to dist/chrome
-npm run build:firefox   # Outputs unpacked extension to dist/firefox
+npm run build:chrome    # Outputs to dist/chrome
+npm run build:firefox   # Outputs to dist/firefox
 
 # Package release zip files:
-npm run package:all     # Packages both Chrome and Firefox zips in dist/
-npm run package:chrome  # Packages dist/bookmark-organizer-chrome-v*.zip
-npm run package:firefox # Packages dist/bookmark-organizer-firefox-v*.zip and source zip
+npm run package:all     # Generates Chrome and Firefox zips in dist/
+npm run package:chrome  # Generates dist/bookmark-organizer-chrome-v*.zip
+npm run package:firefox # Generates dist/bookmark-organizer-firefox-v*.zip
 
-# Run automated test suites:
+# Run tests:
 npm test
 ```
 
-## 🔑 Getting Started
+## Getting Started
 
-1. Create a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey) (`AIza...`) or [OpenRouter](https://openrouter.ai/keys) (`sk-or-...`). Direct minimal links are provided right below the input field in the extension.
-2. Click the extension icon to open the side panel and paste your key. The extension detects its provider automatically; it is stored locally in your browser and only sent to that provider for authentication.
-3. Pick a model, tune your categories and folder sorting (optional), and hit **Organize My Bookmarks** (or toggle **Sort by Date Added** for 0-token offline sorting).
+1. Get a free API key from Google AI Studio or OpenRouter (quick links are provided directly inside the extension).
+2. Click the extension icon to open the side panel or sidebar and paste your key. Your key is stored securely on your computer and is only sent to your chosen provider.
+3. Choose your preferred categories and sorting options, then click Organize My Bookmarks.
 
-## 📋 Changelog
+## Privacy
 
-### v1.2.1 (Latest Release) — Date Preservation, Move Architecture & Firefox Support
+Your data stays private:
+- No user accounts and no analytics.
+- Your API key is stored locally in your browser.
+- Bookmark titles and URLs are sent directly to Google AI Studio or OpenRouter for organization and are never stored on any middleman server.
+- Review the full Privacy Policy in the `docs/privacy.html` file.
 
-#### 🌟 New Features & Enhancements
-- **In-Place Move Architecture & Date Preservation**: Replaced node re-creation with `chrome.bookmarks.move`, guaranteeing that original `dateAdded` timestamps survive reorganization 100% intact.
-- **Mandatory Pre-Write Safety Snapshot**: In browser mode, an automatic pre-write HTML backup is downloaded to your Downloads folder before any bookmark moves begin.
-- **Input Bookmarks Card**: Dropped or uploaded bookmark files are cached in local storage with an interactive card showing file metadata, count, and date span, plus 1-click actions to **Download** (pristine original file), **Re-organize**, or **Remove**.
-- **Firefox MV3 Multi-Browser Support**: Added native Firefox support with sidebar integration (`sidebar_action`), multi-target Vite builds (`build:chrome` and `build:firefox`), and automated packaging (`package:firefox`).
-- **Oldest-Survivor Deduplication**: When duplicate removal is enabled, the oldest bookmark entry survives to preserve original date provenance.
-- **Comprehensive Date Range Reporting**: Oldest-to-newest date ranges are displayed across all surfaces (Input Bookmarks card, live progress pills, last-run banner, schema drawer header, completion stats pill, and download tooltip).
-- **Accurate Completion Messaging**: The completion screen explicitly names the created dated folder under *Other Bookmarks* (`AI Organized Bookmarks-YYYY-MM-DD` or `Chronological Bookmarks-YYYY-MM-DD`) and notes the safety backup file download.
-- **Refined Intra-Folder Sorting**: Streamlined intra-folder sorting to 4 core modes: Alphabetical (A–Z), Date Added (Newest First), Date Added (Oldest First), and Website / Domain (A–Z).
+## Tech Stack
 
-#### 🛡️ Reliability & Performance
-- **Per-Item Failure Isolation**: Bookmark move errors are isolated per-node without crashing the batch run, and failed moves are surfaced in the logs and last-run banner.
-- **Storage-Backed Snapshot Provider**: Background service worker organization reliably generates safety snapshots across process restarts.
-- **Synchronous Storage Bootstrap**: Instant side panel boot (<200ms) with `localStorage` fast-path and memory-backed session cache.
+- Frontend: React 19 and Vite
+- Extension: Manifest V3 (Chrome Side Panel and Firefox Sidebar)
+- AI: Google Gemini models via Google AI Studio or OpenRouter API
 
----
+## Changelog
 
-### v1.2.0 — Major Feature & Reliability Release
+### v1.2.1
 
-#### 🌟 New Features & Enhancements
-- **Intra-Folder Content Sorting**: Added folder sorting schemas (`Alphabetical A–Z`, `Date Added Newest First`, `Date Added Oldest First`, and `By Website / Domain A–Z`).
-- **Sort by Date Added (Flat List)**: Added an independent chronological ordering mode that bypasses folder generation and uses **0 AI tokens** (100% offline & free), styled with a refined slate neutral border. Toggled off by default on every extension open.
-- **Clean Titles with AI**: Added an optional setting to intelligently clean and shorten truncated or messy web titles.
-- **Gemini Model Lineup Update**: Upgraded default model to `Gemini 3.1 Flash Lite` for near-instant latency and lowest token consumption, alongside `Gemini 3.8 Flash` and `Gemini 3.1 Pro Preview`.
-- **Quick API Key Links**: Added minimal direct links below the API key input to jump straight to Google AI Studio and OpenRouter key generation pages in a new tab.
-- **Suggested Categories & Clear All**: Added a curated suggested category pool (Health & Wellness, AI & ML, Recipes, Gaming, etc.) with quick-add buttons and a 1-click "Clear All Categories" button.
-- **Instant Schema Copy**: Added a button to copy the generated category distribution breakdown directly to the clipboard.
+- Keeps Original Bookmark Dates: Reorganized bookmarks keep their original saved dates intact.
+- Automatic Pre-Write Backup: Downloads an HTML backup to your Downloads folder before browser bookmarks are moved.
+- File Card Management: Uploaded bookmark files are saved in the extension with one-click buttons to download the original, re-organize, or delete.
+- Full Firefox Support: Native support for Firefox Sidebar with automated build and packaging scripts.
+- Keep Oldest Copy on Deduplication: When duplicate removal is enabled, the oldest saved link is preserved.
+- Date Range Visibility: Clear date spans are displayed across all screens so you can see the age range of your bookmarks.
+- Clear Completion Details: Shows the exact folder name created in your browser and notes the backup download.
 
-#### 🛡️ Reliability & Performance Fixes
-- **Sub-Second Instant Startup (<200ms)**: Added synchronous in-process memory bootstrap (`localStorage` fast-path), deferred LevelDB disk cleanup, and an inline CSS pre-render skeleton in `index.html`, eliminating cold-start disk contention and cutting side panel launch latency from >10s to under 200ms.
-- **Side Panel Startup Fix**: Fixed toolbar click conflicts by properly managing `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` without duplicate action listeners.
-- **Storage Optimization & Instant Boot**: Moved ephemeral bookmark tree caching from disk LevelDB to memory-based session storage (`chrome.storage.session`), keeping persistent storage tiny (<5 KB) and eliminating cold-start delays.
-- **Adaptive Sub-Batch Subdivision**: Automatically splits batches if payload limits or context boundaries are exceeded, preventing `413 Payload Too Large` errors on massive collections.
-- **Resilient Retry Backoff**: Enhanced exponential backoff with server-directed cooldowns and rate-limit handling.
-- **Safe CSP Compliance**: Disabled external link prefetch probing that previously triggered strict Manifest V3 Content Security Policy warnings.
+### v1.2.0
 
----
+- Folder Content Sorting: Added sorting options for links inside folders (alphabetical, newest first, oldest first, and by domain).
+- Free Offline Date Sort: Added a 100% free mode that organizes bookmarks into a date timeline without using AI tokens.
+- Title Cleanup: Added an option to clean and shorten cluttered webpage titles.
+- Updated Models: Added Gemini 3.1 Flash Lite as the default fast, low-cost model, along with Gemini 3.8 Flash and Gemini 3.1 Pro Preview.
+- Fast Launch: Reduced side panel launch time to under 200ms.
+- Category Helpers: Added suggested categories and a clear-all button.
 
 ### v1.1.4
-- Added duplicate URL detection and removal toggle.
-- Added support for large HTML bookmark imports with memory-bounded favicon handling.
-- Improved live progress logging terminal.
 
-## 🔒 Privacy
-
-We do not collect data. Your API key is stored locally in your browser. Bookmark titles and URLs are sent directly to Google AI Studio or OpenRouter for categorization and immediately discarded — there is no middleman server.
-[Read our Privacy Policy](docs/privacy.html)
-
-## 🛠️ Tech Stack
-
-- **Frontend**: React 19 + Vite, rendered in Chrome's Side Panel and Firefox's Sidebar
-- **AI**: Google Gemini models via Google AI Studio or the OpenRouter API
-- **Extension**: Manifest V3 (`storage`, `unlimitedStorage`, `bookmarks`, `downloads`, `sidePanel` / `sidebarAction`, `notifications`)
+- Duplicate URL removal.
+- Better handling for large bookmark files and icons.
+- Live progress log.
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0** — see the [LICENSE](LICENSE) file for the full text.
+This project is licensed under the GNU General Public License v3.0. See the LICENSE file for details.
 
 Copyright (C) 2026 Amado Evert
