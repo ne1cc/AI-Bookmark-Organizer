@@ -561,7 +561,7 @@ body {
   padding: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--surface-solid);
 }
 
 .zoom-control {

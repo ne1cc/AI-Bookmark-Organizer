@@ -7,7 +7,7 @@ import { X } from 'lucide-react'
 import ZoomControl from './components/ZoomControl'
 
 function App() {
-  const { theme, setTheme } = useTheme()
+  const { theme, resolved, setTheme } = useTheme()
   const { zoom, increase, decrease, reset } = useZoom()
 
   const handleClose = () => {
@@ -54,7 +54,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        <Organizer />
+        <Organizer theme={resolved} />
       </main>
     </div>
   )
