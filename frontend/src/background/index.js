@@ -54,10 +54,20 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
 
                 case 'START_JOB':
                     try {
+                        // Acknowledge before the run starts: the panel falls
+                        // back to an in-panel run when this never arrives,
+                        // because a port whose service worker went idle
+                        // swallows postMessage silently.
+                        port.postMessage({ type: 'JOB_ACK', payload: {} });
+                    } catch {}
+                    try {
                         const { config, parsedBookmarks } = msg.payload || {};
                         await jobRunner.startJob(config, parsedBookmarks);
                     } catch (err) {
                         console.error('[Background] Job start error:', err);
+                        try {
+                            port.postMessage({ type: 'JOB_ERROR', payload: { message: err?.message || 'Background organization failed to start.' } });
+                        } catch {}
                     }
                     break;
 
