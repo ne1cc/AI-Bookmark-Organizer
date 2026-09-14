@@ -76,7 +76,7 @@ describe('generateNetscapeHTML subfolder alignment with browser writes', () => {
         expect(folderNames(html).filter(n => n === 'News')).toHaveLength(2)
     })
 
-    it('leaves the flat chronological export untouched', () => {
+    it('leaves the flat chronological export untouched when items have no category', () => {
         const bookmarks = [
             { title: 'One', url: 'https://one.example.com', category: null, sub_category: null },
             { title: 'Two', url: 'https://two.example.com', category: null, sub_category: null }
@@ -87,6 +87,19 @@ describe('generateNetscapeHTML subfolder alignment with browser writes', () => {
 
         expect(folderNames(html)).toEqual([])
         expect(linkTitles(html)).toEqual(['One', 'Two'])
+    })
+
+    it('generates month-year tier folders for chronological bookmarks with categories', () => {
+        const bookmarks = [
+            { title: 'New Item', url: 'https://new.com', category: 'September 2026' },
+            { title: 'Old Item', url: 'https://old.com', category: 'July 2024' }
+        ]
+        bookmarks.isFlat = true
+
+        const html = generateNetscapeHTML(bookmarks)
+
+        expect(folderNames(html)).toEqual(['September 2026', 'July 2024'])
+        expect(linkTitles(html)).toEqual(['New Item', 'Old Item'])
     })
 })
 

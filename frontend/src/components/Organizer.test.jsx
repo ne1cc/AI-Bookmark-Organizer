@@ -106,7 +106,6 @@ describe('Organizer Component UI Tests', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Detailed (6-10)' }))
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
     })
-    })
 
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
@@ -199,7 +198,7 @@ describe('Organizer Component UI Tests', () => {
     it('allows toggling flat date sort (0 AI tokens) which makes API key optional', () => {
         render(<Organizer />)
 
-        const flatToggle = screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i })
+        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
         act(() => {
@@ -214,10 +213,10 @@ describe('Organizer Component UI Tests', () => {
     it('toggles flat date sort when the card title is clicked', () => {
         render(<Organizer />)
 
-        const flatToggle = screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i })
+        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
-        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by Date Added (Flat List)' })
+        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by date added - Flat list' })
         act(() => {
             fireEvent.click(titleButton)
         })
@@ -233,7 +232,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         act(() => {
-            fireEvent.click(screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i }))
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
         })
 
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
@@ -243,7 +242,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         act(() => {
-            fireEvent.click(screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i }))
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
         })
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
 

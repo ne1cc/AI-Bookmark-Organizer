@@ -49,6 +49,12 @@ const manyBookmarks = Array.from({ length: 50 }, (_, i) => ({
 }))
 
 describe('subfolderBounds', () => {
+    it('supports restrained realistic folder ranges', () => {
+        expect(subfolderBounds('1-3')).toEqual({ ask: [1, 3], min: 1, max: 3 })
+        expect(subfolderBounds('3-6')).toEqual({ ask: [3, 6], min: 2, max: 6 })
+        expect(subfolderBounds('6-10')).toEqual({ ask: [6, 10], min: 3, max: 10 })
+    })
+
     it('maps each granularity setting to its ask range, floor and ceiling', () => {
         expect(subfolderBounds('0-5')).toEqual({ ask: [3, 5], min: 2, max: 5 })
         expect(subfolderBounds('5-10')).toEqual({ ask: [5, 10], min: 3, max: 10 })
@@ -79,7 +85,7 @@ describe('validateSchema', () => {
     it('counts spacing and plural variants as one subcategory when validating depth', () => {
         const result = validateSchema({ categories: [{
             name: 'Tech', sub_categories: ['Developer Tools', 'Developer Tool', 'Developer  Tools']
-        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40 })
+        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40, subfolderTarget: '5-10' })
 
         expect(result.schema.categories[0].sub_categories).toEqual(['Developer Tools'])
         expect(result.ok).toBe(false)
@@ -229,6 +235,7 @@ describe('validateSchema', () => {
         expect(result.schema.categories[0].name).toBe('Tech & Development')
         expect(result.schema.categories[0].sub_categories).toEqual(['Web Dev', 'AI', 'DevOps'])
     })
+
 })
 
 describe('salvagePartialJson', () => {

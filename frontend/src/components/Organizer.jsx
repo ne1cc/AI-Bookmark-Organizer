@@ -1174,7 +1174,7 @@ export default function Organizer() {
                 </div>
             )}
 
-            {/* Sort by Date Added (Flat List) — Conditionally Active Flat Pipeline */}
+            {/* Sort by date added - Flat list — Conditionally Active Flat Pipeline */}
             {status === 'idle' && (
                 <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -1200,7 +1200,7 @@ export default function Organizer() {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        aria-label="Toggle Sort by Date Added (Flat List)"
+                                        aria-label="Toggle Sort by date added - Flat list"
                                         onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                                         style={{
                                             display: 'block',
@@ -1215,7 +1215,7 @@ export default function Organizer() {
                                             textAlign: 'left'
                                         }}
                                     >
-                                        Sort by Date Added (Flat List)
+                                        Sort by date added - Flat list
                                     </button>
                                     <span style={{
                                         fontSize: '0.68rem',
@@ -1238,7 +1238,7 @@ export default function Organizer() {
                         </div>
                         <button
                             role="switch"
-                            aria-label="Sort by Date Added (Flat List)"
+                            aria-label="Sort by date added - Flat list"
                             aria-checked={flatDateSort}
                             onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                             style={{

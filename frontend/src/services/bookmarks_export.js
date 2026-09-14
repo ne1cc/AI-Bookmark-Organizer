@@ -41,7 +41,7 @@ function sanitizeUrl(url) {
     }
 }
 
-export function generateNetscapeHTML(bookmarks) {
+export function generateNetscapeHTML(bookmarks, options = {}) {
     const now = Math.floor(Date.now() / 1000);
     const dateSpan = bookmarks?.stats?.dateSpan || bookmarks?.dateSpan || calculateDateSpan(bookmarks);
     let html = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
@@ -54,7 +54,8 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
 <DL><p>
 `;
 
-    const isFlat = Boolean(bookmarks?.isFlat) || (Array.isArray(bookmarks) && bookmarks.length > 0 && bookmarks.every(b => !b.category));
+    const hasCategories = Array.isArray(bookmarks) && bookmarks.some(b => Boolean(b.category));
+    const isFlat = Boolean(options?.isFlat) || Boolean(bookmarks?.isBare) || (!hasCategories && Boolean(bookmarks?.isFlat)) || (Array.isArray(bookmarks) && bookmarks.length > 0 && !hasCategories);
 
     if (isFlat) {
         bookmarks.forEach(item => {
@@ -141,9 +142,10 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
 
 export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.html", options = {}) {
     const { saveAs = true } = options;
-    const defaultName = bookmarks?.isFlat ? "chronological_bookmarks.html" : "organized_bookmarks.html";
-    const actualFilename = filename === "organized_bookmarks.html" ? defaultName : filename;
-    const html = generateNetscapeHTML(bookmarks);
+    const isFlat = Boolean(options?.isFlat || bookmarks?.isFlat || bookmarks?.isBare);
+    const defaultName = bookmarks?.filename || (isFlat ? "chronological_bookmarks.html" : "organized_bookmarks.html");
+    const actualFilename = (filename === "organized_bookmarks.html" && bookmarks?.filename) ? bookmarks.filename : (filename === "organized_bookmarks.html" ? defaultName : filename);
+    const html = generateNetscapeHTML(bookmarks, options);
 
     let url;
     if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {

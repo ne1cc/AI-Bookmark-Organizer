@@ -48,7 +48,7 @@ export default defineConfig({
     outDir,
     emptyOutDir: true,
     cssCodeSplit: false,
-    modulePreload: { polyfill: false },
+    modulePreload: false,
     rollupOptions: {
       input: {
         index: join(import.meta.dirname, 'index.html'),

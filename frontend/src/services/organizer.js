@@ -1,4 +1,4 @@
-import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId } from './bookmarks';
+import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
 import { generateSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories } from './reconcile';
@@ -109,8 +109,73 @@ export function dedupeFromIndex(links, urlIndex) {
     return { survivors, doomed, duplicatesRemoved: doomed.length };
 }
 
-export { getBookmarkTimestamp, calculateDateSpan } from '../utils/dates';
-import { getBookmarkTimestamp, calculateDateSpan } from '../utils/dates';
+// Standalone one-click duplicate removal for browser bookmarks.
+// Scans full bookmark hierarchy, archives a pre-write backup to storage,
+// and deletes duplicate nodes while preserving the oldest occurrence.
+export async function removeBrowserDuplicates({ snapshot = true } = {}) {
+    const tree = await getBookmarks();
+    if (!tree || tree.length === 0) {
+        return { totalScanned: 0, duplicatesRemoved: 0, failedCount: 0 };
+    }
+
+    const allLinks = flattenBookmarks(tree);
+    if (!allLinks || allLinks.length === 0) {
+        return { totalScanned: 0, duplicatesRemoved: 0, failedCount: 0 };
+    }
+
+    const urlIndex = buildUrlIndex(allLinks);
+    const { survivors, doomed, duplicatesRemoved } = dedupeFromIndex(allLinks, urlIndex);
+
+    if (duplicatesRemoved === 0 || !doomed || doomed.length === 0) {
+        return { totalScanned: allLinks.length, duplicatesRemoved: 0, failedCount: 0 };
+    }
+
+    if (snapshot && typeof chrome !== 'undefined' && chrome?.storage?.local) {
+        try {
+            const items = [...survivors, ...doomed].map((b) => ({
+                title: b.title,
+                url: b.url,
+                add_date: b.add_date || (b.dateAdded ? String(Math.floor(b.dateAdded / 1000)) : undefined)
+            }));
+            await new Promise((resolve) => {
+                chrome.storage.local.set(
+                    { preWriteBackup: { savedAt: Date.now(), count: items.length, items } },
+                    () => resolve()
+                );
+            });
+        } catch {}
+    }
+
+    let failedCount = 0;
+    for (const node of doomed) {
+        try {
+            await removeBookmark(node.id);
+        } catch {
+            failedCount++;
+        }
+    }
+
+    return {
+        totalScanned: allLinks.length,
+        duplicatesRemoved: doomed.length - failedCount,
+        failedCount
+    };
+}
+
+export {
+    getBookmarkTimestamp,
+    calculateDateSpan,
+    getMonthYearBucket,
+    sortMonthYearBuckets,
+    getStandardizedOutputLabel
+} from '../utils/dates';
+import {
+    getBookmarkTimestamp,
+    calculateDateSpan,
+    getMonthYearBucket,
+    sortMonthYearBuckets,
+    getStandardizedOutputLabel
+} from '../utils/dates';
 
 
 // Normalizes and extracts hostname/domain from bookmark URL
@@ -274,7 +339,6 @@ export class OrganizerService {
 
     async prepareSnapshot(survivors, doomedDuplicates) {
         if (!this.snapshotProvider) {
-            const { downloadBookmarks } = await import('./bookmarks_export');
             this.snapshotProvider = async (surv, doomed) => {
                 // No filename: the exporter keeps its organized_bookmarks.html default (spec §8).
                 // saveAs: false — a Save-As dialog on every organize run would be hostile.
@@ -372,6 +436,7 @@ export class OrganizerService {
     // defaults. Halving the sample relieves the token pressure that truncates
     // large structures, and the balanced granularity asks for less than '10+'.
     async retrySchemaOnSmallerSample(activeLinks) {
+        if (this.isCancelled) return null;
         // Halve the sample limit rather than slicing the head off the list:
         // exports are grouped by folder, so the first N bookmarks are one
         // corner of the collection. generateSchema spaces the sample itself.
@@ -567,9 +632,10 @@ export class OrganizerService {
                 processedLinks = cleanedBatches.flat().filter(Boolean);
             }
 
-            // Ensure no categories/folders are attached
-            const finalResults = processedLinks.map(b => ({
+            // Ensure no categories/folders are attached by default
+            let finalResults = processedLinks.map((b, idx) => ({
                 ...b,
+                _origIndex: idx,
                 category: null,
                 sub_category: null
             }));
@@ -588,12 +654,13 @@ export class OrganizerService {
                     if (timeA !== timeB) {
                         return isDesc ? timeB - timeA : timeA - timeB;
                     }
+                    return (a.title || '').localeCompare(b.title || '');
                 } else if (timeA > 0) {
                     return -1; // Valid timestamp comes before missing timestamp
                 } else if (timeB > 0) {
                     return 1;  // Missing timestamp goes to bottom
                 }
-                return (a.title || '').localeCompare(b.title || '');
+                return (a._origIndex ?? 0) - (b._origIndex ?? 0);
             });
 
             finalResults.isFlat = true;
@@ -604,33 +671,101 @@ export class OrganizerService {
                 this.onProgress({ status: 'info', message: `Date range: ${dateSpan}`, dateSpan });
             }
 
-            this.stats = {
-                total: finalResults.length,
-                duplicatesRemoved,
-                deadLinksArchived: 0,
-                categoriesCount: 0,
-                categoryBreakdown: {},
-                isFlat: true,
+            const labels = getStandardizedOutputLabel({
+                flatDateSort: true,
                 dateSortOrder: this.dateSortOrder,
-                dateSpan,
-                failedMoves: this.failedMoves
-            };
-            finalResults.stats = this.stats;
+                date: new Date()
+            });
 
             if (fileBookmarks) {
+                this.stats = {
+                    total: finalResults.length,
+                    duplicatesRemoved,
+                    deadLinksArchived: 0,
+                    categoriesCount: 0,
+                    categoryBreakdown: {},
+                    isFlat: true,
+                    dateSortOrder: this.dateSortOrder,
+                    dateSpan,
+                    failedMoves: this.failedMoves,
+                    folderTitle: labels.rootFolderTitle
+                };
+                finalResults.stats = this.stats;
+                finalResults.filename = labels.downloadFilename;
+
                 this.onProgress({ status: 'info', message: `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
                 downloadBookmarks(finalResults);
             } else {
+                // Browser mode (no file uploaded): bucket into MECE Month & Year tiers
+                const bucketMap = new Map();
+                for (const item of finalResults) {
+                    const bucket = getMonthYearBucket(item);
+                    item.category = bucket;
+                    if (!bucketMap.has(bucket)) bucketMap.set(bucket, []);
+                    bucketMap.get(bucket).push(item);
+                }
+
+                const categoryBreakdown = {};
+                bucketMap.forEach((items, bucket) => {
+                    categoryBreakdown[bucket] = items.length;
+                });
+
+                this.stats = {
+                    total: finalResults.length,
+                    duplicatesRemoved,
+                    deadLinksArchived: 0,
+                    categoriesCount: bucketMap.size,
+                    categoryBreakdown,
+                    isFlat: true,
+                    dateSortOrder: this.dateSortOrder,
+                    dateSpan,
+                    failedMoves: this.failedMoves,
+                    folderTitle: labels.rootFolderTitle
+                };
+                finalResults.stats = this.stats;
+                finalResults.filename = labels.downloadFilename;
+
                 this.onProgress({ status: 'info', message: `Saving ${finalResults.length.toLocaleString()} chronological bookmarks${dateSpan ? ` (${dateSpan})` : ''} to browser...`, dateSpan });
                 if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
                 const rootId = await getOtherBookmarksRootId();
-                const folderTitle = "Chronological Bookmarks-" + new Date().toISOString().slice(0, 10);
-                const rootFolder = await findOrCreateFolder(rootId, folderTitle);
+                let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
+            if (!rootFolder && labels.legacyFolderTitle) {
+                rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
+            }
                 clearFolderCache();
 
-                await this.moveItems(finalResults.map(item => ({ item, parentId: rootFolder.id })));
-                await this.removeDoomedDuplicates();
-                await this.reorderFolder(rootFolder.id, finalResults.map(r => r.id));
+                // Sort month-year buckets chronologically
+                const sortedBuckets = sortMonthYearBuckets(Array.from(bucketMap.keys()), isDesc);
+                const movePlan = [];
+                const createdFolders = new Map();
+
+                for (const bucketName of sortedBuckets) {
+                    if (this.isCancelled) break;
+                    const bucketFolder = await findOrCreateFolder(rootFolder.id, bucketName);
+                    createdFolders.set(bucketName, bucketFolder);
+                    const bucketItems = bucketMap.get(bucketName) || [];
+                    for (const item of bucketItems) {
+                        movePlan.push({ item, parentId: bucketFolder.id });
+                    }
+                }
+
+                if (!this.isCancelled) {
+                    await this.moveItems(movePlan);
+                }
+                if (!this.isCancelled) {
+                    await this.removeDoomedDuplicates();
+                }
+
+                // Group by parentId to reorder once per folder (idempotent)
+                const byFolder = new Map();
+                for (const { item, parentId } of movePlan) {
+                    if (!byFolder.has(parentId)) byFolder.set(parentId, []);
+                    byFolder.get(parentId).push(item.id);
+                }
+                for (const [parentId, expectedIds] of byFolder) {
+                    if (this.isCancelled) break;
+                    await this.reorderFolder(parentId, expectedIds);
+                }
             }
 
             if (this.isCancelled) {
@@ -658,7 +793,11 @@ export class OrganizerService {
 
         if (activeLinks.length > 0) {
             // --- Phase 1: Generate Schema ---
-            this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate a clean, non-redundant folder structure...' });
+            if (this.categories && this.categories.length > 0) {
+                this.onProgress({ status: 'info', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...` });
+            } else {
+                this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate categories automatically...' });
+            }
             if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
                 this.onProgress({ status: 'info', message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.` });
             }
@@ -954,6 +1093,12 @@ export class OrganizerService {
         let dateSpan = calculateDateSpan(finalResults) || this.dateSpan;
         this.dateSpan = dateSpan;
 
+        const labels = getStandardizedOutputLabel({
+            flatDateSort: false,
+            schemaSortOrder: this.schemaSortOrder,
+            date: new Date()
+        });
+
         if (fileBookmarks) {
             this.onProgress({ status: 'info', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
             try {
@@ -962,11 +1107,22 @@ export class OrganizerService {
                 console.warn('[Organizer] Download invocation deferred:', dlErr);
             }
         } else {
+            if (this.isCancelled) {
+                this.onProgress({ status: 'warning', message: 'Cancelled — halting operations.' });
+                return null;
+            }
             // Browser mode: relocate existing bookmarks (spec §6)
             this.onProgress({ status: 'info', message: `Reorganizing ${finalResults.length.toLocaleString()} bookmarks${dateSpan ? ` (${dateSpan})` : ''} in the browser...`, dateSpan });
             if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
+            if (this.isCancelled) {
+                this.onProgress({ status: 'warning', message: 'Cancelled — halting operations.' });
+                return null;
+            }
             const rootId = await getOtherBookmarksRootId(); // 'Other Bookmarks' (Chrome: '2', Firefox: 'unfiled_____')
-            const rootFolder = await findOrCreateFolder(rootId, "AI Organized Bookmarks-" + new Date().toISOString().slice(0, 10));
+            let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
+            if (!rootFolder && labels.legacyFolderTitle) {
+                rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
+            }
             clearFolderCache();
 
             const createdFolders = {}; // path key -> folder Object
@@ -1008,8 +1164,22 @@ export class OrganizerService {
                 itemsWithParents.push({ item, parentId: targetParentId });
             }
 
+            if (this.isCancelled) {
+                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
+                return null;
+            }
+
             await this.moveItems(itemsWithParents);
+            if (this.isCancelled) {
+                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
+                return null;
+            }
+
             await this.removeDoomedDuplicates();
+            if (this.isCancelled) {
+                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
+                return null;
+            }
 
             const byFolder = new Map();
             for (const { item, parentId } of itemsWithParents) {
@@ -1017,13 +1187,16 @@ export class OrganizerService {
                 byFolder.get(parentId).push(item.id);
             }
             for (const [parentId, expectedIds] of byFolder) {
+                if (this.isCancelled) break;
                 await this.reorderFolder(parentId, expectedIds);
             }
             // Reused folders retain their old positions until explicitly moved.
             const categoryIds = [...categoryRank.keys()]
                 .map(category => createdFolders[category]?.id)
                 .filter(id => id != null);
-            await this.reorderFolder(rootFolder.id, categoryIds);
+            if (rootFolder?.id && categoryIds.length > 0) {
+                await this.reorderFolder(rootFolder.id, categoryIds);
+            }
         }
 
         if (this.isCancelled) {
@@ -1053,9 +1226,11 @@ export class OrganizerService {
             isFlat: false,
             schemaSortOrder: this.schemaSortOrder,
             dateSpan,
-            failedMoves: this.failedMoves
+            failedMoves: this.failedMoves,
+            folderTitle: labels.rootFolderTitle
         };
         finalResults.stats = this.stats;
+        finalResults.filename = labels.downloadFilename;
 
         // Log flat category breakdown to terminal
         this.onProgress({ status: 'info', message: 'Category breakdown:' });

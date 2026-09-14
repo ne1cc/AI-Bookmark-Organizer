@@ -163,13 +163,20 @@ if (typeof chrome !== 'undefined' && chrome.notifications?.onClicked) {
     });
 }
 
+// Configure session storage access level for side panel contexts if supported
+if (typeof chrome !== 'undefined' && chrome.storage?.session?.setAccessLevel) {
+    try {
+        chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' }).catch(() => {});
+    } catch {}
+}
+
 // 1. Run on extension install or update
 if (typeof chrome !== 'undefined' && chrome.runtime?.onInstalled) {
     chrome.runtime.onInstalled.addListener(() => {
         console.log('AI Bookmark Organizer extension installed/updated.');
         setupSidePanel();
         if (chrome.storage?.local) {
-            chrome.storage.local.remove(['organizedData', 'flatDateSort'], () => {
+            chrome.storage.local.remove(['flatDateSort'], () => {
                 if (chrome.runtime?.lastError) {
                     console.warn('Legacy storage cleanup failed:', chrome.runtime.lastError.message);
                 }

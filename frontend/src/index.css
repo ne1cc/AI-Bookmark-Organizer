@@ -138,10 +138,64 @@ body {
 
 .header-top {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
+}
+
+.header-top-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-top-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.remove-duplicates-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 36px;
+  padding: 0 0.75rem;
+  border-radius: 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.remove-duplicates-btn:hover:not(:disabled) {
+  background: var(--surface-solid);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.remove-duplicates-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.remove-duplicates-btn.is-success {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: rgb(16, 185, 129);
+}
+
+.remove-duplicates-btn.is-error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: rgb(239, 68, 68);
 }
 
 .header-close-btn {
