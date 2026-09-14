@@ -176,6 +176,55 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByText(/Optional for flat date sorting/i)).toBeDefined()
     })
 
+    it('toggles flat date sort when the card title is clicked', () => {
+        render(<Organizer />)
+
+        const flatToggle = screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+
+        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by Date Added' })
+        act(() => {
+            fireEvent.click(titleButton)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+
+        act(() => {
+            fireEvent.click(titleButton)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+    })
+
+    it('shows the default direction readout after enabling flat date sort', () => {
+        render(<Organizer />)
+
+        act(() => {
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i }))
+        })
+
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+    })
+
+    it('flips the direction readout text once per click while flat date sort is enabled', () => {
+        render(<Organizer />)
+
+        act(() => {
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by Date Added \(Flat List\)/i }))
+        })
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'Newest bookmarks at the top' }))
+        })
+        expect(screen.getByText('Oldest bookmarks at the top')).toBeDefined()
+        expect(screen.queryByText('Newest bookmarks at the top')).toBeNull()
+
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'Oldest bookmarks at the top' }))
+        })
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+        expect(screen.queryByText('Oldest bookmarks at the top')).toBeNull()
+    })
+
     it('provides cancel button during processing that invokes organizer.cancel()', async () => {
         localStorage.setItem('apiKey', 'sk-or-test-12345')
 
