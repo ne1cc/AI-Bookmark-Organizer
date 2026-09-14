@@ -47,28 +47,39 @@ describe('App Component Layout', () => {
         expect(closeBtn).toBeDefined()
     })
 
-    it('keeps the app open when the close confirmation is cancelled', () => {
+    it('shows a gentle close reminder without closing the app', () => {
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
         const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
-        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
 
         render(<App />)
         const closeBtn = screen.getByRole('button', { name: /close extension/i })
         fireEvent.click(closeBtn)
 
-        expect(confirmSpy).toHaveBeenCalledWith('Close the app? This will stop any current runs and clear their data.')
+        expect(screen.getByRole('dialog').textContent).toContain('Close the app? This will stop any current runs and clear their data.')
         expect(dispatchSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'extension-close-requested' }))
         expect(closeSpy).not.toHaveBeenCalled()
     })
 
-    it('closes the app after the close confirmation is accepted', () => {
+    it('keeps the app open when the close reminder is cancelled', () => {
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
         const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
-        vi.spyOn(window, 'confirm').mockReturnValue(true)
 
         render(<App />)
-        const closeBtn = screen.getByRole('button', { name: /close extension/i })
-        fireEvent.click(closeBtn)
+        fireEvent.click(screen.getByRole('button', { name: /close extension/i }))
+        fireEvent.click(screen.getByRole('button', { name: /keep working/i }))
+
+        expect(screen.queryByRole('dialog')).toBeNull()
+        expect(dispatchSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'extension-close-requested' }))
+        expect(closeSpy).not.toHaveBeenCalled()
+    })
+
+    it('closes the app after the close reminder is accepted', () => {
+        const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+        const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+
+        render(<App />)
+        fireEvent.click(screen.getByRole('button', { name: /close extension/i }))
+        fireEvent.click(screen.getByRole('button', { name: /close app/i }))
 
         expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'extension-close-requested' }))
         expect(closeSpy).toHaveBeenCalledTimes(1)

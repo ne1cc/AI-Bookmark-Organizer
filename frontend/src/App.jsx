@@ -4,16 +4,15 @@ import RemoveDuplicatesButton from './components/RemoveDuplicatesButton'
 import { useTheme } from './hooks/useTheme'
 import { useZoom } from './hooks/useZoom'
 import { X } from 'lucide-react'
+import { useState } from 'react'
 import ZoomControl from './components/ZoomControl'
 
 function App() {
   const { theme, resolved, setTheme } = useTheme()
   const { zoom, increase, decrease, reset } = useZoom()
+  const [showCloseConfirmation, setShowCloseConfirmation] = useState(false)
 
-  const handleClose = () => {
-    const shouldClose = window.confirm('Close the app? This will stop any current runs and clear their data.')
-    if (!shouldClose) return
-
+  const closeApp = () => {
     try {
       window.dispatchEvent(new CustomEvent('extension-close-requested'))
     } catch {}
@@ -32,7 +31,7 @@ function App() {
             <ZoomControl zoom={zoom} increase={increase} decrease={decrease} reset={reset} />
             <ThemeToggle theme={theme} setTheme={setTheme} />
             <button
-              onClick={handleClose}
+              onClick={() => setShowCloseConfirmation(true)}
               title="Close Extension"
               className="header-close-btn"
               aria-label="Close Extension"
@@ -41,6 +40,16 @@ function App() {
             </button>
           </div>
         </div>
+
+        {showCloseConfirmation && (
+          <div className="close-confirmation" role="dialog" aria-label="Close app confirmation">
+            <p>Close the app? This will stop any current runs and clear their data.</p>
+            <div className="close-confirmation-actions">
+              <button type="button" onClick={() => setShowCloseConfirmation(false)}>Keep working</button>
+              <button type="button" onClick={closeApp}>Close app</button>
+            </div>
+          </div>
+        )}
 
         {/* Title block */}
         <div className="header-title-block">
