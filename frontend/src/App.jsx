@@ -2,11 +2,14 @@ import Organizer from './components/Organizer'
 import ThemeToggle from './components/ThemeToggle'
 import RemoveDuplicatesButton from './components/RemoveDuplicatesButton'
 import { useTheme } from './hooks/useTheme'
+import { useZoom } from './hooks/useZoom'
 import { X } from 'lucide-react'
 import { useState } from 'react'
+import ZoomControl from './components/ZoomControl'
 
 function App() {
-  const { theme, setTheme } = useTheme()
+  const { theme, resolved, setTheme } = useTheme()
+  const { zoom, increase, decrease, reset } = useZoom()
   const [showCloseConfirmation, setShowCloseConfirmation] = useState(false)
 
   const closeApp = () => {
@@ -25,6 +28,7 @@ function App() {
             <RemoveDuplicatesButton />
           </div>
           <div className="header-top-right">
+            <ZoomControl zoom={zoom} increase={increase} decrease={decrease} reset={reset} />
             <ThemeToggle theme={theme} setTheme={setTheme} />
             <button
               onClick={() => setShowCloseConfirmation(true)}
@@ -59,7 +63,7 @@ function App() {
       </header>
 
       <main className="app-main">
-        <Organizer />
+        <Organizer theme={resolved} />
       </main>
     </div>
   )

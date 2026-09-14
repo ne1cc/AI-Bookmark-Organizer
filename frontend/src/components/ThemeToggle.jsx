@@ -16,16 +16,7 @@ export default function ThemeToggle({ theme, setTheme }) {
         <div
             role="radiogroup"
             aria-label="Theme"
-            style={{
-                display: 'inline-flex',
-                gap: '2px',
-                padding: '3px',
-                borderRadius: '10px',
-                background: 'var(--surface-alt)',
-                border: '1px solid var(--border)',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-            }}
+            className="theme-toggle"
         >
             {options.map(({ id, icon, label }) => {
                 const active = theme === id
@@ -38,19 +29,7 @@ export default function ThemeToggle({ theme, setTheme }) {
                         aria-label={label}
                         title={label}
                         onClick={() => setTheme(id)}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            width: '30px',
-                            height: '30px',
-                            borderRadius: '7px',
-                            border: 'none',
-                            cursor: 'pointer',
-                            background: active ? 'var(--accent)' : 'transparent',
-                            color: active ? 'var(--on-accent)' : 'var(--text-muted)',
-                            boxShadow: active ? '0 1px 6px var(--accent-glow)' : 'none',
-                        }}
+                        className={active ? 'theme-toggle-option active' : 'theme-toggle-option'}
                     >
                         {createElement(icon, { size: 16 })}
                     </button>
