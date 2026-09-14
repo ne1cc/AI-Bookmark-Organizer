@@ -1,3 +1,5 @@
+import { buildAuthoritativeSchema } from './defaultSchema';
+
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
     "Content-Type": "application/json",
@@ -662,11 +664,11 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
-    PREFERRED TOP-LEVEL CATEGORIES (a starting point — adapt to the actual bookmarks):
+    FIXED TOP-LEVEL CATEGORIES (use every name exactly as written; do not rename, omit, or add categories):
     ${JSON.stringify(baseCategories)}
 
     STRUCTURE RULES
-    4. Top-level categories: aim for 8-10 broad, clearly distinct categories. Every bookmark must have a natural home.
+    4. The fixed top-level categories above are authoritative. Design subcategories inside each one; every bookmark must have a natural home.
     5. NON-REDUNDANCY IS CRITICAL. Sub-categories within a category MUST be mutually exclusive. Never create near-duplicates or synonyms as separate folders. Collapse "Tech News" + "Tech Articles" + "Tech Blogs" + "Tech Reports" into ONE folder. Collapse "Career Advice" + "Career Pathways" + "Career Roles" into ONE folder. Collapse "JS" + "JavaScript" into ONE. If two folder names could plausibly hold the same bookmark, merge them.
     6. Group by the user's INTENT, not surface keywords. Ask "why did they save this?" Links saved for the same purpose belong together even when their titles look different.
 
@@ -708,7 +710,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: baseCategories };
 
     const first = validateSchema(await attempt(null), options);
-    if (first.ok) return first.schema;
+    if (first.ok) return buildAuthoritativeSchema(baseCategories, first.schema);
 
     // One corrective round-trip naming exactly what was wrong. Models that
     // return a flat structure usually fix it when told so explicitly.
@@ -717,7 +719,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     }
 
     const second = validateSchema(await attempt(first.issues), options);
-    if (second.ok) return second.schema;
+    if (second.ok) return buildAuthoritativeSchema(baseCategories, second.schema);
 
     const error = new Error(`the AI returned a folder structure without usable subcategories (${second.issues.join('; ')})`);
     error.schemaInvalid = true;
@@ -824,4 +826,3 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
         });
     }, 5, 1500, isCancelled, onRetry);
 }
-

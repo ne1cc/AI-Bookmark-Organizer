@@ -264,11 +264,28 @@ describe('generateSchema validation and corrective retry', () => {
     it('returns the schema unchanged when the first response is already valid', async () => {
         global.fetch = vi.fn(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
         expect(schema.categories).toHaveLength(3)
         expect(schema.categories[0].sub_categories).toContain('Trading & Markets')
+    })
+
+    it('uses the selected category names verbatim and ignores model-invented top-level categories', async () => {
+        const selected = ['Finance & CRYPTO', 'Tech & Development', 'Personal Research']
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify({
+            categories: [
+                { name: 'finance & crypto', sub_categories: ['Trading & Markets', 'Crypto & Blockchain', 'Investing & Wealth'] },
+                { name: 'Tech & Development', sub_categories: ['Web Development', 'DevOps & Cloud', 'Security'] },
+                { name: 'Invented Category', sub_categories: ['One', 'Two', 'Three'] }
+            ]
+        })))
+
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', selected, undefined, '5-10')
+
+        expect(schema.categories.map(c => c.name)).toEqual(selected)
+        expect(schema.categories[0].sub_categories).toEqual(['Trading & Markets', 'Crypto & Blockchain', 'Investing & Wealth'])
+        expect(schema.categories[2].sub_categories).toEqual(['General'])
     })
 
     it('re-prompts once when the model returns a flat schema, and accepts the correction', async () => {
@@ -277,7 +294,7 @@ describe('generateSchema validation and corrective retry', () => {
             .mockImplementationOnce(async () => orResponse(JSON.stringify(flat)))
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(schema.categories).toHaveLength(3)
@@ -492,8 +509,7 @@ describe('truncation handling differs between schema design and classification',
         const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Finance'], undefined, '0-5')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        // The three complete categories survive; the half-written fourth is dropped.
-        expect(schema.categories.map(c => c.name)).toEqual(['Finance', 'Tech', 'Travel'])
+        expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
     })
 
     it('re-prompts when a salvaged schema is too narrow to classify the collection against', async () => {
@@ -512,7 +528,7 @@ describe('truncation handling differs between schema design and classification',
         expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content)
             .toMatch(/covered only 2 categories; at least 3 are needed/)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(sixCategories)
     })
 
     it('still retries a truncated schema when nothing can be recovered', async () => {
@@ -523,7 +539,7 @@ describe('truncation handling differs between schema design and classification',
         const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(2)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
     })
 
     it('never salvages a truncated classification batch, since the tail would be lost bookmarks', async () => {
@@ -583,7 +599,7 @@ describe('native Gemini response path', () => {
         const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Finance'], undefined, '0-5')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        expect(schema.categories.map(c => c.name)).toEqual(['Finance', 'Tech', 'Travel'])
+        expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
     })
 
     it('reassembles a response split across several content parts', async () => {
@@ -594,7 +610,7 @@ describe('native Gemini response path', () => {
         const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, '5-10')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
-        expect(schema.categories).toHaveLength(3)
+        expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
     })
 
     it('treats a safety block as permanent and does not retry it', async () => {
