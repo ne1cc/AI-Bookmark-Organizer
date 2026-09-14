@@ -159,6 +159,7 @@ export class BackgroundJobRunner {
             this.addLog(`Folder Content Sorting: ${schemaSortOrder || 'Alphabetical (A–Z)'}`);
             this.addLog(`Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`);
             this.addLog(`Clean Bookmark Titles: ${cleanTitles ? 'On' : 'Off'}`);
+            this.addLog(`Category Source: ${inferCategories ? 'AI inferred from bookmarks' : `${categories.length} manual categories`}`);
         }
 
         this.organizer = new OrganizerService(

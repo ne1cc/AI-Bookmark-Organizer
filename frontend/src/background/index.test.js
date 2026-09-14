@@ -120,9 +120,10 @@ describe('Background Service Worker Entry Point', () => {
 
         // Success path: JOB_ACK is posted immediately on receipt, before the
         // run starts, so the panel can tell a live worker from a dead port.
-        startHandler({ type: 'START_JOB', payload: { config: { apiKey: 'k' }, parsedBookmarks: null } });
+        const inferredConfig = { apiKey: 'k', categories: [], inferCategories: true };
+        startHandler({ type: 'START_JOB', payload: { config: inferredConfig, parsedBookmarks: null } });
         expect(port.postMessage).toHaveBeenCalledWith({ type: 'JOB_ACK', payload: {} });
-        await vi.waitFor(() => expect(startSpy).toHaveBeenCalledWith({ apiKey: 'k' }, null));
+        await vi.waitFor(() => expect(startSpy).toHaveBeenCalledWith(inferredConfig, null));
 
         // Failure path: start failures surface as JOB_ERROR in the panel
         // instead of dying silently in the worker console.

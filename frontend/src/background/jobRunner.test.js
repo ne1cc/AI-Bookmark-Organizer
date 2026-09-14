@@ -1,11 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackgroundJobRunner } from './jobRunner';
+import { OrganizerService } from '../services/organizer';
+
+vi.mock('../services/organizer', () => ({
+    OrganizerService: vi.fn(function (apiKey, categories, onProgress) {
+        this.onProgress = onProgress;
+        this.start = vi.fn(async () => [
+            { title: 'Example 1', url: 'https://example.com/1' },
+            { title: 'Example 2', url: 'https://example.com/2' }
+        ]);
+        this.cancel = vi.fn();
+        this.isCancelled = false;
+        this.stats = null;
+    })
+}));
 
 describe('BackgroundJobRunner', () => {
     let runner;
 
     beforeEach(() => {
         vi.useFakeTimers();
+        OrganizerService.mockClear();
 
         // Mock chrome extension APIs
         globalThis.chrome = {
@@ -89,7 +104,6 @@ describe('BackgroundJobRunner', () => {
         // Check that state immediately transitions to processing
         expect(runner.getState().status).toBe('processing');
         expect(globalThis.chrome.storage.session.set).toHaveBeenCalled();
-
         // Simulate OrganizerService callback
         runner.organizer.onProgress({
             status: 'progress',
@@ -116,6 +130,40 @@ describe('BackgroundJobRunner', () => {
                 organizedData: results
             })
         );
+    });
+
+    it('forwards inferred category mode to OrganizerService and logs its source', async () => {
+        const config = {
+            apiKey: 'AIzaSyFakeKey',
+            categories: [],
+            inferCategories: true,
+            selectedModel: 'google/gemini-3.8-flash',
+            subfolderTarget: '5-10',
+            sortAlphabetically: true,
+            removeDuplicates: true,
+            cleanTitles: false,
+            flatDateSort: false,
+            dateSortOrder: 'desc',
+            schemaSortOrder: 'alpha'
+        };
+
+        await runner.startJob(config, null);
+
+        expect(OrganizerService).toHaveBeenCalledWith(
+            expect.any(String),
+            [],
+            expect.any(Function),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            false,
+            expect.anything(),
+            expect.anything(),
+            true
+        );
+        expect(runner.getState().logs.map(log => log.message)).toContain('Category Source: AI inferred from bookmarks');
     });
 
     it('keeps service worker alive during job and stops keep-alive on completion', async () => {
