@@ -46,9 +46,24 @@ describe('App Component Layout', () => {
         expect(closeBtn).toBeDefined()
     })
 
-    it('triggers extension-close-requested custom event on close click', () => {
+    it('keeps the app open when the close confirmation is cancelled', () => {
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
         const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+        render(<App />)
+        const closeBtn = screen.getByRole('button', { name: /close extension/i })
+        fireEvent.click(closeBtn)
+
+        expect(confirmSpy).toHaveBeenCalledWith('Close the app? This will stop any current runs and clear their data.')
+        expect(dispatchSpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'extension-close-requested' }))
+        expect(closeSpy).not.toHaveBeenCalled()
+    })
+
+    it('closes the app after the close confirmation is accepted', () => {
+        const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+        const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
 
         render(<App />)
         const closeBtn = screen.getByRole('button', { name: /close extension/i })

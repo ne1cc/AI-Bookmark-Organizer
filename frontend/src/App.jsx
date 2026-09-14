@@ -8,6 +8,9 @@ function App() {
   const { theme, setTheme } = useTheme()
 
   const handleClose = () => {
+    const shouldClose = window.confirm('Close the app? This will stop any current runs and clear their data.')
+    if (!shouldClose) return
+
     try {
       window.dispatchEvent(new CustomEvent('extension-close-requested'))
     } catch {}
