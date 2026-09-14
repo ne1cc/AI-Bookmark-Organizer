@@ -76,9 +76,8 @@ export function buildAuthoritativeSchema(categories, candidateSchema = null) {
  * Assemble the best schema available without a working AI response.
  *
  * Prefers whatever the model did return for a category, then the curated
- * structure, and finally an empty list. An empty list is not a dead end: the
- * classifier falls back to "General", which both write paths file directly
- * under the category rather than inside a literal "General" folder.
+ * structure, and finally the category-scoped `General` fallback. `General`
+ * is filed directly under its category rather than inside a literal folder.
  *
  * @param {string[]} categories - the user's configured top-level categories.
  * @param {Object} [partialSchema] - salvage from a failed generateSchema call.

@@ -425,7 +425,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         expect(new Set(result.map(r => r.category))).toEqual(new Set(['Tech & Development']))
     })
 
-    it('coerces an invented category to Other/General', async () => {
+    it('coerces invented and omitted categories to the first approved category', async () => {
         global.fetch = vi.fn(async () => classifyResponse([
             { i: 0, category: 'Totally Made Up', sub_category: 'Something' },
             { i: 1, category: 'Tech & Development', sub_category: 'Databases' },
@@ -434,7 +434,7 @@ describe('classifyBatch hybrid subcategory proposals', () => {
 
         const result = await classifyBatch(threeBookmarks, 'sk-or-test-key', healthySchema)
 
-        expect(result[0].category).toBe('Other')
+        expect(result[0].category).toBe('Finance & Crypto')
         expect(result[0].sub_category).toBe('General')
         expect(result[0].proposed).toBeUndefined()
     })
@@ -450,8 +450,8 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         expect(result).toHaveLength(3)
         expect(result[0]).toMatchObject({ category: 'Tech & Development', sub_category: 'General' })
         expect(result[0].proposed).toBeUndefined()
-        expect(result[1]).toMatchObject({ category: 'Other', sub_category: 'General' })
-        expect(result[2]).toMatchObject({ category: 'Other', sub_category: 'General' })
+        expect(result[1]).toMatchObject({ category: 'Finance & Crypto', sub_category: 'General' })
+        expect(result[2]).toMatchObject({ category: 'Finance & Crypto', sub_category: 'General' })
     })
 
     it('preserves clean titles and source fields alongside a proposed subcategory', async () => {

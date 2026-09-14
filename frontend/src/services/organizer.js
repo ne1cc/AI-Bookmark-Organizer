@@ -1,5 +1,5 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId } from './bookmarks';
-import { generateSchema, classifyBatch, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, classifyBatch, fallbackCategoryForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories } from './reconcile';
 import { buildFallbackSchema } from './defaultSchema';
@@ -343,15 +343,16 @@ export class OrganizerService {
             }
 
             console.error(`Batch ${label} failed on second pass:`, err);
+            const fallbackCategory = fallbackCategoryForSchema(schema);
             this.onProgress({
                 status: 'warning',
                 message: isNetwork
-                    ? `Batch ${label} could not be classified due to network issues (${err.message}). Its ${batchData.length} bookmarks were filed under Other → General so none are lost.`
-                    : `Batch ${label} could not be classified (${err.message}). Its ${batchData.length} bookmarks were filed under Other → General so none are lost.`
+                    ? `Batch ${label} could not be classified due to network issues (${err.message}). Its ${batchData.length} bookmarks were filed under ${fallbackCategory} → General so none are lost.`
+                    : `Batch ${label} could not be classified (${err.message}). Its ${batchData.length} bookmarks were filed under ${fallbackCategory} → General so none are lost.`
             });
             return batchData.map(b => ({
                 ...b,
-                category: 'Other',
+                category: fallbackCategory,
                 sub_category: 'General'
             }));
         }

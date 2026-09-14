@@ -283,7 +283,7 @@ describe('classifyBatch cleanTitles option', () => {
 
         // Bookmark 2 has no clean_title -> retains original title
         expect(result[2].title).toBe('Clean Blog')
-        expect(result[2].category).toBe('Other')
+        expect(result[2].category).toBe('Development')
         expect(result[2].sub_category).toBe('General')
 
         // Verify prompt contains title cleanup instructions and updated example return schema
@@ -804,12 +804,15 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         expect(results.filter(b => b.sub_category === 'Backend')).toHaveLength(5)
     })
 
-    it('falls back to Other -> General only when batch size <= 5 and still fails on retry', async () => {
+    it('falls back to the first selected category when batch size <= 5 and still fails on retry', async () => {
         vi.spyOn(console, 'error').mockImplementation(() => {})
         vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
 
         vi.spyOn(ai, 'generateSchema').mockResolvedValue({
-            categories: [{ name: 'Engineering', sub_categories: [] }]
+            categories: [
+                { name: 'Engineering', sub_categories: [] },
+                { name: 'Finance', sub_categories: [] }
+            ]
         })
 
         const bookmarks = Array.from({ length: 4 }, (_, i) => ({
@@ -827,14 +830,15 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = new OrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(results).toHaveLength(4)
-        // All 4 filed under Other -> General so none are lost
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        // All 4 remain inside the selected hierarchy, under its deterministic
+        // fallback category, so no unselected top-level folder is created.
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
 
-        const fallbackMsg = progressMessages.find(m => m.includes('Its 4 bookmarks were filed under Other → General so none are lost.'))
+        const fallbackMsg = progressMessages.find(m => m.includes('Its 4 bookmarks were filed under Engineering → General so none are lost.'))
         expect(fallbackMsg).toBeDefined()
     })
 
@@ -947,7 +951,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
     })
 
     it('does not recursively subdivide on network errors or request timeouts', async () => {
@@ -978,7 +982,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5 when network fails
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
         const warningMsg = progressMessages.find(m => m.includes('Failed to fetch'))
         expect(warningMsg).toBeDefined()
     })
@@ -1012,7 +1016,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5 on rate limits
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
     })
 
     it('aborts immediately and reports error when navigator.onLine is false for AI modes', async () => {
