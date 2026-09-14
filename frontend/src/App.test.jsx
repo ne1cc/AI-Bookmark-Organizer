@@ -8,6 +8,7 @@ vi.mock('./components/Organizer', () => ({
 
 describe('App Component Layout', () => {
     beforeEach(() => {
+        localStorage.clear()
         global.chrome = {
             storage: {
                 session: {
@@ -56,5 +57,26 @@ describe('App Component Layout', () => {
 
         expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'extension-close-requested' }))
         expect(closeSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('lets people increase, decrease, and reset the interface zoom', () => {
+        render(<App />)
+
+        const increase = screen.getByRole('button', { name: /increase zoom/i })
+        const decrease = screen.getByRole('button', { name: /decrease zoom/i })
+        const reset = screen.getByRole('button', { name: /reset zoom/i })
+
+        expect(reset.textContent).toBe('100%')
+
+        fireEvent.click(increase)
+        expect(reset.textContent).toBe('110%')
+        expect(document.documentElement.style.getPropertyValue('--ui-scale')).toBe('1.1')
+
+        fireEvent.click(decrease)
+        fireEvent.click(decrease)
+        expect(reset.textContent).toBe('90%')
+
+        fireEvent.click(reset)
+        expect(reset.textContent).toBe('100%')
     })
 })
