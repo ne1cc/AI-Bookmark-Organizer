@@ -1673,10 +1673,10 @@ export default function Organizer() {
                                 {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
                             </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                            <button type="button" onClick={handleDownloadInput} title="Download the original file">Download</button>
-                            <button type="button" onClick={handleReorganizeInput} title="Organize from the cached original again">Re-organize</button>
-                            <button type="button" onClick={handleRemoveInput} title="Forget the cached input">Remove</button>
+                        <div className="input-file-actions">
+                            <button className="input-file-action input-file-action-secondary" type="button" onClick={handleDownloadInput} title="Download the original file">Download</button>
+                            <button className="input-file-action input-file-action-primary" type="button" onClick={handleReorganizeInput} title="Organize from the cached original again">Re-organize</button>
+                            <button className="input-file-action input-file-action-danger" type="button" onClick={handleRemoveInput} title="Forget the cached input">Remove</button>
                         </div>
                     </div>
                 </div>

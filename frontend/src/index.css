@@ -358,6 +358,72 @@ body {
   width: 100%;
 }
 
+/* Cached input file actions — compact, semantic variants that stay quiet beside the card metadata. */
+.input-file-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.input-file-action {
+  min-height: 30px;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.input-file-action:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.input-file-action-primary {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border));
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.input-file-action-primary:hover {
+  border-color: var(--success);
+  background: var(--success);
+  color: var(--on-accent);
+}
+
+.input-file-action-danger {
+  border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  color: var(--error);
+}
+
+.input-file-action-danger:hover {
+  border-color: var(--error);
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.input-file-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.input-file-action:disabled {
+  border-color: var(--border);
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
 /* Terminal Output Panel */
 .terminal-panel {
   background: var(--terminal-bg);

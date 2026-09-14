@@ -671,6 +671,12 @@ describe('Input Bookmarks card', () => {
         expect(getByText('Download')).toBeTruthy()
         expect(getByText('Re-organize')).toBeTruthy()
         expect(getByText('Remove')).toBeTruthy()
+        expect(getByText('Download').classList.contains('input-file-action')).toBe(true)
+        expect(getByText('Download').classList.contains('input-file-action-secondary')).toBe(true)
+        expect(getByText('Re-organize').classList.contains('input-file-action')).toBe(true)
+        expect(getByText('Re-organize').classList.contains('input-file-action-primary')).toBe(true)
+        expect(getByText('Remove').classList.contains('input-file-action')).toBe(true)
+        expect(getByText('Remove').classList.contains('input-file-action-danger')).toBe(true)
     })
 
     it('Remove clears the card and calls the service', async () => {
@@ -694,4 +700,3 @@ describe('Input Bookmarks card', () => {
         )
     })
 })
-
