@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
-import { saveInputBookmarkFile, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
 
 export const DEFAULT_CATEGORIES = [
     'Work & Career',
@@ -221,6 +221,8 @@ export default function Organizer() {
     const cancelRequestedRef = useRef(false)
     const completionTimerRef = useRef(null)
     const resetAppRef = useRef(null)
+    const statusRef = useRef('idle')
+    useEffect(() => { statusRef.current = status }, [status])
 
     // How long the panel waits for the service worker to acknowledge a
     // START_JOB before assuming the port is dead and running the job in
@@ -245,10 +247,17 @@ export default function Organizer() {
 
     // Background job connection & state restoration hook
     useEffect(() => {
-        // 1. Initial check of session storage to restore any in-flight background job instantly
+        const t0 = performance.now()
+        const mark = (label) => console.log(`[Startup] ${label} +${(performance.now() - t0).toFixed(1)}ms`)
+        mark('panel mounted')
+
+        // 1. Initial check of session storage to restore any in-flight background job
+        //    instantly. Only the tiny job-state record is read here — the full
+        //    organized results are fetched on demand when the user downloads them.
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.get(['activeJobState', 'organizedData'], (res) => {
+                chrome.storage.session.get(['activeJobState'], (res) => {
+                    mark('session job state restored')
                     if (res?.activeJobState) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
@@ -262,8 +271,7 @@ export default function Organizer() {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
-                        } else if (aj.status === 'complete' && res.organizedData) {
-                            organizedResultsRef.current = res.organizedData;
+                        } else if (aj.status === 'complete') {
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             setStatus('complete');
                             setProgress(100);
@@ -285,6 +293,7 @@ export default function Organizer() {
             try {
                 const port = chrome.runtime.connect({ name: 'organizer-channel' });
                 portRef.current = port;
+                mark('background channel connected')
 
                 port.onMessage.addListener((msg) => {
                     if (!msg || !msg.type) return;
@@ -328,6 +337,15 @@ export default function Organizer() {
                             setBackgroundNotice('');
                         } else if (state.status === 'idle') {
                             setIsCancelling(false);
+                            // A stale session snapshot can leave the panel in a
+                            // zombie "In Progress" state with no worker behind
+                            // it. If the worker has no job and nothing is
+                            // running in this panel, return to the main menu.
+                            if (statusRef.current === 'processing' && !organizerRef.current) {
+                                setStatus('idle');
+                                setProgress(0);
+                                setBackgroundNotice('');
+                            }
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -603,10 +621,16 @@ export default function Organizer() {
         e.preventDefault();
     }, [])
 
-    // Restore the cached dropped-in file (spec §12) on mount.
+    // Restore the cached dropped-in file (spec §12) on mount. Only the tiny
+    // metadata record is read here; the multi-megabyte HTML is fetched from
+    // storage on demand (download / re-organize) so panel startup stays fast.
     useEffect(() => {
-        getInputBookmarkFile()
-            .then((entry) => { if (entry) setInputFile(entry) })
+        const t = performance.now()
+        getInputBookmarkMeta()
+            .then((entry) => {
+                console.log(`[Startup] input card metadata restored +${(performance.now() - t).toFixed(1)}ms`)
+                if (entry) setInputFile(entry)
+            })
             .catch(() => {})
     }, [])
 
@@ -614,10 +638,17 @@ export default function Organizer() {
         if (inputFile) downloadInputBookmarkFile(inputFile)
     }, [inputFile])
 
-    const handleReorganizeInput = useCallback(() => {
+    const handleReorganizeInput = useCallback(async () => {
         if (!inputFile) return
         try {
-            const links = parseBookmarks(inputFile.html)
+            const html = (typeof inputFile.html === 'string' && inputFile.html.length > 0)
+                ? inputFile.html
+                : await getInputBookmarkHtml()
+            if (!html) {
+                setErrorMsg('Cached input file content is missing — drop the file in again.')
+                return
+            }
+            const links = parseBookmarks(html)
             const span = calculateDateSpan(links)
             setParsedBookmarks(links)
             if (span) setActiveDateSpan(span)

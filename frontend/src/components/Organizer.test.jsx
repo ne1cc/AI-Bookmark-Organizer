@@ -38,7 +38,8 @@ vi.mock('../services/organizer', () => {
 vi.mock('../services/input_bookmarks', () => ({
     INPUT_MAX_BYTES: 25 * 1024 * 1024,
     saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, size: input.html.length, savedAt: 1757000000000 } })),
-    getInputBookmarkFile: vi.fn(async () => null),
+    getInputBookmarkMeta: vi.fn(async () => null),
+    getInputBookmarkHtml: vi.fn(async () => null),
     removeInputBookmarkFile: vi.fn(async () => {}),
     downloadInputBookmarkFile: vi.fn()
 }))
@@ -703,9 +704,9 @@ describe('In-process and completion date range display', () => {
 })
 
 describe('Input Bookmarks card', () => {
-    const cachedEntry = { filename: 'b.html', html: '<x/>', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
+    const cachedMeta = { filename: 'b.html', size: 4, savedAt: 1757000000000, count: 3462, dateSpan: null }
 
-    beforeEach(() => { inputService.getInputBookmarkFile.mockResolvedValue(null) })
+    beforeEach(() => { inputService.getInputBookmarkMeta.mockResolvedValue(null) })
     afterEach(() => { vi.clearAllMocks(); cleanup(); delete global.chrome })
 
     const chromeWith = (local = {}) => {
@@ -733,7 +734,7 @@ describe('Input Bookmarks card', () => {
 
     it('renders the cached input as a card with Download, Re-organize, Remove', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         expect(container.querySelector('.input-bookmarks-card').textContent).toContain('b.html')
@@ -751,7 +752,7 @@ describe('Input Bookmarks card', () => {
 
     it('Remove clears the card and calls the service', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Remove'))
@@ -761,12 +762,13 @@ describe('Input Bookmarks card', () => {
 
     it('Download emits the pristine original', async () => {
         chromeWith({})
-        inputService.getInputBookmarkFile.mockResolvedValue(cachedEntry)
+        inputService.getInputBookmarkMeta.mockResolvedValue(cachedMeta)
         const { container, getByText } = render(<Organizer />)
         await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
         fireEvent.click(getByText('Download'))
+        // The card holds metadata only; the service fetches the cached HTML itself.
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
-            expect.objectContaining({ html: '<x/>', filename: 'b.html' })
+            expect.objectContaining({ filename: 'b.html' })
         )
     })
 })
