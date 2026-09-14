@@ -12,7 +12,7 @@ Turn years of messy, unsorted bookmarks into a clean, browsable folder structure
   - **Detailed (10+)** — fine-grained, topic-specific folders
 - **Custom Categories** — Start from 10 sensible defaults (Technology & Coding, News & Research, Finance & Business, …) and add or remove top-level categories to fit your collection.
 - **Model Selection** — Pick the Gemini model that fits your needs: **3.1 Flash Lite** (ultra-fast latency & minimal cost, recommended default), **3.8 Flash** (balanced intelligence for everyday collections), or **3.1 Pro Preview** (complex taxonomies & rich nested structures).
-- **Intra-Folder Content Sorting** — Choose how bookmarks are sorted inside each category folder: Alphabetical (A–Z), Date Added (Newest First), Date Added (Oldest First), By Website / Domain (A–Z), or Reverse Alphabetical (Z–A).
+- **Intra-Folder Content Sorting** — Choose how bookmarks are sorted inside each category folder: Alphabetical (A–Z), Date Added (Newest First), Date Added (Oldest First), or By Website / Domain (A–Z).
 - **Flat Chronological Date Sorting (0 AI Tokens)** — Optional offline mode to compile all bookmarks strictly by timestamp without folders or AI schema design.
 - **Clean Titles with AI** — Optional smart title rewriting to shorten bloated URL titles and strip boilerplate tracking tags.
 - **Two Input Modes**
@@ -80,7 +80,7 @@ npm run package:firefox
 ### v1.2.0 (Latest Release) — Major Feature & Reliability Release
 
 #### 🌟 New Features & Enhancements
-- **Intra-Folder Content Sorting**: Added 5 folder sorting schemas (`Alphabetical A–Z`, `Date Added Newest First`, `Date Added Oldest First`, `By Website / Domain A–Z`, and `Reverse Alphabetical Z–A`).
+- **Intra-Folder Content Sorting**: Added 4 folder sorting schemas (`Alphabetical A–Z`, `Date Added Newest First`, `Date Added Oldest First`, and `By Website / Domain A–Z`).
 - **Sort by Date Added (Flat List)**: Added an independent chronological ordering mode that bypasses folder generation and uses **0 AI tokens** (100% offline & free), styled with a refined slate neutral border. Toggled off by default on every extension open.
 - **Clean Titles with AI**: Added an optional setting to intelligently clean and shorten truncated or messy web titles.
 - **Gemini Model Lineup Update**: Upgraded default model to `Gemini 3.1 Flash Lite` for near-instant latency and lowest token consumption, alongside `Gemini 3.8 Flash` and `Gemini 3.1 Pro Preview`.

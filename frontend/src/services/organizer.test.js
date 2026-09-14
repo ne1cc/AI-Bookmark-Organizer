@@ -1405,10 +1405,10 @@ describe('getBookmarkDomain', () => {
 })
 
 describe('SCHEMA_SORT_OPTIONS Configuration', () => {
-    it('defines all 5 sorting strategies with valid metadata and icons', () => {
-        expect(SCHEMA_SORT_OPTIONS).toHaveLength(5)
+    it('defines all 4 sorting strategies with valid metadata and icons', () => {
+        expect(SCHEMA_SORT_OPTIONS).toHaveLength(4)
         const ids = SCHEMA_SORT_OPTIONS.map(o => o.id)
-        expect(ids).toEqual(['alpha', 'date-desc', 'date-asc', 'domain', 'alpha-desc'])
+        expect(ids).toEqual(['alpha', 'date-desc', 'date-asc', 'domain'])
         for (const option of SCHEMA_SORT_OPTIONS) {
             expect(option.label).toBeTruthy()
             expect(option.badge).toBeTruthy()
@@ -1536,32 +1536,6 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             'YouTube Video'
         ])
         expect(service.stats.schemaSortOrder).toBe('domain')
-    })
-
-    it('sorts bookmarks inside folders reverse alphabetically when schemaSortOrder is alpha-desc', async () => {
-        const bookmarks = [
-            { title: 'Alpha Tech', url: 'https://tech.com/alpha' },
-            { title: 'Zeta Tech', url: 'https://tech.com/zeta' },
-            { title: 'Beta Tech', url: 'https://tech.com/beta' }
-        ]
-
-        const service = new OrganizerService(
-            'test-key',
-            ['Tech'],
-            () => {},
-            'google/gemini-3.1-flash-lite',
-            '5-10',
-            false,
-            true,
-            false,
-            false,
-            'desc',
-            'alpha-desc'
-        )
-
-        const results = await service.start(bookmarks)
-        expect(results.map(b => b.title)).toEqual(['Zeta Tech', 'Beta Tech', 'Alpha Tech'])
-        expect(service.stats.schemaSortOrder).toBe('alpha-desc')
     })
 
     it('sorts bookmarks inside folders alphabetically when schemaSortOrder is alpha', async () => {

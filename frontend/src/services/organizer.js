@@ -181,7 +181,7 @@ export class OrganizerService {
         this.flatDateSort = flatDateSort;
         this.dateSortOrder = dateSortOrder; // 'desc' (newest first) or 'asc' (oldest first)
 
-        // schemaSortOrder can be 'alpha', 'date-desc', 'date-asc', 'domain', 'alpha-desc', or 'none'
+        // schemaSortOrder can be 'alpha', 'date-desc', 'date-asc', 'domain', or 'none'
         if (schemaSortOrder !== undefined) {
             this.schemaSortOrder = schemaSortOrder;
             this.sortAlphabetically = schemaSortOrder === 'alpha';
@@ -876,8 +876,7 @@ export class OrganizerService {
                 'alpha': 'Alphabetical (A–Z)',
                 'date-desc': 'Date Added (Newest First)',
                 'date-asc': 'Date Added (Oldest First)',
-                'domain': 'Website / Domain (A–Z)',
-                'alpha-desc': 'Reverse Alphabetical (Z–A)'
+                'domain': 'Website / Domain (A–Z)'
             };
             const sortLabel = sortLabels[this.schemaSortOrder] || this.schemaSortOrder;
             this.onProgress({
@@ -924,9 +923,6 @@ export class OrganizerService {
                         const domainDiff = domainA.localeCompare(domainB);
                         if (domainDiff !== 0) return domainDiff;
                         return (a.title || '').localeCompare(b.title || '');
-                    }
-                    case 'alpha-desc': {
-                        return (b.title || '').localeCompare(a.title || '');
                     }
                     case 'alpha':
                     default: {

@@ -480,7 +480,8 @@ describe('In-process and completion date range display', () => {
         })
 
         await waitFor(() => {
-            expect(screen.getByText(/All Done! Check your "AI Organized Bookmarks" folder/i)).toBeDefined()
+            expect(screen.getByText(/All Done! Check your "AI Organized Bookmarks/i)).toBeDefined()
+            expect(screen.getByText(/A backup file was also saved to your downloads/i)).toBeDefined()
             expect(screen.getByText(/Date range:/i)).toBeDefined()
             expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i }).getAttribute('title')).toContain('Dates 1/1/2021')
         })

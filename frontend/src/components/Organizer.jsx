@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
+import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
@@ -60,14 +60,6 @@ export const SCHEMA_SORT_OPTIONS = [
         badge: 'Grouped',
         icon: Globe,
         desc: 'Groups bookmarks by domain (e.g. github.com, youtube.com), then title.'
-    },
-    {
-        id: 'alpha-desc',
-        label: 'Reverse Alphabetical (Z–A)',
-        short: 'Z–A',
-        badge: 'Z → A',
-        icon: ArrowUpAZ,
-        desc: 'Folders and bookmarks sorted in reverse alphabetical order Z to A.'
     }
 ];
 
@@ -91,7 +83,10 @@ const formatRunTime = (timestamp) => new Date(timestamp).toLocaleString(undefine
 });
 
 // Metadata persisted before the range became unconditional holds a single bare date.
-const formatDateSpan = (span) => (span.includes(' – ') ? span : `${span} – ${span}`);
+const formatDateSpan = (span) => {
+    if (!span) return '';
+    return (span.includes(' – ') || span.includes(' - ')) ? span : `${span} – ${span}`;
+};
 
 export default function Organizer() {
     const [status, setStatus] = useState('idle') // idle, processing, complete, error
@@ -176,7 +171,7 @@ export default function Organizer() {
         [categories]
     )
 
-    // Folder Content Sorting inside schema folders (alpha, date-desc, date-asc, domain, alpha-desc)
+    // Folder Content Sorting inside schema folders (alpha, date-desc, date-asc, domain)
     const [schemaSortOrder, setSchemaSortOrder] = useState(() => {
         try {
             const s = localStorage.getItem('schemaSortOrder')
@@ -1631,7 +1626,7 @@ export default function Organizer() {
                             </div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                 {parsedBookmarks
-                                    ? `${parsedBookmarks.length.toLocaleString()} bookmarks ready${activeDateSpan ? ` · Dates ${activeDateSpan}` : ''}`
+                                    ? `${parsedBookmarks.length.toLocaleString()} bookmarks ready${activeDateSpan ? ` · Dates ${formatDateSpan(activeDateSpan)}` : ''}`
                                     : 'Ready to process'}
                             </div>
                             <button
@@ -1674,7 +1669,7 @@ export default function Organizer() {
                             <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>Input Bookmarks</div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                 {inputFile.filename} · {(inputFile.count || 0).toLocaleString()} bookmarks
-                                {inputFile.dateSpan ? ` · Dates ${inputFile.dateSpan}` : ''}
+                                {inputFile.dateSpan ? ` · Dates ${formatDateSpan(inputFile.dateSpan)}` : ''}
                                 {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
                             </div>
                         </div>
@@ -1725,7 +1720,7 @@ export default function Organizer() {
                             )}
                             <button
                                 onClick={downloadOrganized}
-                                title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${lastOrganized.stats.dateSpan})` : 'Download bookmarks'}
+                                title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(lastOrganized.stats.dateSpan)})` : 'Download bookmarks'}
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
@@ -1756,7 +1751,7 @@ export default function Organizer() {
                                     Category Schema ({Object.keys(lastOrganized.stats.categoryBreakdown).length} categories)
                                     {lastOrganized.stats?.dateSpan && (
                                         <span style={{ fontWeight: 'normal', color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
-                                            · Dates {lastOrganized.stats.dateSpan}
+                                            · Dates {formatDateSpan(lastOrganized.stats.dateSpan)}
                                         </span>
                                     )}
                                 </span>
@@ -1808,8 +1803,15 @@ export default function Organizer() {
                         <div style={{ marginBottom: '0.75rem', color: 'var(--success)', fontSize: '1.2rem', fontWeight: 'bold' }}>
                             {uploadedFile
                                 ? "File Processed! Check your downloads."
-                                : (flatDateSort ? 'All Done! Check your "Chronological Bookmarks" folder.' : 'All Done! Check your "AI Organized Bookmarks" folder.')}
+                                : (flatDateSort
+                                    ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
+                                    : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`)}
                         </div>
+                        {!uploadedFile && (
+                            <div style={{ marginBottom: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                                (A backup file was also saved to your downloads)
+                            </div>
+                        )}
                         {lastOrganized?.stats && (
                             <div className="stats-pill" style={{
                                 display: 'inline-flex',
@@ -1856,7 +1858,7 @@ export default function Organizer() {
                                     </>
                                 )}
                                 <span>•</span>
-                                <span>{lastOrganized.stats.dateSpan ? `Dates ${lastOrganized.stats.dateSpan}` : 'Dates not recorded'}</span>
+                                <span>{lastOrganized.stats.dateSpan ? `Dates ${formatDateSpan(lastOrganized.stats.dateSpan)}` : 'Dates not recorded'}</span>
                             </div>
                         )}
                         {lastOrganized?.stats?.categoryBreakdown && Object.keys(lastOrganized.stats.categoryBreakdown).length > 0 && (
@@ -1949,7 +1951,7 @@ export default function Organizer() {
                                 <button
                                     className="btn-primary"
                                     onClick={downloadOrganized}
-                                    title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${lastOrganized.stats.dateSpan})` : 'Download bookmarks'}
+                                    title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(lastOrganized.stats.dateSpan)})` : 'Download bookmarks'}
                                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
                                 >
                                     <Download size={18} />
@@ -1957,7 +1959,7 @@ export default function Organizer() {
                                 </button>
                                 {lastOrganized.stats?.dateSpan && (
                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                        Date range: <strong>{lastOrganized.stats.dateSpan}</strong>
+                                        Date range: <strong>{formatDateSpan(lastOrganized.stats.dateSpan)}</strong>
                                     </div>
                                 )}
                             </div>
@@ -1993,7 +1995,7 @@ export default function Organizer() {
                                 color: 'var(--text-secondary)'
                             }}>
                                 <Calendar size={13} style={{ color: 'var(--accent)' }} />
-                                <span>Date range: <strong>{activeDateSpan}</strong></span>
+                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
                             </div>
                         )}
                         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
