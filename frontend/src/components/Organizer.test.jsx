@@ -74,6 +74,14 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('explains the single Other category fallback after clearing the selection', () => {
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
+
+        expect(screen.getByText(/No categories chosen.*single "Other" category/)).toBeDefined()
+        expect(screen.queryByText(/AI will automatically design a structure/)).toBeNull()
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 

@@ -283,7 +283,7 @@ describe('classifyBatch cleanTitles option', () => {
 
         // Bookmark 2 has no clean_title -> retains original title
         expect(result[2].title).toBe('Clean Blog')
-        expect(result[2].category).toBe('Other')
+        expect(result[2].category).toBe('Development')
         expect(result[2].sub_category).toBe('General')
 
         // Verify prompt contains title cleanup instructions and updated example return schema
@@ -804,12 +804,15 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         expect(results.filter(b => b.sub_category === 'Backend')).toHaveLength(5)
     })
 
-    it('falls back to Other -> General only when batch size <= 5 and still fails on retry', async () => {
+    it('falls back to the first selected category when batch size <= 5 and still fails on retry', async () => {
         vi.spyOn(console, 'error').mockImplementation(() => {})
         vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
 
         vi.spyOn(ai, 'generateSchema').mockResolvedValue({
-            categories: [{ name: 'Engineering', sub_categories: [] }]
+            categories: [
+                { name: 'Engineering', sub_categories: [] },
+                { name: 'Finance', sub_categories: [] }
+            ]
         })
 
         const bookmarks = Array.from({ length: 4 }, (_, i) => ({
@@ -827,14 +830,15 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = new OrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(results).toHaveLength(4)
-        // All 4 filed under Other -> General so none are lost
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        // All 4 remain inside the selected hierarchy, under its deterministic
+        // fallback category, so no unselected top-level folder is created.
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
 
-        const fallbackMsg = progressMessages.find(m => m.includes('Its 4 bookmarks were filed under Other → General so none are lost.'))
+        const fallbackMsg = progressMessages.find(m => m.includes('Its 4 bookmarks were filed under Engineering → General so none are lost.'))
         expect(fallbackMsg).toBeDefined()
     })
 
@@ -947,7 +951,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
     })
 
     it('does not recursively subdivide on network errors or request timeouts', async () => {
@@ -978,7 +982,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5 when network fails
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
         const warningMsg = progressMessages.find(m => m.includes('Failed to fetch'))
         expect(warningMsg).toBeDefined()
     })
@@ -1012,7 +1016,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         // It should NOT attempt to split 20 -> 10 -> 5 on rate limits
         expect(progressMessages.some(m => m.includes('Splitting batch'))).toBe(false)
         expect(results).toHaveLength(20)
-        expect(results.every(b => b.category === 'Other' && b.sub_category === 'General')).toBe(true)
+        expect(results.every(b => b.category === 'Engineering' && b.sub_category === 'General')).toBe(true)
     })
 
     it('aborts immediately and reports error when navigator.onLine is false for AI modes', async () => {
@@ -1466,14 +1470,12 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
 
         const results = await service.start(bookmarks)
 
-        // Categories remain ordered A-Z (Design before Tech)
-        // Inside Design: Newest Design (1800000000) then Oldest Design (1400000000)
-        // Inside Tech: Newer Tech (1700000000) then Older Tech (1500000000)
+        // Selected category order is preserved, with newest first inside each.
         expect(results.map(b => b.title)).toEqual([
-            'Newest Design',
-            'Oldest Design',
             'Newer Tech',
-            'Older Tech'
+            'Older Tech',
+            'Newest Design',
+            'Oldest Design'
         ])
         expect(service.stats.schemaSortOrder).toBe('date-desc')
         expect(service.stats.isFlat).toBe(false)
@@ -1809,6 +1811,125 @@ describe('schema fallback path reporting', () => {
     })
 })
 
+describe('fixed hierarchy placement and export', () => {
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('reorders reused category folders to the selected rank and leaves a repeated run unchanged', async () => {
+        const store = new FakeBookmarkStore()
+        const root = store.addFolder('2', 'organized', 'AI Organized Bookmarks-' + new Date().toISOString().slice(0, 10))
+        store.addFolder(root.id, 'finance', 'Finance')
+        store.addFolder(root.id, 'tech', 'Tech')
+        store.addUrl('finance', '10', 'https://finance.example', 'Finance link', 1500000000000)
+        store.addUrl('tech', '11', 'https://tech.example', 'Tech link', 1500000000001)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({ categories: [
+            { name: 'Tech', sub_categories: [] }, { name: 'Finance', sub_categories: [] }
+        ] })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({
+            ...b, category: b.id === '10' ? 'Finance' : 'Tech', sub_category: 'General'
+        })))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
+            store.node(parentId).children.find(n => !n.url && n.title === title))
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        service.snapshotProvider = async () => {}
+
+        await service.start(null)
+        expect(root.children.map(n => n.title)).toEqual(['Tech', 'Finance'])
+        expect(store.ops).toEqual([['move', 'tech', { parentId: root.id, index: 0 }]])
+        await service.start(null)
+        expect(store.ops).toHaveLength(1)
+    })
+
+    it.each(['alpha', 'date-desc', 'date-asc', 'domain', 'none'].flatMap(sortOrder =>
+        [['Tech', 'Finance'], ['20', '3']].map(selected => ({ sortOrder, selected }))
+    ))('preserves $selected category rank in browser placement and export with $sortOrder sorting', async ({ sortOrder, selected }) => {
+        const [firstCategory, secondCategory] = selected
+        const store = new FakeBookmarkStore()
+        const schema = { categories: [
+            { name: secondCategory, sub_categories: ['Investing'] },
+            { name: firstCategory, sub_categories: ['Zeta Tools', 'Alpha Tools'] }
+        ] }
+        const classifications = new Map()
+        // Input and model category order both disagree with the selected rank.
+        for (const [group, category, sub_category] of [[0, secondCategory, 'Investing'], [1, firstCategory, 'Zeta Tools'], [2, firstCategory, 'Alpha Tools']]) {
+            for (const [i, title, domain, dateAdded] of [[0, 'Bravo', 'z.example', 1700000000000], [1, 'Charlie', 'a.example', 1500000000000], [2, 'Alpha', 'm.example', 1600000000000]]) {
+                const id = String(10 + group * 3 + i)
+                store.addUrl('1', id, `https://${domain}/${id}`, title, dateAdded)
+                classifications.set(id, { category, sub_category })
+            }
+        }
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({ ...b, ...classifications.get(b.id) })))
+        vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const found = store.node(parentId).children.find(n => !n.url && n.title === title)
+            return found || store.addFolder(parentId, `folder-${parentId}-${title}`, title)
+        })
+
+        const service = new OrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
+        service.snapshotProvider = async () => {}
+        const browserResults = await service.start(null)
+        const fileResults = await service.start([...classifications.keys()].map(id => ({ ...store.node(id) })))
+        const root = store.node('2').children.find(n => n.title.startsWith('AI Organized'))
+
+        expect(root.children.map(n => n.title)).toEqual(selected)
+        const tech = root.children[0]
+        expect(tech.children.map(n => n.title)).toEqual(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools'])
+        const expectedTitles = {
+            alpha: ['Alpha', 'Bravo', 'Charlie'],
+            'date-desc': ['Bravo', 'Alpha', 'Charlie'],
+            'date-asc': ['Charlie', 'Alpha', 'Bravo'],
+            domain: ['Charlie', 'Alpha', 'Bravo'],
+            none: ['Bravo', 'Charlie', 'Alpha']
+        }[sortOrder]
+        expect(tech.children[0].children.map(n => n.title)).toEqual(expectedTitles)
+        for (const results of [browserResults, fileResults]) {
+            expect([...new Set(results.map(b => b.category))]).toEqual(selected)
+            const html = bookmarksExport.generateNetscapeHTML(results)
+            const doc = new DOMParser().parseFromString(html, 'text/html')
+            expect([...doc.querySelectorAll('h3')].map(n => n.textContent)).toEqual([
+                firstCategory, ...(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools']), secondCategory, 'Investing'
+            ])
+            expect([...doc.querySelectorAll('a')].slice(0, 3).map(n => n.textContent)).toEqual(expectedTitles)
+        }
+        expect(bookmarksExport.downloadBookmarks).toHaveBeenLastCalledWith(fileResults)
+    })
+
+    it('blocks cross-category whitespace variants and preserves approved plurals through reconciliation and placement', async () => {
+        const store = new FakeBookmarkStore()
+        for (let i = 0; i < 6; i++) store.addUrl('1', String(10 + i), `https://example.com/${i}`, `Bookmark ${i}`, 1500000000000 + i)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({ categories: [
+            { name: 'Tech', sub_categories: ['Developer Tools'] },
+            { name: 'Finance', sub_categories: ['Index Funds'] }
+        ] })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(b => ({
+            ...b, category: 'Tech', sub_category: Number(b.id) < 13 ? 'Index  Funds' : 'Developer Tool', proposed: true
+        })))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
+            store.node(parentId).children.find(n => !n.url && n.title === title) || store.addFolder(parentId, `folder-${parentId}-${title}`, title))
+
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        service.snapshotProvider = async () => {}
+        const results = await service.start(null)
+        const tech = [...store.nodes.values()].find(n => !n.url && n.title === 'Tech')
+        expect(tech.children.filter(n => !n.url).map(n => n.title)).toEqual(['Developer Tools'])
+        expect(['10', '11', '12'].every(id => store.node(id).parentId === tech.id)).toBe(true)
+        expect(tech.children.find(n => n.title === 'Developer Tools').children.map(n => n.id)).toEqual(['13', '14', '15'])
+        expect(results.every(b => !('proposed' in b))).toBe(true)
+        const html = bookmarksExport.generateNetscapeHTML(results)
+        expect(html).toContain('>Developer Tools</H3>')
+        expect(html).not.toContain('>Index Funds</H3>')
+        expect(html).not.toContain('>Index  Funds</H3>')
+    })
+})
+
 describe('categorized browser write moves and isolates failures', () => {
     const arrangeCategorized = (store) => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
@@ -1837,6 +1958,52 @@ describe('categorized browser write moves and isolates failures', () => {
         expect(bookmarksService.createBookmark).not.toHaveBeenCalled()
         expect(store.node('10').parentId).toBe('folder-Tech')
         expect(store.node('10').dateAdded).toBe(1500000000000)
+    })
+
+    it('places approved subcategories only beneath their selected category', async () => {
+        const store = new FakeBookmarkStore()
+        store.addUrl('1', '10', 'https://tech.example', 'Tech', 1500000000000)
+        store.addUrl('1', '11', 'https://invented.example', 'Invented', 1500000000001)
+        store.addUrl('1', '12', 'https://finance-1.example', 'Finance 1', 1500000000002)
+        store.addUrl('1', '13', 'https://finance-2.example', 'Finance 2', 1500000000003)
+        store.addUrl('1', '14', 'https://finance-3.example', 'Finance 3', 1500000000004)
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [
+                { name: 'Tech', sub_categories: ['Developer Tools'] },
+                { name: 'Finance', sub_categories: ['Investing'] }
+            ]
+        })
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map(bookmark => {
+            if (bookmark.id === '10') return { ...bookmark, category: 'Tech', sub_category: 'Investing' }
+            if (bookmark.id === '11') return { ...bookmark, category: 'Invented', sub_category: 'Developer Tools' }
+            if (bookmark.id === '12') return { ...bookmark, category: 'Finance', sub_category: ' investing ' }
+            if (bookmark.id === '13') return { ...bookmark, category: 'Finance', sub_category: 'INVESTING' }
+            return { ...bookmark, category: 'Finance', sub_category: 'Investing' }
+        }))
+        wireStore(store)
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) => {
+            const found = [...store.nodes.values()].find(n => n.parentId === parentId && n.title === title && !n.url)
+            if (found) return found
+            return store.addFolder(parentId, `folder-${parentId}-${title}`, title)
+        })
+
+        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        service.snapshotProvider = async () => {}
+        await service.start(null)
+
+        const techFolder = [...store.nodes.values()].find(n => n.title === 'Tech' && n.parentId.startsWith('folder-2-AI Organized'))
+        const financeFolder = [...store.nodes.values()].find(n => n.title === 'Finance' && n.parentId.startsWith('folder-2-AI Organized'))
+        const investingFolder = [...store.nodes.values()].find(n => n.title === 'Investing' && n.parentId === financeFolder.id)
+
+        expect(store.node('10').parentId).toBe(techFolder.id)
+        expect(store.node('11').parentId).toBe(techFolder.id)
+        expect(store.node('12').parentId).toBe(investingFolder.id)
+        expect(store.node('13').parentId).toBe(investingFolder.id)
+        expect(store.node('14').parentId).toBe(investingFolder.id)
+        expect([...store.nodes.values()].some(n => n.title === 'Invented' && !n.url)).toBe(false)
+        expect([...store.nodes.values()].some(n => n.title === 'Investing' && n.parentId === techFolder.id)).toBe(false)
+        expect([...store.nodes.values()].filter(n => n.parentId === financeFolder.id && !n.url).map(n => n.title)).toEqual(['Investing'])
     })
 
     it('a category-folder failure fails only that item and records it', async () => {

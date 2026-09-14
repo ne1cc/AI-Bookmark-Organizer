@@ -32,13 +32,52 @@ export function curatedSubcategories(category) {
     return CURATED_SUBCATEGORIES[(category || '').trim().toLowerCase()] || null;
 }
 
+function selectedCategoryNames(categories) {
+    const seen = new Set();
+    const selected = [];
+
+    for (const name of Array.isArray(categories) ? categories : []) {
+        if (typeof name !== 'string' || !name.trim()) continue;
+        const key = name.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        selected.push(name);
+    }
+
+    return selected;
+}
+
+/**
+ * Rebuild a model response against the user's selected category list. The
+ * model may suggest subcategories, but it must never rename, omit, or add a
+ * top-level category.
+ */
+export function buildAuthoritativeSchema(categories, candidateSchema = null) {
+    const carried = new Map(
+        (Array.isArray(candidateSchema?.categories) ? candidateSchema.categories : [])
+            .filter(c => typeof c?.name === 'string' && Array.isArray(c.sub_categories))
+            .map(c => [c.name.trim().toLowerCase(), c.sub_categories])
+    );
+
+    const selected = selectedCategoryNames(categories);
+    if (selected.length === 0) {
+        return { categories: [{ name: 'Other', sub_categories: [] }] };
+    }
+
+    return {
+        categories: selected.map(name => ({
+            name,
+            sub_categories: [...(carried.get(name.trim().toLowerCase()) || ['General'])]
+        }))
+    };
+}
+
 /**
  * Assemble the best schema available without a working AI response.
  *
  * Prefers whatever the model did return for a category, then the curated
- * structure, and finally an empty list. An empty list is not a dead end: the
- * classifier falls back to "General", which both write paths file directly
- * under the category rather than inside a literal "General" folder.
+ * structure, and finally the category-scoped `General` fallback. `General`
+ * is filed directly under its category rather than inside a literal folder.
  *
  * @param {string[]} categories - the user's configured top-level categories.
  * @param {Object} [partialSchema] - salvage from a failed generateSchema call.
@@ -54,33 +93,34 @@ export function buildFallbackSchema(categories, partialSchema = null) {
     let curatedCount = 0;
     let carriedCount = 0;
 
-    const list = Array.isArray(categories) && categories.length > 0 ? categories : [];
+    const list = selectedCategoryNames(categories);
+
+    if (list.length === 0) {
+        return {
+            schema: { categories: [{ name: 'Other', sub_categories: [] }] },
+            curatedCount,
+            carriedCount
+        };
+    }
 
     const built = list
-        .filter(name => typeof name === 'string' && name.trim())
         .map(name => {
             const key = name.trim().toLowerCase();
 
             const fromModel = carried.get(key);
             if (fromModel) {
                 carriedCount++;
-                return { name: name.trim(), sub_categories: [...fromModel] };
+                return { name, sub_categories: [...fromModel] };
             }
 
             const curated = curatedSubcategories(name);
             if (curated) {
                 curatedCount++;
-                return { name: name.trim(), sub_categories: [...curated] };
+                return { name, sub_categories: [...curated] };
             }
 
-            return { name: name.trim(), sub_categories: [] };
+            return { name, sub_categories: ['General'] };
         });
-
-    // "Other" is where the classifier sends anything that fits nowhere; without
-    // it those bookmarks have no destination at all.
-    if (!built.some(c => c.name.trim().toLowerCase() === 'other')) {
-        built.push({ name: 'Other', sub_categories: [] });
-    }
 
     return { schema: { categories: built }, curatedCount, carriedCount };
 }

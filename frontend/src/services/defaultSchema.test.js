@@ -57,22 +57,19 @@ describe('buildFallbackSchema', () => {
         const { schema, curatedCount } = buildFallbackSchema(['My Stuff', 'Finance & Crypto'])
 
         expect(curatedCount).toBe(1)
-        // Deliberately empty rather than a literal ["General"]: the classifier
-        // falls back to "General" on its own, and both write paths file that
-        // directly under the category instead of creating a "General" folder.
-        expect(find(schema, 'My Stuff').sub_categories).toEqual([])
+        expect(find(schema, 'My Stuff').sub_categories).toEqual(['General'])
     })
 
-    it('always provides an Other category for bookmarks that fit nowhere', () => {
-        expect(find(buildFallbackSchema(['Finance & Crypto']).schema, 'Other')).toBeDefined()
+    it('preserves the selected category list exactly without appending a top-level category', () => {
+        const selected = ['Finance & Crypto', 'My Personal Research']
+        const { schema } = buildFallbackSchema(selected)
 
-        const alreadyPresent = buildFallbackSchema(['Finance & Crypto', 'Other']).schema
-        expect(alreadyPresent.categories.filter(c => c.name === 'Other')).toHaveLength(1)
+        expect(schema.categories.map(c => c.name)).toEqual(selected)
+        expect(find(schema, 'My Personal Research').sub_categories).toEqual(['General'])
     })
 
-    it('survives empty or malformed category input', () => {
+    it('uses Other as the sole safe catch-all for an empty selected list', () => {
         expect(buildFallbackSchema([]).schema.categories).toEqual([{ name: 'Other', sub_categories: [] }])
         expect(buildFallbackSchema(null).schema.categories).toEqual([{ name: 'Other', sub_categories: [] }])
-        expect(buildFallbackSchema(['  ', null, 42, 'Finance & Crypto']).schema.categories).toHaveLength(2)
     })
 })

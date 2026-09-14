@@ -1,4 +1,7 @@
 import { subfolderBounds } from './ai';
+import { canonicalKey } from './subcategoryIdentity';
+
+export { canonicalKey } from './subcategoryIdentity';
 
 // Where a dissolved subcategory's bookmarks go. `shouldCreateSubFolder` treats
 // this name as "no subfolder", so these land directly under their category in
@@ -19,16 +22,6 @@ const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an
 
 function isSink(name) {
     return typeof name !== 'string' || SINK_NAMES.has(name.trim().toLowerCase());
-}
-
-// Collapses the spelling variants that independent, concurrently-run batches
-// produce for the same idea: "AI Tools" / "ai tools" / "AI Tool".
-export function canonicalKey(name) {
-    return name
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .replace(/s$/, '');
 }
 
 function tokenize(name) {
@@ -73,7 +66,7 @@ function nearestSibling(group, kept) {
  * point where the whole picture is visible, so it is where those are resolved.
  *
  * @param {Array} classified - bookmarks carrying `category` / `sub_category`.
- * @param {Object} schema - the approved schema (used only to spot proposals).
+ * @param {Object} schema - approved subcategory identities and preferred names.
  * @param {Object} options - `subfolderTarget` granularity setting.
  * @returns {{ classified: Array, summary: Object }}
  */
@@ -92,9 +85,9 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
             .filter(c => typeof c?.name === 'string')
             .map(c => [
                 c.name.trim().toLowerCase(),
-                new Set((Array.isArray(c.sub_categories) ? c.sub_categories : [])
+                new Map((Array.isArray(c.sub_categories) ? c.sub_categories : [])
                     .filter(s => typeof s === 'string')
-                    .map(s => canonicalKey(s)))
+                    .map(s => [canonicalKey(s), s]))
             ])
     );
 
@@ -123,13 +116,13 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
     const rename = new Map();
 
     for (const [category, groups] of byCategory) {
-        const approved = schemaSubs.get(category.trim().toLowerCase()) || new Set();
+        const approved = schemaSubs.get(category.trim().toLowerCase()) || new Map();
 
         const resolved = [];
         for (const [key, group] of groups) {
-            // The most-used spelling wins; ties break lexicographically so the
-            // result does not depend on batch completion order.
-            const name = [...group.spellings.entries()]
+            // Approved schema spelling wins, even if no batch used it. For new
+            // proposals, use frequency then name to stay independent of batch order.
+            const name = approved.get(key) || [...group.spellings.entries()]
                 .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
 
             if (group.spellings.size > 1) summary.merged += group.spellings.size - 1;
