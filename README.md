@@ -105,6 +105,15 @@ Your data stays private:
 
 ## Changelog
 
+### v1.3.0
+
+- Clickable Sort Mode: Directly click the "Sort by date added - Flat list" title to toggle flat chronological sorting.
+- MECE Month & Year Organization: Chronological bookmark sorting groups items into mutually exclusive and collectively exhaustive month-year subfolders without consuming AI tokens.
+- Standardized Root Folder & Export Names: Consistent naming conventions across browser bookmark roots and exported Netscape HTML bookmark files.
+- Resilient Background Organization: Enhanced background worker persistence, instantaneous cancellation response, and automatic recovery.
+- Native Duplicate Bookmark Removal: Free one-click cleanup tool for removing duplicate bookmarks directly from browser bookmark folders.
+- Cached Input Bookmark Files: Drop in and retain bookmark files with one-click re-organization, pristine download, or removal.
+
 ### v1.2.1
 
 - Keeps Original Bookmark Dates: Reorganized bookmarks keep their original saved dates intact.
