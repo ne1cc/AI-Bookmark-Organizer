@@ -60,3 +60,48 @@
 - An existing untracked plan file at
   `docs/superpowers/plans/2026-09-13-fixed-category-hierarchy-plan.md` was left
   untouched and excluded from the implementation commit.
+
+## Fix round 1
+
+### Fix commit
+
+`2e8e774d07f42b23bb78adcea4815da27135e619` — `fix(schema): keep classification within selected categories`
+
+### Findings addressed
+
+- Added `fallbackCategoryForSchema`, which uses the first approved schema
+  category (preserving its exact name) and uses `Other` only for the explicit
+  empty-selection catch-all schema.
+- `classifyBatch` now sends invalid model categories and omitted model entries
+  to that schema-aware fallback instead of creating an unselected `Other`
+  category.
+- Terminal batch-failure recovery in `OrganizerService` uses the same fallback
+  and reports its actual category in progress messages.
+- Schema-generation and classification prompts now consistently direct outliers
+  to the closest approved category's `General` subcategory rather than
+  instructing the model to create `Other`.
+- Corrected the fallback-helper documentation: custom categories receive
+  category-scoped `General`, not an empty subcategory array.
+
+### Tests and review
+
+1. RED: `npm test -- src/services/schema-validation.test.js src/services/organizer.test.js`
+   - 6 failures reproduced the invalid-model and terminal-recovery `Other`
+     paths before the implementation change.
+2. Focused GREEN: `npm test -- src/services/schema-validation.test.js src/services/organizer.test.js`
+   - 2 files passed; 123 tests passed, 0 failed.
+   - Covers malformed/omitted classifications remaining in the approved schema
+     and a two-category terminal recovery filing every bookmark under the first
+     selected category.
+3. `npm run lint`
+   - Exit 0; 0 errors, with the same four existing `Organizer.jsx` warnings.
+4. `git diff --check`
+   - Exit 0; no whitespace errors.
+5. Full verification: `npm test`
+   - 15 files passed; 253 tests passed, 0 failed.
+
+### Fix-round concerns
+
+- The full suite retains its existing mocked-error console output and one
+  existing unawaited-assertion warning in `organizer.test.js`.
+- The unrelated untracked plan file remains untouched.
