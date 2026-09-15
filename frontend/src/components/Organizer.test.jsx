@@ -842,7 +842,7 @@ describe('In-process and completion date range display', () => {
                 }
             }
 
-            render(<Organizer />)
+            const { unmount } = render(<Organizer />)
 
             act(() => {
                 listeners.forEach((listener) => listener({
@@ -859,6 +859,46 @@ describe('In-process and completion date range display', () => {
             })
 
             expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            const staleResults = [{
+                title: 'Stale result',
+                url: 'https://example.com/stale',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS',
+                    payload: {
+                        results: staleResults,
+                        meta: { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+                    }
+                }))
+            })
+
+            expect(await screen.findByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
+            fireEvent.click(screen.getByText('Organize Again'))
+            expect(screen.queryByRole('button', { name: /Download Organized Bookmarks/i })).toBeNull()
+
+            unmount()
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_completed_after_reconnect',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [],
+                        count: 1,
+                        completedAt: 1757890000000
+                    }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenLastCalledWith({ type: 'GET_RESULTS' })
 
             act(() => {
                 listeners.forEach((listener) => listener({
@@ -910,6 +950,95 @@ describe('In-process and completion date range display', () => {
 
             expect(screen.queryByText(unavailableMessage)).toBeNull()
             expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+        })
+
+        it('ignores unavailable results after resetting a pending result request', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_pending_results', status: 'complete', progress: 100 }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+            fireEvent.click(screen.getByText('Organize Again'))
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+        })
+
+        it('ignores unavailable results after disconnecting a pending result request', async () => {
+            const listeners = []
+            const disconnectListeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn((fn) => disconnectListeners.push(fn)) },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_pending_results', status: 'complete', progress: 100 }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+            act(() => disconnectListeners.forEach((listener) => listener()))
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByText('Organize Again')).toBeDefined()
         })
 
         it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {

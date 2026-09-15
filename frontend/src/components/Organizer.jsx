@@ -322,6 +322,7 @@ export default function Organizer() {
                         if (!state) return;
 
                         if (state.status === 'processing') {
+                            resultsRequestPendingRef.current = false
                             setStatus('processing');
                             if (typeof state.progress === 'number') setProgress(state.progress);
                             if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
@@ -359,10 +360,12 @@ export default function Organizer() {
                                 });
                             }
                         } else if (state.status === 'error') {
+                            resultsRequestPendingRef.current = false
                             setStatus('error');
                             setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
                             setBackgroundNotice('');
                         } else if (state.status === 'idle') {
+                            resultsRequestPendingRef.current = false
                             setIsCancelling(false);
                             // A stale session snapshot can leave the panel in a
                             // zombie "In Progress" state with no worker behind
@@ -403,6 +406,7 @@ export default function Organizer() {
                             completionTimerRef.current = null;
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
+                        resultsRequestPendingRef.current = false
                         const { results, meta } = msg.payload || {};
                         if (results) organizedResultsRef.current = results;
                         if (meta) {
@@ -415,10 +419,12 @@ export default function Organizer() {
                         setBackgroundNotice('');
                         scheduleReturnToMenu();
                     } else if (msg.type === 'JOB_ERROR') {
+                        resultsRequestPendingRef.current = false
                         setStatus('error');
                         setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
                         setBackgroundNotice('');
                     } else if (msg.type === 'JOB_CANCELLED') {
+                        resultsRequestPendingRef.current = false
                         setStatus('idle');
                         setIsCancelling(false);
                         setProgress(0);
@@ -426,6 +432,7 @@ export default function Organizer() {
                 });
 
                 port.onDisconnect.addListener(() => {
+                    resultsRequestPendingRef.current = false
                     portRef.current = null;
                 });
 
@@ -438,6 +445,7 @@ export default function Organizer() {
         }
 
         return () => {
+            resultsRequestPendingRef.current = false
             if (completionTimerRef.current) {
                 clearTimeout(completionTimerRef.current);
                 completionTimerRef.current = null;
@@ -808,6 +816,7 @@ export default function Organizer() {
 
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
+        resultsRequestPendingRef.current = false
         if (portRef.current) {
             try {
                 portRef.current.postMessage({ type: 'CANCEL_JOB' });
@@ -822,6 +831,7 @@ export default function Organizer() {
 
     const resetApp = useCallback(() => {
         cancelRequestedRef.current = true;
+        resultsRequestPendingRef.current = false
         if (completionTimerRef.current) {
             clearTimeout(completionTimerRef.current);
             completionTimerRef.current = null;
@@ -866,6 +876,7 @@ export default function Organizer() {
         }
         setIsCancelling(false);
         cancelRequestedRef.current = false;
+        resultsRequestPendingRef.current = false
         let reportedErrorMessage = '';
 
         try {
@@ -977,6 +988,7 @@ export default function Organizer() {
                 // message, drop the suspect port, and run in this panel so the
                 // terminal keeps showing live progress instead of stalling.
                 try { port.postMessage({ type: 'CANCEL_JOB' }); } catch {}
+                resultsRequestPendingRef.current = false
                 try { port.disconnect(); } catch {}
                 portRef.current = null;
                 if (cancelRequestedRef.current) {
