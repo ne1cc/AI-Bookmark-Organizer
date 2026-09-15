@@ -237,14 +237,19 @@ describe('validateSchema', () => {
         'Misc.',
         'Miscellaneous',
         'Miscellaneous Items',
+        'Miscellaneous Resources',
         'Various',
         'Various Topics',
+        'Various Resources',
         'Assorted',
         'Assorted Links',
         'Everything Else',
         'Other Stuff',
+        'Other Resources',
         'Others',
         'Catch-All',
+        'Uncategorized Links',
+        'General Items',
         'Unsorted',
         'Unclassified',
         'None'
@@ -266,12 +271,17 @@ describe('validateSchema', () => {
         expect(result.issues.join(' ')).toContain(fillerName)
     })
 
-    it('does not apply inferred filler-name rejection to an explicit manual category', () => {
+    it.each([
+        'Miscellaneous',
+        'Other Resources',
+        'Uncategorized Links',
+        'General Items'
+    ])('does not apply inferred filler-name rejection to explicit manual category "%s"', (categoryName) => {
         const manualSchema = {
             categories: [
                 ...healthySchema.categories,
                 {
-                    name: 'Miscellaneous',
+                    name: categoryName,
                     sub_categories: ['Household Records', 'Reference Links', 'Saved Reading']
                 }
             ]
@@ -284,6 +294,25 @@ describe('validateSchema', () => {
         })
 
         expect(result.ok).toBe(true)
+    })
+
+    it.each([
+        'Developer Resources',
+        'Learning Resources',
+        'General Aviation',
+        'Other Languages'
+    ])('accepts topical inferred category "%s"', (categoryName) => {
+        const schema = {
+            categories: [
+                ...healthySchema.categories,
+                {
+                    name: categoryName,
+                    sub_categories: ['Guides', 'Reference', 'News']
+                }
+            ]
+        }
+
+        expect(validateSchema(schema, { bookmarkCount: 100 }).ok).toBe(true)
     })
 
     it('flags a structure that is flat on average even when each category clears the floor', () => {

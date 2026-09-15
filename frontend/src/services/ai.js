@@ -557,8 +557,31 @@ const INFERRED_FILLER_CATEGORIES = new Set([
     'unknown',
     'none'
 ]);
-const INFERRED_FILLER_PREFIXES = new Set(['misc', 'miscellaneous', 'various', 'assorted', 'other', 'others']);
-const INFERRED_FILLER_SUFFIXES = new Set(['item', 'items', 'link', 'links', 'topic', 'topics', 'stuff', 'content', 'bookmark', 'bookmarks']);
+const INFERRED_FILLER_PREFIXES = new Set([
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'other',
+    'others',
+    'uncategorized',
+    'uncategorised',
+    'general'
+]);
+const INFERRED_FILLER_SUFFIXES = new Set([
+    'item',
+    'items',
+    'link',
+    'links',
+    'topic',
+    'topics',
+    'stuff',
+    'content',
+    'bookmark',
+    'bookmarks',
+    'resource',
+    'resources'
+]);
 
 // Subcategory names carrying no organizational information. They are stripped
 // before counting, so a "schema" of nothing but "General" reads as flat —
