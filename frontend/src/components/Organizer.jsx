@@ -1768,7 +1768,7 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
 
                     {/* Custom Category Input */}
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.3rem', marginBottom: '1rem' }}>
                         <input
                             type="text"
                             placeholder="Add custom category..."
