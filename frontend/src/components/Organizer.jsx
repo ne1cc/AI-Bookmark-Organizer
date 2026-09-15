@@ -1832,7 +1832,7 @@ export default function Organizer({ theme = 'light' }) {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No manual categories selected. Add categories from the suggestions below when Infer categories is off.
+                            No manual categories selected. The app will infer categories from your bookmark file. Turn off Infer categories to choose from the suggestions below.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
