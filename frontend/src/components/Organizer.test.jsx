@@ -88,6 +88,26 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
     })
 
+    it('renders the complete suggested category pool when manual editing is enabled', () => {
+        localStorage.setItem('inferCategories', 'false')
+        render(<Organizer />)
+
+        for (const category of [
+            'Health, Fitness & Wellness',
+            'AI & Machine Learning',
+            'News & Current Affairs',
+            'Recipes & Cooking',
+            'Education & Academia',
+            'Open Source & Code',
+            'Home, DIY & Real Estate',
+            'Podcasts, Audio & Music',
+            'Gaming & Esports',
+            'Legal, Docs & Admin'
+        ]) {
+            expect(screen.getByRole('button', { name: new RegExp(category, 'i') })).toBeDefined()
+        }
+    })
+
     it('persists disabling inferred categories and restores the saved manual controls', () => {
         localStorage.setItem('categories', JSON.stringify(['Work']))
         render(<Organizer />)
@@ -102,14 +122,22 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByText('Work')).toBeDefined()
     })
 
-    it('hydrates an empty manual selection without changing the saved inference mode', () => {
-        global.chrome.storage.local.get.mockImplementation((keys, cb) => cb({ categories: [], inferCategories: false }))
-        render(<Organizer />)
+    it.each([true, false])(
+        'restores an explicitly saved empty manual selection when inference is %s',
+        (inferCategories) => {
+            global.chrome.storage.local.get.mockImplementation((keys, cb) => cb({
+                categories: [],
+                inferCategories
+            }))
 
-        expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked')).toBe('false')
-        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(false)
-        expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
-    })
+            render(<Organizer />)
+
+            expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked'))
+                .toBe(String(inferCategories))
+            expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
+            expect(localStorage.getItem('categories')).toBe('[]')
+        }
+    )
 
     it('does not persist categories generated for an inferred run', async () => {
         localStorage.setItem('apiKey', 'sk-or-test-inferred-run')
