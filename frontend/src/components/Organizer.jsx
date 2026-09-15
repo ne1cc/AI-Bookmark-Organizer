@@ -236,6 +236,7 @@ export default function Organizer() {
     const logContainerRef = useRef(null)
     const organizerRef = useRef(null)
     const portRef = useRef(null)
+    const resultsRequestPendingRef = useRef(false)
     const cancelRequestedRef = useRef(false)
     const completionTimerRef = useRef(null)
     const resetAppRef = useRef(null)
@@ -343,7 +344,12 @@ export default function Organizer() {
                                 })));
                             }
                             if (!organizedResultsRef.current) {
-                                try { port.postMessage({ type: 'GET_RESULTS' }); } catch {}
+                                resultsRequestPendingRef.current = true
+                                try {
+                                    port.postMessage({ type: 'GET_RESULTS' })
+                                } catch {
+                                    resultsRequestPendingRef.current = false
+                                }
                             }
                             if (!organizedResultsRef.current && chrome.storage?.session) {
                                 chrome.storage.session.get(['organizedData'], (sRes) => {
@@ -369,6 +375,7 @@ export default function Organizer() {
                             }
                         }
                     } else if (msg.type === 'JOB_RESULTS') {
+                        resultsRequestPendingRef.current = false
                         const { results, meta } = msg.payload || {};
                         if (Array.isArray(results) && results.length > 0) {
                             organizedResultsRef.current = results;
@@ -381,6 +388,19 @@ export default function Organizer() {
                             setProgress(100);
                             setBackgroundNotice('');
                             scheduleReturnToMenu();
+                        }
+                    } else if (msg.type === 'JOB_RESULTS_UNAVAILABLE') {
+                        if (!resultsRequestPendingRef.current) return
+                        resultsRequestPendingRef.current = false
+                        organizedResultsRef.current = null;
+                        setLastOrganized(null);
+                        setStatus('error');
+                        setProgress(0);
+                        setErrorMsg(msg.payload?.message || 'Organized results are no longer available. Run organization again.');
+                        setBackgroundNotice('');
+                        if (completionTimerRef.current) {
+                            clearTimeout(completionTimerRef.current);
+                            completionTimerRef.current = null;
                         }
                     } else if (msg.type === 'JOB_COMPLETE') {
                         const { results, meta } = msg.payload || {};
@@ -409,10 +429,9 @@ export default function Organizer() {
                     portRef.current = null;
                 });
 
-                // Results from inferred runs intentionally live only in the
-                // service worker. Ask for them after every connection so a
-                // reopened panel can recover a completed run without storage.
-                try { port.postMessage({ type: 'GET_RESULTS' }); } catch {}
+                // Request state only after the listener is attached. A completed state
+                // response will request transient results; idle panels never request them.
+                try { port.postMessage({ type: 'GET_STATUS' }) } catch {}
             } catch (err) {
                 console.warn('[Organizer] Failed to connect to background channel:', err);
             }

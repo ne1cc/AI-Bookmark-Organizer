@@ -791,15 +791,16 @@ describe('In-process and completion date range display', () => {
 
             render(<Organizer />)
 
-            await waitFor(() => {
-                expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
-            })
-
             act(() => {
                 listeners.forEach((listener) => listener({
                     type: 'STATUS_UPDATE',
                     payload: { id: 'job_123', status: 'complete', progress: 100 }
                 }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            act(() => {
                 listeners.forEach((listener) => listener({
                     type: 'JOB_RESULTS',
                     payload: { results: generatedResults, meta }
@@ -818,6 +819,97 @@ describe('In-process and completion date range display', () => {
             ].map(([payload]) => payload)
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+        })
+
+        it('removes stale download state when transient worker results are unavailable', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_completed_in_worker',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [],
+                        count: 1,
+                        completedAt: 1757890000000
+                    }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            await waitFor(() => {
+                expect(screen.getByText(unavailableMessage)).toBeDefined()
+                expect(screen.queryByRole('button', { name: /Download Organized Bookmarks/i })).toBeNull()
+            })
+            expect(global.chrome.storage.local.set).not.toHaveBeenCalled()
+            expect(global.chrome.storage.session.set).not.toHaveBeenCalled()
+        })
+
+        it('does not show a transient-result error when no completed run was expected', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_STATUS' })
+            expect(mockPort.postMessage).not.toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
         })
 
         it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {

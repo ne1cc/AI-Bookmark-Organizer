@@ -188,4 +188,36 @@ describe('Background Service Worker Entry Point', () => {
         });
         expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
     });
+
+    it('reports that transient results are unavailable after worker memory is lost', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(null);
+
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        port.postMessage.mockClear();
+
+        const messageHandler = port.onMessage.addListener.mock.calls[0][0];
+        messageHandler({ type: 'GET_RESULTS' });
+
+        expect(getResultsSpy).toHaveBeenCalledOnce();
+        expect(port.postMessage).toHaveBeenCalledWith({
+            type: 'JOB_RESULTS_UNAVAILABLE',
+            payload: {
+                message: 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+            }
+        });
+        expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+        expect(globalThis.chrome.storage.local).not.toHaveProperty('set');
+    });
 });
