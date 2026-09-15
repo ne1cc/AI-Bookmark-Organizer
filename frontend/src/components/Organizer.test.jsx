@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-libra
 import Organizer from './Organizer'
 import { OrganizerService } from '../services/organizer'
 import * as inputService from '../services/input_bookmarks'
+import * as bookmarksExport from '../services/bookmarks_export'
 
 vi.mock('../services/organizer', () => {
     return {
@@ -44,6 +45,10 @@ vi.mock('../services/input_bookmarks', () => ({
     downloadInputBookmarkFile: vi.fn()
 }))
 
+vi.mock('../services/bookmarks_export', () => ({
+    downloadBookmarks: vi.fn()
+}))
+
 describe('Organizer Component UI Tests', () => {
     beforeEach(() => {
         localStorage.clear()
@@ -75,12 +80,127 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
-    it('explains the single Other category fallback after clearing the selection', () => {
+    it('defaults new installs to inferred categories with no manual selection', () => {
         render(<Organizer />)
-        fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
 
-        expect(screen.getByText(/No categories chosen.*single "Other" category/)).toBeDefined()
-        expect(screen.queryByText(/AI will automatically design a structure/)).toBeNull()
+        expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked')).toBe('true')
+        expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
+        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
+    })
+
+    it('renders the complete suggested category pool when manual editing is enabled', () => {
+        localStorage.setItem('inferCategories', 'false')
+        render(<Organizer />)
+
+        for (const category of [
+            'Health, Fitness & Wellness',
+            'AI & Machine Learning',
+            'News & Current Affairs',
+            'Recipes & Cooking',
+            'Education & Academia',
+            'Open Source & Code',
+            'Home, DIY & Real Estate',
+            'Podcasts, Audio & Music',
+            'Gaming & Esports',
+            'Legal, Docs & Admin'
+        ]) {
+            expect(screen.getByRole('button', { name: new RegExp(category, 'i') })).toBeDefined()
+        }
+    })
+
+    it('persists disabling inferred categories and restores the saved manual controls', () => {
+        localStorage.setItem('categories', JSON.stringify(['Work']))
+        render(<Organizer />)
+
+        const inferToggle = screen.getByRole('switch', { name: /Infer categories/i })
+        fireEvent.click(inferToggle)
+
+        expect(inferToggle.getAttribute('aria-checked')).toBe('false')
+        expect(localStorage.getItem('inferCategories')).toBe('false')
+        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ inferCategories: false })
+        expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(false)
+        expect(screen.getByText('Work')).toBeDefined()
+    })
+
+    it.each([true, false])(
+        'restores an explicitly saved empty manual selection when inference is %s',
+        (inferCategories) => {
+            global.chrome.storage.local.get.mockImplementation((keys, cb) => cb({
+                categories: [],
+                inferCategories
+            }))
+
+            render(<Organizer />)
+
+            expect(screen.getByRole('switch', { name: /Infer categories/i }).getAttribute('aria-checked'))
+                .toBe(String(inferCategories))
+            expect(screen.getByText(/No manual categories selected/i)).toBeDefined()
+            expect(localStorage.getItem('categories')).toBe('[]')
+        }
+    )
+
+    it('does not persist categories generated for an inferred run', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-inferred-run')
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.stats = {
+                categoriesCount: 1,
+                categoryBreakdown: { 'Generated Topic': 1 }
+            }
+            this.start = vi.fn(async () => {
+                act(() => onProgress({ status: 'done', message: 'Organization complete!' }))
+                return [{
+                    title: 'Item 1',
+                    url: 'https://example.com',
+                    category: 'Generated Topic',
+                    sub_category: 'Generated Detail'
+                }]
+            })
+            this.cancel = vi.fn()
+            this.isCancelled = false
+        })
+
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        await waitFor(() => expect(screen.getByText(/Organization complete!/i)).toBeDefined())
+        expect(localStorage.getItem('categories')).toBeNull()
+        expect(global.chrome.storage.local.set.mock.calls.some(([entry]) => Object.hasOwn(entry, 'categories'))).toBe(false)
+        const persistedPayloads = [
+            ...global.chrome.storage.local.set.mock.calls,
+            ...global.chrome.storage.session.set.mock.calls
+        ].map(([payload]) => payload)
+        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
+        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+    })
+
+    it('preserves an actionable inference error from the in-panel runner', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-inference-error')
+        const actionableMessage = 'Could not infer categories from your bookmarks: the AI returned only Other. Try again with a different model.'
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.start = vi.fn(async () => {
+                act(() => onProgress({ status: 'error', message: actionableMessage }))
+                throw new Error('the AI returned only Other')
+            })
+            this.cancel = vi.fn()
+            this.isCancelled = false
+        })
+
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        await waitFor(() => expect(screen.getByText(actionableMessage)).toBeDefined())
+        expect(screen.queryByText('Failed to start process.')).toBeNull()
+    })
+
+    it('requires a manual category before manual AI organization starts', () => {
+        localStorage.setItem('apiKey', 'sk-or-test-manual-empty')
+        render(<Organizer />)
+
+        fireEvent.click(screen.getByRole('switch', { name: /Infer categories/i }))
+        fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+        expect(screen.getByText('Add at least one category or turn on Infer categories.')).toBeDefined()
+        expect(OrganizerService).not.toHaveBeenCalled()
     })
 
     it('lets browser-mode organization explain the missing API key instead of disabling the action', () => {
@@ -668,6 +788,291 @@ describe('In-process and completion date range display', () => {
             })
         })
 
+        it('requests and downloads completed inferred results from background memory after reconnecting', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const generatedResults = [{
+                title: 'Generated result',
+                url: 'https://example.com/generated',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+            const meta = {
+                count: 1,
+                savedAt: 1757890000000,
+                stats: {
+                    categoriesCount: 1,
+                    categoryBreakdown: { 'Generated Topic': 1 },
+                    dateSpan: '1/1/2024 – 2/1/2024'
+                },
+                dateSpan: '1/1/2024 – 2/1/2024'
+            }
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_123', status: 'complete', progress: 100 }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS',
+                    payload: { results: generatedResults, meta }
+                }))
+            })
+
+            const downloadButton = await screen.findByRole('button', { name: /Download Organized Bookmarks/i })
+            fireEvent.click(downloadButton)
+
+            await waitFor(() => {
+                expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(generatedResults)
+            })
+            const persistedPayloads = [
+                ...global.chrome.storage.local.set.mock.calls,
+                ...global.chrome.storage.session.set.mock.calls
+            ].map(([payload]) => payload)
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+        })
+
+        it('removes stale download state when transient worker results are unavailable', async () => {
+            const listeners = []
+            const staleResults = [{
+                title: 'Stale result',
+                url: 'https://example.com/stale',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+            const staleMeta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            let provideStaleResults = true
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({ organizedMeta: staleMeta })), set: vi.fn(), remove: vi.fn() },
+                    session: {
+                        get: vi.fn((keys, cb) => {
+                            if (keys.includes('organizedData') && provideStaleResults) {
+                                provideStaleResults = false
+                                cb({ organizedData: staleResults })
+                            } else {
+                                cb({})
+                            }
+                        }),
+                        set: vi.fn()
+                    }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_completed_in_worker',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [],
+                        count: 1,
+                        completedAt: 1757890000000
+                    }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            expect(await screen.findByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            await waitFor(() => {
+                expect(screen.getByText(unavailableMessage)).toBeDefined()
+                expect(screen.queryByRole('button', { name: /Download Organized Bookmarks/i })).toBeNull()
+            })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_completed_after_unavailable',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [],
+                        count: 1,
+                        completedAt: 1757890000000
+                    }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenLastCalledWith({ type: 'GET_RESULTS' })
+            expect(mockPort.postMessage.mock.calls.filter(([message]) => message.type === 'GET_RESULTS')).toHaveLength(2)
+            expect(global.chrome.storage.local.set).not.toHaveBeenCalled()
+            expect(global.chrome.storage.session.set).not.toHaveBeenCalled()
+        })
+
+        it('does not show a transient-result error when no completed run was expected', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_STATUS' })
+            expect(mockPort.postMessage).not.toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+        })
+
+        it('ignores unavailable results after resetting a pending result request', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_pending_results', status: 'complete', progress: 100 }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+            fireEvent.click(screen.getByText('Organize Again'))
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+        })
+
+        it('ignores unavailable results after disconnecting a pending result request', async () => {
+            const listeners = []
+            const disconnectListeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: {
+                    addListener: vi.fn((fn) => listeners.push(fn)),
+                    removeListener: vi.fn()
+                },
+                onDisconnect: { addListener: vi.fn((fn) => disconnectListeners.push(fn)) },
+                disconnect: vi.fn()
+            }
+            const unavailableMessage = 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_pending_results', status: 'complete', progress: 100 }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
+            act(() => disconnectListeners.forEach((listener) => listener()))
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'JOB_RESULTS_UNAVAILABLE',
+                    payload: { message: unavailableMessage }
+                }))
+            })
+
+            expect(screen.queryByText(unavailableMessage)).toBeNull()
+            expect(screen.getByText('Organize Again')).toBeDefined()
+        })
+
         it('dispatches START_JOB over port and runs in background when the service worker acknowledges', async () => {
             localStorage.setItem('apiKey', 'sk-or-test-port')
 
@@ -719,7 +1124,7 @@ describe('In-process and completion date range display', () => {
                 expect.objectContaining({
                     type: 'START_JOB',
                     payload: expect.objectContaining({
-                        config: expect.objectContaining({ apiKey: 'sk-or-test-port' })
+                        config: expect.objectContaining({ apiKey: 'sk-or-test-port', inferCategories: true })
                     })
                 })
             )
@@ -783,6 +1188,7 @@ describe('In-process and completion date range display', () => {
                 expect(screen.getByText(/Processing uploaded file\.\.\./i)).toBeDefined()
                 expect(screen.getByText(/Classifying batch 1\/3\.\.\./i)).toBeDefined()
                 expect(screen.getByText(/Organization complete!/i)).toBeDefined()
+                expect(OrganizerService.mock.calls.at(-1).at(-1)).toBe(true)
                 expect(silentPort.postMessage).toHaveBeenCalledWith({ type: 'CANCEL_JOB' })
                 expect(silentPort.disconnect).toHaveBeenCalled()
             } finally {
