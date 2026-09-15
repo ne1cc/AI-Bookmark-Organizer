@@ -52,6 +52,30 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
                     } catch {}
                     break;
 
+                case 'GET_RESULTS': {
+                    try {
+                        const results = jobRunner.getResults();
+                        if (!Array.isArray(results) || results.length === 0) {
+                            port.postMessage({
+                                type: 'JOB_RESULTS_UNAVAILABLE',
+                                payload: {
+                                    message: 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+                                }
+                            });
+                            break;
+                        }
+                        const state = jobRunner.getState();
+                        const meta = {
+                            count: state.count ?? results.length,
+                            savedAt: state.completedAt ?? Date.now(),
+                            stats: state.stats || results.stats || null,
+                            ...(state.activeDateSpan ? { dateSpan: state.activeDateSpan } : {})
+                        };
+                        port.postMessage({ type: 'JOB_RESULTS', payload: { results, meta } });
+                    } catch {}
+                    break;
+                }
+
                 case 'START_JOB':
                     try {
                         // Acknowledge before the run starts: the panel falls

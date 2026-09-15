@@ -13,12 +13,14 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
         this.organizer = null;
         this.keepAliveTimer = null;
         this.subscribers = new Set();
         this.cachedResults = null;
+        this.persistJobState = true;
     }
 
     getState() {
@@ -72,6 +74,7 @@ export class BackgroundJobRunner {
     }
 
     persistSessionSnapshot() {
+        if (!this.persistJobState) return;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.set({
@@ -84,7 +87,8 @@ export class BackgroundJobRunner {
                         backgroundNotice: this.currentJob.backgroundNotice,
                         errorMsg: this.currentJob.errorMsg,
                         stats: this.currentJob.stats,
-                        count: this.currentJob.count
+                        count: this.currentJob.count,
+                        completedAt: this.currentJob.completedAt
                     }
                 });
             } catch {
@@ -114,8 +118,10 @@ export class BackgroundJobRunner {
             flatDateSort,
             dateSortOrder,
             schemaSortOrder,
+            inferCategories = true,
             autoImport = true
         } = config;
+        this.persistJobState = flatDateSort || !inferCategories;
 
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;
@@ -133,7 +139,8 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
 
         this.startKeepAlive();
@@ -158,6 +165,7 @@ export class BackgroundJobRunner {
             this.addLog(`Folder Content Sorting: ${schemaSortOrder || 'Alphabetical (A–Z)'}`);
             this.addLog(`Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`);
             this.addLog(`Clean Bookmark Titles: ${cleanTitles ? 'On' : 'Off'}`);
+            this.addLog(`Category Source: ${inferCategories ? 'AI inferred from bookmarks' : `${categories.length} manual categories`}`);
         }
 
         this.organizer = new OrganizerService(
@@ -218,7 +226,7 @@ export class BackgroundJobRunner {
             flatDateSort,
             dateSortOrder,
             schemaSortOrder,
-            autoImport
+            inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
 
@@ -238,6 +246,7 @@ export class BackgroundJobRunner {
 
             if (results && results.length > 0) {
                 this.cachedResults = results;
+                const completedAt = Date.now();
                 const stats = this.organizer?.stats || results.stats || null;
                 const finalSpan = stats?.dateSpan || this.currentJob.activeDateSpan || calculateDateSpan(results);
                 const enrichedStats = {
@@ -246,7 +255,7 @@ export class BackgroundJobRunner {
                 };
                 const meta = {
                     count: results.length,
-                    savedAt: Date.now(),
+                    savedAt: completedAt,
                     stats: enrichedStats,
                     ...(finalSpan ? { dateSpan: finalSpan } : {})
                 };
@@ -255,11 +264,12 @@ export class BackgroundJobRunner {
                 this.currentJob.progress = 100;
                 this.currentJob.stats = enrichedStats;
                 this.currentJob.count = results.length;
+                this.currentJob.completedAt = completedAt;
                 if (finalSpan) {
                     this.currentJob.activeDateSpan = finalSpan;
                 }
 
-                if (typeof chrome !== 'undefined' && chrome.storage) {
+                if (this.persistJobState && typeof chrome !== 'undefined' && chrome.storage) {
                     if (chrome.storage.session) {
                         try {
                             chrome.storage.session.set({ organizedData: results });
@@ -326,7 +336,8 @@ export class BackgroundJobRunner {
             backgroundNotice: '',
             errorMsg: '',
             stats: null,
-            count: null
+            count: null,
+            completedAt: null
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
