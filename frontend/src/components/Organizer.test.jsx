@@ -823,6 +823,14 @@ describe('In-process and completion date range display', () => {
 
         it('removes stale download state when transient worker results are unavailable', async () => {
             const listeners = []
+            const staleResults = [{
+                title: 'Stale result',
+                url: 'https://example.com/stale',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+            const staleMeta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            let provideStaleResults = true
             const mockPort = {
                 postMessage: vi.fn(),
                 onMessage: {
@@ -837,12 +845,22 @@ describe('In-process and completion date range display', () => {
             global.chrome = {
                 runtime: { connect: vi.fn(() => mockPort) },
                 storage: {
-                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
-                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    local: { get: vi.fn((keys, cb) => cb({ organizedMeta: staleMeta })), set: vi.fn(), remove: vi.fn() },
+                    session: {
+                        get: vi.fn((keys, cb) => {
+                            if (keys.includes('organizedData') && provideStaleResults) {
+                                provideStaleResults = false
+                                cb({ organizedData: staleResults })
+                            } else {
+                                cb({})
+                            }
+                        }),
+                        set: vi.fn()
+                    }
                 }
             }
 
-            const { unmount } = render(<Organizer />)
+            render(<Organizer />)
 
             act(() => {
                 listeners.forEach((listener) => listener({
@@ -860,45 +878,7 @@ describe('In-process and completion date range display', () => {
 
             expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'GET_RESULTS' })
 
-            const staleResults = [{
-                title: 'Stale result',
-                url: 'https://example.com/stale',
-                category: 'Generated Topic',
-                sub_category: 'Generated Detail'
-            }]
-
-            act(() => {
-                listeners.forEach((listener) => listener({
-                    type: 'JOB_RESULTS',
-                    payload: {
-                        results: staleResults,
-                        meta: { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
-                    }
-                }))
-            })
-
             expect(await screen.findByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
-            fireEvent.click(screen.getByText('Organize Again'))
-            expect(screen.queryByRole('button', { name: /Download Organized Bookmarks/i })).toBeNull()
-
-            unmount()
-            render(<Organizer />)
-
-            act(() => {
-                listeners.forEach((listener) => listener({
-                    type: 'STATUS_UPDATE',
-                    payload: {
-                        id: 'job_completed_after_reconnect',
-                        status: 'complete',
-                        progress: 100,
-                        logs: [],
-                        count: 1,
-                        completedAt: 1757890000000
-                    }
-                }))
-            })
-
-            expect(mockPort.postMessage).toHaveBeenLastCalledWith({ type: 'GET_RESULTS' })
 
             act(() => {
                 listeners.forEach((listener) => listener({
@@ -911,6 +891,23 @@ describe('In-process and completion date range display', () => {
                 expect(screen.getByText(unavailableMessage)).toBeDefined()
                 expect(screen.queryByRole('button', { name: /Download Organized Bookmarks/i })).toBeNull()
             })
+
+            act(() => {
+                listeners.forEach((listener) => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_completed_after_unavailable',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [],
+                        count: 1,
+                        completedAt: 1757890000000
+                    }
+                }))
+            })
+
+            expect(mockPort.postMessage).toHaveBeenLastCalledWith({ type: 'GET_RESULTS' })
+            expect(mockPort.postMessage.mock.calls.filter(([message]) => message.type === 'GET_RESULTS')).toHaveLength(2)
             expect(global.chrome.storage.local.set).not.toHaveBeenCalled()
             expect(global.chrome.storage.session.set).not.toHaveBeenCalled()
         })
