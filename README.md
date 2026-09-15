@@ -109,6 +109,14 @@ Your data stays private:
 
 ## Changelog
 
+### v1.4.0
+
+- Auto-Generated Categories: New installs can infer a complete category and subcategory structure from the full bookmark collection.
+- Preserved Manual Taxonomies: Saved manual categories remain available, ordered, and unchanged when inference is enabled.
+- Safer Category Placement: Classification cannot invent top-level folders or place an approved subcategory beneath the wrong category.
+- Reliable Background Recovery: Reopened panels recover completed inferred results from the active worker and clearly request a rerun if transient results were lost after a worker restart.
+- Restored Category Choices: Explicitly empty manual selections and the full suggested-category pool are preserved.
+
 ### v1.3.0
 
 - Zoom & Interface Scaling: Added top-bar zoom controls (+ / - / reset) allowing users to dynamically scale the extension UI for comfortable reading at any side panel width.
