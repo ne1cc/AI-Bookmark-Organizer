@@ -946,6 +946,20 @@ export default function Organizer({ theme = 'light' }) {
             }
 
             const { OrganizerService } = await import('../services/organizer')
+            // Let React paint the completion state before opening the native
+            // Save As dialog. Some browsers keep the extension panel looking
+            // frozen while that modal is active if it is opened inline in
+            // OrganizerService.start().
+            const deferFileDownload = (results) => {
+                setTimeout(async () => {
+                    try {
+                        const { downloadBookmarks } = await import('../services/bookmarks_export')
+                        downloadBookmarks(results)
+                    } catch (downloadError) {
+                        console.warn('[Organizer] Deferred file download failed:', downloadError)
+                    }
+                }, 0)
+            }
             organizerRef.current = new OrganizerService(
                 apiKey,
                 categories,
@@ -998,7 +1012,8 @@ export default function Organizer({ theme = 'light' }) {
                 cleanTitles,
                 flatDateSort,
                 dateSortOrder,
-                schemaSortOrder
+                schemaSortOrder,
+                deferFileDownload
             );
 
             // Pass parsed bookmarks if file mode, otherwise null (browser mode)

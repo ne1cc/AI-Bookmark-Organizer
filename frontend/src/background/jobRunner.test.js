@@ -31,6 +31,9 @@ describe('BackgroundJobRunner', () => {
                 getChildren: vi.fn((id, cb) => cb && cb([])),
                 create: vi.fn((data, cb) => cb && cb({ id: 'new_id', ...data }))
             },
+            downloads: {
+                download: vi.fn()
+            },
             storage: {
                 session: {
                     get: vi.fn((keys, cb) => cb && cb({})),
@@ -134,6 +137,32 @@ describe('BackgroundJobRunner', () => {
         expect(globalThis.chrome.runtime.getPlatformInfo).toHaveBeenCalled();
 
         await jobPromise;
+        expect(runner.keepAliveTimer).toBeNull();
+    });
+
+    it('notifies completion before opening the Save As dialog for uploaded files', async () => {
+        const events = [];
+        runner.subscribe((event) => events.push(event));
+
+        const jobPromise = runner.startJob({
+            apiKey: 'AIzaSyFakeKey',
+            categories: ['Tech'],
+            flatDateSort: true,
+            dateSortOrder: 'desc'
+        }, [{
+            title: 'Uploaded bookmark',
+            url: 'https://example.com/uploaded',
+            add_date: '1700000000'
+        }]);
+
+        await jobPromise;
+
+        expect(events).toContain('complete');
+        expect(globalThis.chrome.downloads.download).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(0);
+
+        expect(globalThis.chrome.downloads.download).toHaveBeenCalledTimes(1);
         expect(runner.keepAliveTimer).toBeNull();
     });
 
