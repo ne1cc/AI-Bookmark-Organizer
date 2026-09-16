@@ -584,14 +584,20 @@ describe('OrganizerService detail enrichment integration', () => {
         expect(detailClassifier).not.toHaveBeenCalled()
     })
 
-    it('keeps two-level output for sparse detail results and returns cancellation', async () => {
-        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+    it('keeps two-level output and warns when detail enrichment has no usable schemas, then returns cancellation', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas')
+            .mockResolvedValueOnce(new Map())
+            .mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map(item => ({ ...item, detail_category: 'React' })))
         const logs = []
         const sparse = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
         const sparseResults = await sparse.start(links)
         expect(sparseResults.every(item => item.detail_category === null)).toBe(true)
         expect(logs.some(event => typeof event.message === 'string' && event.message.includes('Finding useful third-level groups'))).toBe(true)
+        expect(logs).toContainEqual({
+            status: 'warning',
+            message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.'
+        })
 
         vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (_records, _key, _names, _model, isCancelled) => {
             sparse.cancel()
