@@ -235,7 +235,7 @@ export function isNonSubdividableError(err) {
 }
 
 export class OrganizerService {
-    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategories = true) {
+    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
         this.apiKey = apiKey;
         this.categories = categories;
         this.onProgress = onProgress || (() => { });
@@ -245,7 +245,13 @@ export class OrganizerService {
         this.cleanTitles = cleanTitles;
         this.flatDateSort = flatDateSort;
         this.dateSortOrder = dateSortOrder; // 'desc' (newest first) or 'asc' (oldest first)
-        this.inferCategories = inferCategories;
+        // The panel supplies a deferred handler so a native Save As dialog
+        // cannot delay the state transition that follows start(). Direct
+        // service callers retain the historical immediate export behavior.
+        this.fileDownload = typeof inferCategoriesOrFileDownload === 'function' ? inferCategoriesOrFileDownload : undefined;
+        this.inferCategories = typeof inferCategoriesOrFileDownload === 'boolean'
+            ? inferCategoriesOrFileDownload
+            : true;
 
         // schemaSortOrder can be 'alpha', 'date-desc', 'date-asc', 'domain', or 'none'
         if (schemaSortOrder !== undefined) {
@@ -699,7 +705,7 @@ export class OrganizerService {
                 finalResults.filename = labels.downloadFilename;
 
                 this.onProgress({ status: 'info', message: `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
-                downloadBookmarks(finalResults);
+                (this.fileDownload || downloadBookmarks)(finalResults);
             } else {
                 // Browser mode (no file uploaded): bucket into MECE Month & Year tiers
                 const bucketMap = new Map();
@@ -1126,7 +1132,7 @@ export class OrganizerService {
         if (fileBookmarks) {
             this.onProgress({ status: 'info', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
             try {
-                downloadBookmarks(finalResults);
+                (this.fileDownload || downloadBookmarks)(finalResults);
             } catch (dlErr) {
                 console.warn('[Organizer] Download invocation deferred:', dlErr);
             }

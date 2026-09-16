@@ -1273,6 +1273,31 @@ describe('OrganizerService flat chronological date sorting', () => {
         downloadSpy.mockClear()
     })
 
+    it('uses the injected file download handler for uploaded bookmark files', async () => {
+        const fileDownload = vi.fn()
+        const service = new OrganizerService(
+            'test-key',
+            ['Tech'],
+            () => {},
+            'google/gemini-3.1-flash-lite',
+            '1-3',
+            true,
+            true,
+            false,
+            true,
+            'desc',
+            undefined,
+            fileDownload
+        )
+
+        const results = await service.start([
+            { title: 'Bookmark', url: 'https://example.com', add_date: '1700000000' }
+        ])
+
+        expect(fileDownload).toHaveBeenCalledWith(results)
+        expect(bookmarksExport.downloadBookmarks).not.toHaveBeenCalled()
+    })
+
     it('sorts bookmarks descending (newest first) and bypasses AI schema and classification', async () => {
         const schemaSpy = vi.spyOn(ai, 'generateSchema')
         const inferredSchemaSpy = vi.spyOn(ai, 'generateInferredSchema')
