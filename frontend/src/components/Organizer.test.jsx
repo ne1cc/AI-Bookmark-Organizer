@@ -1404,6 +1404,157 @@ describe('In-process and completion date range display', () => {
                 vi.useRealTimers()
             }
         })
+
+        it('wires live worker updates to the port reconnected after the original port died', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-rewire')
+
+            const deadListeners = []
+            const deadDisconnect = []
+            const deadPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn((fn) => deadListeners.push(fn)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn((fn) => deadDisconnect.push(fn)) },
+                disconnect: vi.fn()
+            }
+            const liveListeners = []
+            const livePort = {
+                postMessage: vi.fn((msg) => {
+                    if (msg?.type === 'START_JOB') {
+                        liveListeners.forEach((fn) => fn({ type: 'JOB_ACK', payload: {} }))
+                    }
+                }),
+                onMessage: {
+                    addListener: vi.fn((fn) => liveListeners.push(fn)),
+                    removeListener: vi.fn((fn) => {
+                        const idx = liveListeners.indexOf(fn)
+                        if (idx !== -1) liveListeners.splice(idx, 1)
+                    })
+                },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            let connectCount = 0
+            global.chrome = {
+                runtime: { connect: vi.fn(() => (++connectCount === 1 ? deadPort : livePort)) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+
+            // The service worker suspends after idle; the mount-time port dies with it.
+            act(() => { deadDisconnect.forEach((fn) => fn()) })
+
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                await Promise.resolve()
+            })
+
+            expect(global.chrome.runtime.connect).toHaveBeenCalledTimes(2)
+            expect(livePort.postMessage).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'START_JOB' })
+            )
+            await waitFor(() => expect(screen.getByText(/acknowledged the job/i)).toBeDefined())
+
+            // Worker broadcasts run state on the reconnected port — the panel must hear it.
+            act(() => {
+                liveListeners.forEach((fn) => fn({
+                    type: 'STATUS_UPDATE',
+                    payload: {
+                        id: 'job_live',
+                        status: 'processing',
+                        progress: 42,
+                        logs: [{ message: 'Classifying batch 3/10...', timestamp: Date.now() }]
+                    }
+                }))
+            })
+
+            expect(screen.getByText('Classifying batch 3/10...')).toBeDefined()
+            expect(screen.getByText(/In Progress\.\.\. 42%/)).toBeDefined()
+        })
+
+        it('watchdog reconnects and resyncs the terminal when the port dies mid-run', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-watchdog')
+            vi.useFakeTimers()
+
+            try {
+                const firstListeners = []
+                const firstDisconnect = []
+                const firstPort = {
+                    postMessage: vi.fn((msg) => {
+                        if (msg?.type === 'START_JOB') {
+                            firstListeners.forEach((fn) => fn({ type: 'JOB_ACK', payload: {} }))
+                        }
+                    }),
+                    onMessage: {
+                        addListener: vi.fn((fn) => firstListeners.push(fn)),
+                        removeListener: vi.fn((fn) => {
+                            const idx = firstListeners.indexOf(fn)
+                            if (idx !== -1) firstListeners.splice(idx, 1)
+                        })
+                    },
+                    onDisconnect: { addListener: vi.fn((fn) => firstDisconnect.push(fn)) },
+                    disconnect: vi.fn()
+                }
+                const secondListeners = []
+                const secondPort = {
+                    postMessage: vi.fn(),
+                    onMessage: {
+                        addListener: vi.fn((fn) => secondListeners.push(fn)),
+                        removeListener: vi.fn((fn) => {
+                            const idx = secondListeners.indexOf(fn)
+                            if (idx !== -1) secondListeners.splice(idx, 1)
+                        })
+                    },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+                let connectCount = 0
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => (++connectCount === 1 ? firstPort : secondPort)) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await Promise.resolve()
+                })
+                expect(screen.getByText(/acknowledged the job/i)).toBeDefined()
+
+                // The worker dies mid-run; the port drops with it.
+                act(() => { firstDisconnect.forEach((fn) => fn()) })
+
+                await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+
+                expect(global.chrome.runtime.connect).toHaveBeenCalledTimes(2)
+                expect(secondPort.postMessage).toHaveBeenCalledWith({ type: 'GET_STATUS' })
+
+                // The worker answers on the reconnected port and the terminal catches up.
+                act(() => {
+                    secondListeners.forEach((fn) => fn({
+                        type: 'STATUS_UPDATE',
+                        payload: {
+                            id: 'job_resync',
+                            status: 'processing',
+                            progress: 55,
+                            logs: [{ message: 'Classifying batch 6/10...', timestamp: Date.now() }]
+                        }
+                    }))
+                })
+
+                expect(screen.getByText('Classifying batch 6/10...')).toBeDefined()
+                expect(screen.getByText(/In Progress\.\.\. 55%/)).toBeDefined()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
     })
 })
 

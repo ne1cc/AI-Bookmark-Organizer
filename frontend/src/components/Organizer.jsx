@@ -251,6 +251,10 @@ export default function Organizer({ theme = 'light' }) {
     const completionTimerRef = useRef(null)
     const returnToMenuRef = useRef(null)
     const statusRef = useRef('idle')
+    // True while the panel waits for the worker's JOB_ACK. A replacement
+    // port immediately receives the worker's connect-time STATUS_UPDATE
+    // (idle), which must not reset the run state mid-handshake.
+    const awaitingAckRef = useRef(false)
     useEffect(() => { statusRef.current = status }, [status])
 
     // How long the panel waits for the service worker to acknowledge a
@@ -274,6 +278,143 @@ export default function Organizer({ theme = 'light' }) {
             if (returnToMenuRef.current) returnToMenuRef.current()
         }, RETURN_TO_MENU_DELAY_MS)
     }, [])
+
+    // Attaches the full job-state listener set to a port. Every port this
+    // panel uses must be wired — the mount-time port and any port reconnected
+    // after the service worker (and the old port with it) died, otherwise
+    // progress and terminal updates are broadcast into a port nobody hears.
+    const wirePort = useCallback((port) => {
+        if (!port) return;
+
+        port.onMessage.addListener((msg) => {
+            if (!msg || !msg.type) return;
+
+            if (msg.type === 'STATUS_UPDATE') {
+                const state = msg.payload;
+                if (!state) return;
+
+                if (state.status === 'processing') {
+                    resultsRequestPendingRef.current = false
+                    setStatus('processing');
+                    if (typeof state.progress === 'number') setProgress(state.progress);
+                    if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
+                    if (state.backgroundNotice !== undefined) setBackgroundNotice(state.backgroundNotice);
+                    if (Array.isArray(state.logs) && state.logs.length > 0) {
+                        setLogs(state.logs.map(l => ({
+                            message: l.message,
+                            timestamp: new Date(l.timestamp)
+                        })));
+                    }
+                } else if (state.status === 'complete' && state.id) {
+                    if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
+                    setStatus('complete');
+                    setProgress(100);
+                    scheduleReturnToMenu();
+                    if (Array.isArray(state.logs) && state.logs.length > 0) {
+                        setLogs(state.logs.map(l => ({
+                            message: l.message,
+                            timestamp: new Date(l.timestamp)
+                        })));
+                    }
+                    if (!organizedResultsRef.current) {
+                        resultsRequestPendingRef.current = true
+                        try {
+                            port.postMessage({ type: 'GET_RESULTS' })
+                        } catch {
+                            resultsRequestPendingRef.current = false
+                        }
+                    }
+                    if (!organizedResultsRef.current && chrome.storage?.session) {
+                        chrome.storage.session.get(['organizedData'], (sRes) => {
+                            if (sRes?.organizedData) {
+                                organizedResultsRef.current = sRes.organizedData;
+                            }
+                        });
+                    }
+                } else if (state.status === 'error') {
+                    resultsRequestPendingRef.current = false
+                    setStatus('error');
+                    setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
+                    setBackgroundNotice('');
+                } else if (state.status === 'idle') {
+                    resultsRequestPendingRef.current = false
+                    setIsCancelling(false);
+                    // A stale session snapshot can leave the panel in a
+                    // zombie "In Progress" state with no worker behind
+                    // it. If the worker has no job and nothing is
+                    // running in this panel, return to the main menu.
+                    // Skipped during the ACK handshake: a freshly reconnected
+                    // port receives the worker's connect-time idle snapshot
+                    // before the job we are starting has been seen.
+                    if (!awaitingAckRef.current && statusRef.current === 'processing' && !organizerRef.current) {
+                        setStatus('idle');
+                        setProgress(0);
+                        setBackgroundNotice('');
+                    }
+                }
+            } else if (msg.type === 'JOB_RESULTS') {
+                resultsRequestPendingRef.current = false
+                const { results, meta } = msg.payload || {};
+                if (Array.isArray(results) && results.length > 0) {
+                    organizedResultsRef.current = results;
+                    if (meta) {
+                        setLastOrganized(meta);
+                        const span = meta.stats?.dateSpan || meta.dateSpan;
+                        if (span) setActiveDateSpan(span);
+                    }
+                    setStatus('complete');
+                    setProgress(100);
+                    setBackgroundNotice('');
+                    scheduleReturnToMenu();
+                }
+            } else if (msg.type === 'JOB_RESULTS_UNAVAILABLE') {
+                if (!resultsRequestPendingRef.current) return
+                resultsRequestPendingRef.current = false
+                organizedResultsRef.current = null;
+                setLastOrganized(null);
+                setStatus('error');
+                setProgress(0);
+                setErrorMsg(msg.payload?.message || 'Organized results are no longer available. Run organization again.');
+                setBackgroundNotice('');
+                if (completionTimerRef.current) {
+                    clearTimeout(completionTimerRef.current);
+                    completionTimerRef.current = null;
+                }
+            } else if (msg.type === 'JOB_COMPLETE') {
+                resultsRequestPendingRef.current = false
+                const { results, meta } = msg.payload || {};
+                if (results) organizedResultsRef.current = results;
+                if (meta) {
+                    setLastOrganized(meta);
+                    const span = meta.stats?.dateSpan || meta.dateSpan;
+                    if (span) setActiveDateSpan(span);
+                }
+                setStatus('complete');
+                setProgress(100);
+                setBackgroundNotice('');
+                scheduleReturnToMenu();
+            } else if (msg.type === 'JOB_ERROR') {
+                resultsRequestPendingRef.current = false
+                setStatus('error');
+                setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
+                setBackgroundNotice('');
+            } else if (msg.type === 'JOB_CANCELLED') {
+                resultsRequestPendingRef.current = false
+                setStatus('idle');
+                setIsCancelling(false);
+                setProgress(0);
+            }
+        });
+
+        port.onDisconnect.addListener(() => {
+            resultsRequestPendingRef.current = false
+            // A replacement port may already be wired by the time a stale
+            // port disconnects — never null out the live one.
+            if (portRef.current === port) {
+                portRef.current = null;
+            }
+        });
+    }, [scheduleReturnToMenu]);
 
     // Background job connection & state restoration hook
     useEffect(() => {
@@ -322,130 +463,9 @@ export default function Organizer({ theme = 'light' }) {
         if (typeof chrome !== 'undefined' && chrome.runtime?.connect) {
             try {
                 const port = chrome.runtime.connect({ name: 'organizer-channel' });
+                wirePort(port);
                 portRef.current = port;
                 mark('background channel connected')
-
-                port.onMessage.addListener((msg) => {
-                    if (!msg || !msg.type) return;
-
-                    if (msg.type === 'STATUS_UPDATE') {
-                        const state = msg.payload;
-                        if (!state) return;
-
-                        if (state.status === 'processing') {
-                            resultsRequestPendingRef.current = false
-                            setStatus('processing');
-                            if (typeof state.progress === 'number') setProgress(state.progress);
-                            if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
-                            if (state.backgroundNotice !== undefined) setBackgroundNotice(state.backgroundNotice);
-                            if (Array.isArray(state.logs) && state.logs.length > 0) {
-                                setLogs(state.logs.map(l => ({
-                                    message: l.message,
-                                    timestamp: new Date(l.timestamp)
-                                })));
-                            }
-                        } else if (state.status === 'complete' && state.id) {
-                            if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
-                            setStatus('complete');
-                            setProgress(100);
-                            scheduleReturnToMenu();
-                            if (Array.isArray(state.logs) && state.logs.length > 0) {
-                                setLogs(state.logs.map(l => ({
-                                    message: l.message,
-                                    timestamp: new Date(l.timestamp)
-                                })));
-                            }
-                            if (!organizedResultsRef.current) {
-                                resultsRequestPendingRef.current = true
-                                try {
-                                    port.postMessage({ type: 'GET_RESULTS' })
-                                } catch {
-                                    resultsRequestPendingRef.current = false
-                                }
-                            }
-                            if (!organizedResultsRef.current && chrome.storage?.session) {
-                                chrome.storage.session.get(['organizedData'], (sRes) => {
-                                    if (sRes?.organizedData) {
-                                        organizedResultsRef.current = sRes.organizedData;
-                                    }
-                                });
-                            }
-                        } else if (state.status === 'error') {
-                            resultsRequestPendingRef.current = false
-                            setStatus('error');
-                            setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
-                            setBackgroundNotice('');
-                        } else if (state.status === 'idle') {
-                            resultsRequestPendingRef.current = false
-                            setIsCancelling(false);
-                            // A stale session snapshot can leave the panel in a
-                            // zombie "In Progress" state with no worker behind
-                            // it. If the worker has no job and nothing is
-                            // running in this panel, return to the main menu.
-                            if (statusRef.current === 'processing' && !organizerRef.current) {
-                                setStatus('idle');
-                                setProgress(0);
-                                setBackgroundNotice('');
-                            }
-                        }
-                    } else if (msg.type === 'JOB_RESULTS') {
-                        resultsRequestPendingRef.current = false
-                        const { results, meta } = msg.payload || {};
-                        if (Array.isArray(results) && results.length > 0) {
-                            organizedResultsRef.current = results;
-                            if (meta) {
-                                setLastOrganized(meta);
-                                const span = meta.stats?.dateSpan || meta.dateSpan;
-                                if (span) setActiveDateSpan(span);
-                            }
-                            setStatus('complete');
-                            setProgress(100);
-                            setBackgroundNotice('');
-                            scheduleReturnToMenu();
-                        }
-                    } else if (msg.type === 'JOB_RESULTS_UNAVAILABLE') {
-                        if (!resultsRequestPendingRef.current) return
-                        resultsRequestPendingRef.current = false
-                        organizedResultsRef.current = null;
-                        setLastOrganized(null);
-                        setStatus('error');
-                        setProgress(0);
-                        setErrorMsg(msg.payload?.message || 'Organized results are no longer available. Run organization again.');
-                        setBackgroundNotice('');
-                        if (completionTimerRef.current) {
-                            clearTimeout(completionTimerRef.current);
-                            completionTimerRef.current = null;
-                        }
-                    } else if (msg.type === 'JOB_COMPLETE') {
-                        resultsRequestPendingRef.current = false
-                        const { results, meta } = msg.payload || {};
-                        if (results) organizedResultsRef.current = results;
-                        if (meta) {
-                            setLastOrganized(meta);
-                            const span = meta.stats?.dateSpan || meta.dateSpan;
-                            if (span) setActiveDateSpan(span);
-                        }
-                        setStatus('complete');
-                        setProgress(100);
-                        setBackgroundNotice('');
-                        scheduleReturnToMenu();
-                    } else if (msg.type === 'JOB_ERROR') {
-                        resultsRequestPendingRef.current = false
-                        setStatus('error');
-                        setErrorMsg(msg.payload?.message || 'Failed to complete background organization.');
-                        setBackgroundNotice('');
-                    } else if (msg.type === 'JOB_CANCELLED') {
-                        resultsRequestPendingRef.current = false
-                        setStatus('idle');
-                        setIsCancelling(false);
-                        setProgress(0);
-                    }
-                });
-
-                port.onDisconnect.addListener(() => {
-                    resultsRequestPendingRef.current = false
-                    portRef.current = null;
-                });
 
                 // Request state only after the listener is attached. A completed state
                 // response will request transient results; idle panels never request them.
@@ -466,20 +486,29 @@ export default function Organizer({ theme = 'light' }) {
                 portRef.current = null;
             }
         };
-    }, [scheduleReturnToMenu]);
+    }, [scheduleReturnToMenu, wirePort]);
 
     // Watchdog: port messages can be dropped while the service worker is
     // busy or restarting, so re-poll its state periodically while a run is
-    // active. Keeps the progress bar and terminal from going stale.
+    // active. Keeps the progress bar and terminal from going stale. If the
+    // port died (the service worker it belonged to was suspended), reconnect
+    // and wire it so the panel resyncs instead of polling a dead channel.
     useEffect(() => {
         if (status !== 'processing') return;
         const watchdog = setInterval(() => {
             if (portRef.current) {
                 try { portRef.current.postMessage({ type: 'GET_STATUS' }); } catch {}
+            } else if (typeof chrome !== 'undefined' && chrome.runtime?.connect) {
+                try {
+                    const port = chrome.runtime.connect({ name: 'organizer-channel' });
+                    wirePort(port);
+                    portRef.current = port;
+                    port.postMessage({ type: 'GET_STATUS' });
+                } catch {}
             }
         }, 10000);
         return () => clearInterval(watchdog);
-    }, [status]);
+    }, [status, wirePort]);
 
     // Non-blocking background sync from chrome.storage (runs AFTER UI is already painted)
     useEffect(() => {
@@ -937,6 +966,11 @@ export default function Organizer({ theme = 'light' }) {
             if (!port && typeof chrome !== 'undefined' && chrome.runtime?.connect) {
                 try {
                     port = chrome.runtime.connect({ name: 'organizer-channel' });
+                    // A reconnected port carries none of the job-state
+                    // listeners of the dead one — without wiring it, every
+                    // STATUS_UPDATE the worker broadcasts is lost and the
+                    // terminal/progress freeze while the run continues there.
+                    wirePort(port);
                     portRef.current = port;
                 } catch {
                     port = null;
@@ -945,6 +979,7 @@ export default function Organizer({ theme = 'light' }) {
 
             let delegated = false;
             if (port) {
+                awaitingAckRef.current = true;
                 delegated = await new Promise((resolveDelegate) => {
                     let settled = false;
                     let ackListener = null;
@@ -952,6 +987,7 @@ export default function Organizer({ theme = 'light' }) {
                     const finish = (acknowledged) => {
                         if (settled) return;
                         settled = true;
+                        awaitingAckRef.current = false;
                         clearTimeout(ackTimer);
                         if (ackListener && port.onMessage?.removeListener) {
                             try { port.onMessage.removeListener(ackListener); } catch {}
@@ -1150,7 +1186,7 @@ export default function Organizer({ theme = 'light' }) {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
