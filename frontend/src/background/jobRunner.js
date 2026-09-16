@@ -1,4 +1,5 @@
 import { OrganizerService } from '../services/organizer';
+import { downloadBookmarks } from '../services/bookmarks_export';
 import { calculateDateSpan } from '../utils/dates';
 import { createStorageSnapshotProvider } from './snapshotProvider';
 
@@ -226,7 +227,10 @@ export class BackgroundJobRunner {
             flatDateSort,
             dateSortOrder,
             schemaSortOrder,
-            inferCategories
+            // Do not open a native Save As dialog inline with start(). Let
+            // start() resolve and notify the panel that the job is complete
+            // first, then launch the dialog on the next task.
+            parsedBookmarks ? () => {} : inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
 
@@ -280,10 +284,21 @@ export class BackgroundJobRunner {
                     }
                 }
 
-                this.stopKeepAlive();
+                if (!parsedBookmarks) this.stopKeepAlive();
                 this.persistSessionSnapshot();
                 this.notify('status', this.getState());
                 this.notify('complete', { results, meta, stats: enrichedStats });
+                if (parsedBookmarks) {
+                    setTimeout(() => {
+                        try {
+                            downloadBookmarks(results);
+                        } catch (downloadError) {
+                            console.warn('[Background] Deferred file download failed:', downloadError);
+                        } finally {
+                            this.stopKeepAlive();
+                        }
+                    }, 0);
+                }
                 return results;
             }
 
