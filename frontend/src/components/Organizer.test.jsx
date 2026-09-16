@@ -75,6 +75,13 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('explains that chosen categories are top-level while deeper folders remain AI-inferred', () => {
+        render(<Organizer />)
+
+        expect(screen.getByText(/Your chosen categories become the top-level folders/i)).toBeDefined()
+        expect(screen.getByText(/AI will still infer relevant subcategories and deeper folder levels within each one/i)).toBeDefined()
+    })
+
     it('explains the single Other category fallback after clearing the selection', () => {
         render(<Organizer />)
         fireEvent.click(screen.getByRole('button', { name: /Clear All/i }))
