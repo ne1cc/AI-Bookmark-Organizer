@@ -532,6 +532,73 @@ describe('OrganizerService cleanTitles integration', () => {
     })
 })
 
+describe('OrganizerService detail enrichment integration', () => {
+    const links = Array.from({ length: 6 }, (_, i) => ({ title: `Link ${i}`, url: `https://detail.test/${i}` }))
+    const schema = { categories: [{ name: 'Tech', sub_categories: ['Frontend'] }] }
+    const classified = links.map((bookmark, i) => ({ ...bookmark, category: 'Tech', sub_category: 'Frontend', _i: i }))
+
+    beforeEach(() => {
+        vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map((bookmark, i) => ({ ...bookmark, category: 'Tech', sub_category: 'Frontend', _i: i })))
+    })
+
+    afterEach(() => vi.restoreAllMocks())
+
+    it('assigns detail folders through the real inferred OrganizerService run', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const results = await service.start(links)
+        expect(results.map(item => item.detail_category)).toEqual(['React', 'React', 'React', 'Vue', 'Vue', 'Vue'])
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(results.stats.detailedSubcategories).toBe(1)
+    })
+
+    it('preserves manual selected top-level categories while enriching deeper levels', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const results = await service.start(links)
+        expect(results.every(item => item.category === 'Tech' && item.sub_category === 'Frontend')).toBe(true)
+        expect(results.every(item => item.category === 'Tech' && item.sub_category === 'Frontend')).toBe(true)
+        expect(new Set(results.map(item => item.detail_category))).toEqual(new Set(['React', 'Vue']))
+    })
+
+    it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {
+        const detailSchemas = vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map())
+        const detailClassifier = vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue([])
+        detailSchemas.mockClear()
+        detailClassifier.mockClear()
+        const small = links.slice(0, 5)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        await service.start(small)
+        expect(detailSchemas).not.toHaveBeenCalled()
+        expect(detailClassifier).not.toHaveBeenCalled()
+
+        const flat = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, true, 'desc', undefined, false)
+        await flat.start(links)
+        expect(detailSchemas).not.toHaveBeenCalled()
+    })
+
+    it('keeps two-level output for sparse detail results and returns cancellation', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map(item => ({ ...item, detail_category: 'React' })))
+        const logs = []
+        const sparse = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const sparseResults = await sparse.start(links)
+        expect(sparseResults.every(item => item.detail_category === null)).toBe(true)
+        expect(logs.some(event => typeof event.message === 'string' && event.message.includes('Finding useful third-level groups'))).toBe(true)
+
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (_records, _key, _names, _model, isCancelled) => {
+            sparse.cancel()
+            if (isCancelled()) { const error = new Error('Operation cancelled.'); error.isCancelled = true; throw error }
+            return []
+        })
+        expect(await sparse.start(links)).toBeNull()
+    })
+})
+
 describe('withRetry resilient retry and cancellation', () => {
     beforeEach(() => {
         vi.useFakeTimers()
