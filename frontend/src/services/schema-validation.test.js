@@ -6,7 +6,15 @@ import {
     generateSchema,
     generateInferredSchema,
     classifyBatch,
-    SCHEMA_MAX_TOKENS
+    SCHEMA_MAX_TOKENS,
+    validateDetailSchema,
+    buildDetailSchemaPrompt,
+    generateDetailSchemas,
+    DETAIL_SCHEMA_GROUP_LIMIT,
+    DETAIL_SCHEMA_SAMPLE_LIMIT,
+    DETAIL_MIN_BOOKMARKS,
+    DETAIL_MIN_FOLDER_SIZE,
+    DETAIL_MAX_FOLDERS
 } from './ai'
 
 // Builds an OpenRouter-shaped success response carrying `content` verbatim.
@@ -511,6 +519,176 @@ describe('generateSchema validation and corrective retry', () => {
 
         expect(JSON.parse(global.fetch.mock.calls[0][1].body).max_tokens).toBe(SCHEMA_MAX_TOKENS)
         expect(SCHEMA_MAX_TOKENS).toBe(16000)
+    })
+})
+
+describe('detail schema validation', () => {
+    const records = (category, sub_category, count) => Array.from({ length: count }, (_, i) => ({
+        title: `${sub_category} Bookmark ${i + 1}`,
+        url: `https://example.test/${category}/${sub_category}/${i + 1}`,
+        category,
+        sub_category
+    }))
+
+    it('accepts valid names, normalizes duplicates, rejects invalid names, and caps folders by group size', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['finance\u0000markets', records('Finance', 'Markets', 12)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            {
+                category: 'Tech',
+                sub_category: 'Frontend',
+                detail_categories: [
+                    '  React  ', 'react', 'CSS', 'Frontend', 'General', 'Other',
+                    'Docs / Guides', '', 'Components'
+                ]
+            },
+            {
+                category: 'Finance',
+                sub_category: 'Markets',
+                detail_categories: ['Stocks', 'Options', 'Crypto', 'Investing', 'Trading']
+            }
+        ] }, requested)
+
+        expect(result.ok).toBe(true)
+        expect(result.schemas.get('tech\u0000frontend')).toEqual(['React', 'CSS', 'Components'])
+        expect(result.schemas.get('finance\u0000markets')).toEqual(['Stocks', 'Options', 'Crypto', 'Investing'])
+        expect(result.schemas.has('unknown\u0000parent')).toBe(false)
+    })
+
+    it('isolates unknown parent pairs and omits groups with fewer than two valid names', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['design\u0000systems', records('Design', 'Systems', 6)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            { category: 'Unknown', sub_category: 'Parent', detail_categories: ['One', 'Two'] },
+            { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'General'] },
+            { category: 'Design', sub_category: 'Systems', detail_categories: ['One Valid', 'Systems', 'Docs / Guides'] }
+        ] }, requested)
+
+        expect(result.ok).toBe(false)
+        expect(result.schemas.size).toBe(0)
+        expect(result.issues.join(' ')).toMatch(/usable|valid/i)
+    })
+
+    it('returns false only when every requested group is unusable', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['design\u0000systems', records('Design', 'Systems', 6)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            { category: 'Unknown', sub_category: 'Parent', detail_categories: ['One', 'Two'] },
+            { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'Libraries'] },
+            { category: 'Design', sub_category: 'Systems', detail_categories: ['General', 'Systems'] }
+        ] }, requested)
+
+        expect(result.ok).toBe(true)
+        expect([...result.schemas.entries()]).toEqual([
+            ['tech\u0000frontend', ['Frameworks', 'Libraries']]
+        ])
+    })
+
+    it('builds a bounded, evenly sampled prompt with the required detail JSON contract', () => {
+        const requested = new Map(Array.from({ length: 13 }, (_, groupIndex) => {
+            const category = `Category ${groupIndex + 1}`
+            const sub_category = `Topic ${groupIndex + 1}`
+            return [`${category.toLowerCase()}\u0000${sub_category.toLowerCase()}`, records(category, sub_category, 70)]
+        }))
+
+        const prompt = buildDetailSchemaPrompt(requested)
+        const encoded = prompt.slice(prompt.indexOf('BOOKMARK GROUPS:') + 'BOOKMARK GROUPS:'.length).trim()
+        const groups = JSON.parse(encoded)
+
+        expect(groups).toHaveLength(DETAIL_SCHEMA_GROUP_LIMIT)
+        expect(groups[0].bookmarks).toHaveLength(DETAIL_SCHEMA_SAMPLE_LIMIT)
+        expect(groups[0].bookmarks[0]).toMatchObject({ title: 'Topic 1 Bookmark 1', url: expect.any(String), i: 0 })
+        expect(groups[0].bookmarks.at(-1).i).toBe(59)
+        expect(prompt).toContain('{ "groups": [{ "category": "...", "sub_category": "...", "detail_categories": ["..."] }] }')
+        expect(prompt).toMatch(/Title Case|at least 2|meaningful/i)
+        expect(prompt).toMatch(/no filler|path/i)
+    })
+
+    it('exports the exact detail limits used by validation and prompting', () => {
+        expect(DETAIL_SCHEMA_GROUP_LIMIT).toBe(12)
+        expect(DETAIL_SCHEMA_SAMPLE_LIMIT).toBe(60)
+        expect(DETAIL_MIN_BOOKMARKS).toBe(6)
+        expect(DETAIL_MIN_FOLDER_SIZE).toBe(2)
+        expect(DETAIL_MAX_FOLDERS).toBe(4)
+    })
+})
+
+describe('generate detail schemas', () => {
+    const group = (category, sub_category, count = 6) => Array.from({ length: count }, (_, i) => ({
+        title: `${category} ${sub_category} ${i + 1}`,
+        url: `https://example.test/${category}/${sub_category}/${i + 1}`,
+        category,
+        sub_category
+    }))
+
+    it('retries one invalid response for correction and returns its usable schemas', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [
+                { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'Styling'] }
+            ] })))
+
+        const events = []
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key', undefined, null, (event) => events.push(event))
+
+        expect(result.get('tech\u0000frontend')).toEqual(['Frameworks', 'Styling'])
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({ isSchemaCorrection: true, isRateLimit: false })
+        expect(JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content).toContain('CORRECTION REQUIRED')
+    })
+
+    it('keeps valid sibling batches when another batch remains unusable', async () => {
+        const requested = new Map(Array.from({ length: 13 }, (_, i) => [
+            `category ${i + 1}\u0000topic ${i + 1}`,
+            group(`Category ${i + 1}`, `Topic ${i + 1}`)
+        ]))
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [
+                { category: 'Category 13', sub_category: 'Topic 13', detail_categories: ['Alpha', 'Beta'] }
+            ] })))
+
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key')
+
+        expect(result.size).toBe(1)
+        expect(result.get('category 13\u0000topic 13')).toEqual(['Alpha', 'Beta'])
+        expect(global.fetch).toHaveBeenCalledTimes(3)
+    })
+
+    it('returns an empty map for a terminal detail-stage request failure', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        global.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 400,
+            text: async () => JSON.stringify({ error: { message: 'invalid request' } })
+        }))
+
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key')
+
+        expect(result).toEqual(new Map())
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves the existing cancellation path', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        const isCancelled = vi.fn(() => true)
+        global.fetch = vi.fn()
+
+        await expect(generateDetailSchemas(requested, 'sk-or-test-key', undefined, isCancelled))
+            .rejects.toMatchObject({ isCancelled: true })
+        expect(global.fetch).not.toHaveBeenCalled()
     })
 })
 

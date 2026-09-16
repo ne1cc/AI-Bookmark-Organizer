@@ -1,5 +1,5 @@
 import { buildAuthoritativeSchema } from './defaultSchema';
-import { canonicalKey } from './subcategoryIdentity';
+import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
@@ -507,6 +507,12 @@ export const SCHEMA_SAMPLE_LIMIT = 200;
 // fallback that put every bookmark in "General".
 export const SCHEMA_MAX_TOKENS = 16000;
 
+export const DETAIL_SCHEMA_GROUP_LIMIT = 12;
+export const DETAIL_SCHEMA_SAMPLE_LIMIT = 60;
+export const DETAIL_MIN_BOOKMARKS = 6;
+export const DETAIL_MIN_FOLDER_SIZE = 2;
+export const DETAIL_MAX_FOLDERS = 4;
+
 // Evenly spaced sample across the whole list. Bookmark exports are grouped by
 // folder, so spacing preserves topic variety better than taking the first N.
 function sampleForSchema(bookmarks, limit = SCHEMA_SAMPLE_LIMIT) {
@@ -847,6 +853,281 @@ export async function generateInferredSchema(
     const error = new Error(`the AI could not infer a usable folder structure (${second.issues.join('; ')})`);
     error.schemaInvalid = true;
     throw error;
+}
+
+const DETAIL_FILLER_NAMES = new Set([
+    'general',
+    'other',
+    'none',
+    'uncategorized',
+    'uncategorised',
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'everything else',
+    'other stuff',
+    'catch all',
+    'catch-all',
+    'unclassified',
+    'unsorted',
+    'unknown',
+    'bookmarks',
+    'links',
+    'items',
+    'resources',
+    'content',
+    'stuff'
+]);
+
+function canonicalDetailParentKey(category, subCategory) {
+    if (typeof category !== 'string' || typeof subCategory !== 'string') return '';
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
+}
+
+function recordsForDetailGroup(value) {
+    if (Array.isArray(value)) return value;
+    if (Array.isArray(value?.bookmarks)) return value.bookmarks;
+    if (Array.isArray(value?.records)) return value.records;
+    if (Array.isArray(value?.items)) return value.items;
+    return [];
+}
+
+function detailGroupEntries(groups) {
+    let rawEntries = [];
+    if (groups instanceof Map) {
+        rawEntries = [...groups.entries()].map(([key, value]) => ({ key, value }));
+    } else if (Array.isArray(groups)) {
+        rawEntries = groups.map((value, index) => {
+            if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string') {
+                return { key: value[0], value: value[1] };
+            }
+            return { key: typeof value?.key === 'string' ? value.key : index, value };
+        });
+    } else if (groups && typeof groups === 'object') {
+        rawEntries = Object.entries(groups).map(([key, value]) => ({ key, value }));
+    }
+
+    const entries = [];
+    const seen = new Set();
+    for (const { key: rawKey, value } of rawEntries) {
+        const records = recordsForDetailGroup(value);
+        const first = records.find(record => typeof record?.category === 'string' && typeof record?.sub_category === 'string');
+        const keyParts = typeof rawKey === 'string' ? rawKey.split('\u0000') : [];
+        const category = typeof value?.category === 'string'
+            ? value.category.trim()
+            : (first?.category?.trim() || keyParts[0]?.trim() || '');
+        const sub_category = typeof value?.sub_category === 'string'
+            ? value.sub_category.trim()
+            : (first?.sub_category?.trim() || keyParts[1]?.trim() || '');
+        const canonicalPair = canonicalDetailParentKey(category, sub_category);
+        if (!canonicalPair || seen.has(canonicalPair)) continue;
+        seen.add(canonicalPair);
+        entries.push({
+            key: typeof rawKey === 'string' ? rawKey : `${category.toLowerCase()}\u0000${sub_category.toLowerCase()}`,
+            canonicalPair,
+            category,
+            sub_category,
+            records
+        });
+    }
+    return entries;
+}
+
+function normalizeDetailName(rawName, category, subCategory) {
+    if (typeof rawName !== 'string') return null;
+    const name = rawName.trim().replace(/\s+/g, ' ');
+    if (!name || DETAIL_FILLER_NAMES.has(name.toLowerCase())) return null;
+    if (canonicalKey(name) === canonicalKey(category) || canonicalKey(name) === canonicalKey(subCategory)) return null;
+    if (!shouldCreateDetailFolder(category, subCategory, name)) return null;
+    return name;
+}
+
+/**
+ * Validate a model-generated detail schema against the eligible parent groups.
+ * The returned Map keeps the requested group's original key and approved name
+ * spelling, which is the shape consumed by detail reconciliation.
+ */
+export function validateDetailSchema(response, requestedGroups) {
+    const requested = detailGroupEntries(requestedGroups);
+    const requestedByPair = new Map(requested.map(group => [group.canonicalPair, group]));
+    const namesByGroup = new Map(requested.map(group => [group.key, []]));
+    const issues = [];
+    const rawGroups = Array.isArray(response?.groups) ? response.groups : [];
+
+    if (rawGroups.length === 0) issues.push('the response contained no detail groups');
+
+    for (const rawGroup of rawGroups) {
+        const category = typeof rawGroup?.category === 'string' ? rawGroup.category.trim() : '';
+        const subCategory = typeof rawGroup?.sub_category === 'string' ? rawGroup.sub_category.trim() : '';
+        const requestedGroup = requestedByPair.get(canonicalDetailParentKey(category, subCategory));
+        if (!requestedGroup) {
+            issues.push(`ignored unknown detail parent pair "${category}/${subCategory}"`);
+            continue;
+        }
+
+        const names = Array.isArray(rawGroup.detail_categories) ? rawGroup.detail_categories : [];
+        const seenNames = new Set(namesByGroup.get(requestedGroup.key).map(name => canonicalKey(name)));
+        for (const rawName of names) {
+            const name = normalizeDetailName(rawName, requestedGroup.category, requestedGroup.sub_category);
+            if (!name) continue;
+            const identity = canonicalKey(name);
+            if (seenNames.has(identity)) continue;
+            seenNames.add(identity);
+            namesByGroup.get(requestedGroup.key).push(name);
+        }
+    }
+
+    const schemas = new Map();
+    for (const group of requested) {
+        const names = namesByGroup.get(group.key);
+        const maxNames = Math.min(
+            DETAIL_MAX_FOLDERS,
+            Math.floor(group.records.length / DETAIL_MIN_FOLDER_SIZE)
+        );
+        if (names.length < 2 || maxNames < 2) {
+            if (rawGroups.length > 0) {
+                issues.push(`the detail group "${group.category}/${group.sub_category}" had fewer than two usable names`);
+            }
+            continue;
+        }
+        schemas.set(group.key, names.slice(0, maxNames));
+    }
+
+    if (schemas.size === 0) {
+        issues.push('no requested detail group had at least two usable detail names');
+    }
+
+    return { ok: schemas.size > 0, schemas, issues };
+}
+
+/**
+ * Build the bounded prompt used to infer detail folders. Groups are limited
+ * before serialization and each group's sample is evenly spaced through its
+ * original records.
+ */
+export function buildDetailSchemaPrompt(groups, issues = null) {
+    const selectedGroups = detailGroupEntries(groups).slice(0, DETAIL_SCHEMA_GROUP_LIMIT);
+    const promptGroups = selectedGroups.map(group => ({
+        category: group.category,
+        sub_category: group.sub_category,
+        bookmarks: sampleForSchema(group.records, DETAIL_SCHEMA_SAMPLE_LIMIT).map((bookmark, i) => ({
+            i,
+            title: bookmark?.title || '',
+            url: bookmark?.url || ''
+        }))
+    }));
+    const correction = issues?.length
+        ? `
+    CORRECTION REQUIRED — YOUR PREVIOUS DETAIL SCHEMA WAS REJECTED.
+    Reason: ${issues.join('; ')}.
+    Return at least two meaningful detail names for at least one requested group, and omit invalid or unusable groups.
+`
+        : '';
+
+    return `
+    You are an expert information architect inferring useful third-level bookmark folders from real examples.
+    ${correction}
+
+    GOAL
+    Propose detail folders only where the bookmarks show at least two meaningful, specific groups. A detail folder must make the existing category and subcategory easier to scan.
+
+    NAMING RULES
+    1. Use short human-readable names in Title Case, preferably 1-3 words.
+    2. Do not use filler names such as "General", "Other", "Misc", "Various", "Bookmarks", or "Links".
+    3. Never use a name that echoes the category or subcategory, is empty, or contains a slash or backslash. Do not invent path-like names.
+    4. Use at most 4 detail names per group and only return names that could each contain at least two bookmarks.
+    5. Keep requested category and sub_category spellings exactly as provided. Do not add unknown parent pairs.
+
+    OUTPUT — return ONLY this JSON object, with no markdown or commentary:
+    { "groups": [{ "category": "...", "sub_category": "...", "detail_categories": ["..."] }] }
+
+    BOOKMARK GROUPS:
+    ${JSON.stringify(promptGroups)}
+    `;
+}
+
+const requestDetailSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry(
+    () => callModel(
+        apiKey,
+        model,
+        'You are a precise information architect and JSON generator. Output only valid JSON. Do not use Markdown blocks.',
+        prompt,
+        { temperature: 0.2, maxTokens: 8000, salvageTruncated: true },
+        isCancelled
+    ),
+    5,
+    1500,
+    isCancelled,
+    onRetry
+);
+
+function isDetailCancelled(isCancelled) {
+    return typeof isCancelled === 'function' ? isCancelled() : Boolean(isCancelled);
+}
+
+function detailCancellationError() {
+    const error = new Error('Operation cancelled.');
+    error.isCancelled = true;
+    return error;
+}
+
+/**
+ * Infer detail schemas in independent, bounded batches. A failed batch is
+ * allowed to remain at two levels while valid sibling batches are retained.
+ */
+export async function generateDetailSchemas(
+    groups,
+    apiKey,
+    model = 'google/gemini-3.1-flash-lite',
+    isCancelled = null,
+    onRetry = null
+) {
+    if (isDetailCancelled(isCancelled)) throw detailCancellationError();
+
+    const entries = detailGroupEntries(groups);
+    const schemas = new Map();
+
+    for (let start = 0; start < entries.length; start += DETAIL_SCHEMA_GROUP_LIMIT) {
+        if (isDetailCancelled(isCancelled)) throw detailCancellationError();
+        const batch = entries.slice(start, start + DETAIL_SCHEMA_GROUP_LIMIT);
+        let first;
+        try {
+            first = validateDetailSchema(
+                await requestDetailSchema(buildDetailSchemaPrompt(batch), apiKey, model, isCancelled, onRetry),
+                batch
+            );
+        } catch (error) {
+            if (error?.isCancelled) throw error;
+            continue;
+        }
+
+        let result = first;
+        if (!first.ok) {
+            if (typeof onRetry === 'function') {
+                onRetry({
+                    attempt: 1,
+                    delayMs: 0,
+                    error: new Error(first.issues.join('; ')),
+                    isRateLimit: false,
+                    isSchemaCorrection: true
+                });
+            }
+            try {
+                result = validateDetailSchema(
+                    await requestDetailSchema(buildDetailSchemaPrompt(batch, first.issues), apiKey, model, isCancelled, onRetry),
+                    batch
+                );
+            } catch (error) {
+                if (error?.isCancelled) throw error;
+                continue;
+            }
+        }
+
+        for (const [key, names] of result.schemas) schemas.set(key, names);
+    }
+
+    return schemas;
 }
 
 // A non-empty authoritative schema always starts with a user-selected category.
