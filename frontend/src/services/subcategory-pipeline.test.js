@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { OrganizerService } from './organizer'
 import * as bookmarksExport from './bookmarks_export'
+import { shouldCreateDetailFolder } from './subcategoryIdentity'
+import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 import fixture from './__fixtures__/finance-heavy-bookmarks.json'
 
 // Regression suite for the "everything lands in General" bug, run through the
@@ -128,6 +130,15 @@ const subfoldersIn = (results, category) =>
 
 const generalShare = (results) =>
     results.filter(r => (r.sub_category || '').toLowerCase() === 'general').length / results.length
+
+const detailItems = (category, sub_category, detail_category, count) =>
+    Array.from({ length: count }, (_, i) => ({
+        title: `${detail_category} ${i}`,
+        url: `https://detail.example/${category}/${sub_category}/${detail_category}/${i}`,
+        category,
+        sub_category,
+        detail_category
+    }))
 
 describe('subcategory pipeline regression', () => {
     let originalFetch
@@ -329,5 +340,75 @@ describe('subcategory pipeline regression', () => {
         expect(results).toHaveLength(thinInput.length)
         expect(generalShare(results)).toBeLessThan(0.2)
         expect(subfoldersIn(results, DOMINANT_CATEGORY).size).toBeGreaterThanOrEqual(3)
+    })
+})
+
+describe('third-level detail reconciliation', () => {
+    it('accepts genuine detail names and rejects sinks, parent echoes, and paths', () => {
+        expect(shouldCreateDetailFolder('Technology', 'Frontend', '  React  ')).toBe(true)
+
+        for (const detail of [
+            '', 'General', 'other', 'None', 'Uncategorized', 'Misc', 'Miscellaneous', 'Various',
+            'Technology', 'Frontend', 'Frontend / React', 'Frontend\\React'
+        ]) {
+            expect(shouldCreateDetailFolder('Technology', 'Frontend', detail)).toBe(false)
+        }
+    })
+
+    it('groups only genuine subcategories with at least six records in first-seen order', () => {
+        const eligible = detailItems('Tech', 'Frontend', 'Frameworks', 6)
+        const tooSmall = detailItems('Tech', 'Backend', 'Node', 5)
+        const sink = detailItems('Tech', 'General', 'Frameworks', 6)
+        const classified = [...eligible, ...tooSmall, ...sink]
+
+        const groups = groupEligibleDetailCandidates(classified)
+
+        expect([...groups.keys()]).toEqual(['tech\u0000frontend'])
+        expect(groups.get('tech\u0000frontend')).toHaveLength(6)
+        expect(groups.get('tech\u0000frontend')[0]).toBe(eligible[0])
+    })
+
+    it('collapses a one-detail result and does not mutate classified input', () => {
+        const classified = [
+            ...detailItems('Tech', 'Frontend', 'Frameworks', 6),
+            ...detailItems('Tech', 'Frontend', 'Styling', 1)
+        ]
+        const original = structuredClone(classified)
+        const detailSchemas = new Map([
+            ['tech\u0000frontend', ['Frameworks', 'Styling']]
+        ])
+
+        const result = reconcileDetailCategories(classified, detailSchemas)
+
+        expect(classified).toEqual(original)
+        expect(result.classified.every(item => item.detail_category === null)).toBe(true)
+        expect(result.summary).toEqual({
+            detailFoldersKept: 0,
+            detailedSubcategories: 0,
+            groupsKeptAtTwoLevels: 1
+        })
+    })
+
+    it('retains two detail folders, normalizes duplicate spelling, and clears sparse assignments', () => {
+        const classified = [
+            ...detailItems('Tech', 'Frontend', 'Frameworks', 2),
+            ...detailItems('Tech', 'Frontend', 'frameworks', 2),
+            ...detailItems('Tech', 'Frontend', 'Styling', 2),
+            ...detailItems('Tech', 'Frontend', 'Sparse', 1)
+        ]
+        const detailSchemas = new Map([
+            ['tech\u0000frontend', ['Frameworks', 'Styling', 'Sparse']]
+        ])
+
+        const result = reconcileDetailCategories(classified, detailSchemas)
+
+        expect(result.classified.map(item => item.detail_category)).toEqual([
+            'Frameworks', 'Frameworks', 'Frameworks', 'Frameworks', 'Styling', 'Styling', null
+        ])
+        expect(result.summary).toEqual({
+            detailFoldersKept: 2,
+            detailedSubcategories: 1,
+            groupsKeptAtTwoLevels: 0
+        })
     })
 })
