@@ -88,11 +88,19 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
     })
 
-    it('explains that chosen categories are top-level while deeper folders remain AI-inferred', () => {
+    it('explains that inferred categories are roots and subfolders are generated automatically', () => {
         render(<Organizer />)
 
-        expect(screen.getByText(/Your chosen categories become the top-level folders/i)).toBeDefined()
-        expect(screen.getByText(/AI will still infer relevant subcategories and deeper folder levels within each one/i)).toBeDefined()
+        expect(screen.getByText(/AI chooses the root-level categories for this run/i)).toBeDefined()
+        expect(screen.getByText(/AI automatically generates subfolders inside each root folder from your bookmarks/i)).toBeDefined()
+    })
+
+    it('explains that manual categories become roots while subfolders remain automatic', () => {
+        render(<Organizer />)
+        fireEvent.click(screen.getByRole('switch', { name: /Infer categories/i }))
+
+        expect(screen.getByText(/Your chosen categories become the root-level folders/i)).toBeDefined()
+        expect(screen.getByText(/AI automatically generates subfolders inside each root folder from your bookmarks/i)).toBeDefined()
     })
 
     it('renders the complete suggested category pool when manual editing is enabled', () => {

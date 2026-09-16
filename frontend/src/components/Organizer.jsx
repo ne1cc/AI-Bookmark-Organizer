@@ -1711,7 +1711,9 @@ export default function Organizer({ theme = 'light' }) {
                             <div style={{ maxWidth: '19rem' }}>
                                 <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', fontWeight: 600 }}>Infer categories</div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
-                                    AI creates categories from this run’s bookmarks. Manual choices stay saved but inactive.
+                                    {inferCategories
+                                        ? 'AI chooses the root-level categories for this run.'
+                                        : 'Your chosen categories become the root-level folders.'}
                                 </div>
                             </div>
                             <button
@@ -1782,7 +1784,7 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
 
                     <div style={{ margin: '0.75rem 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.45' }}>
-                        Your chosen categories become the top-level folders. AI will still infer relevant subcategories and deeper folder levels within each one.
+                        AI automatically generates subfolders inside each root folder from your bookmarks.
                     </div>
 
                     {/* Custom Category Input */}
@@ -1850,7 +1852,7 @@ export default function Organizer({ theme = 'light' }) {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No manual categories selected. Add categories from the suggestions below when Infer categories is off.
+                            No manual categories selected. Turn on Infer categories to let AI choose the root folders, or add categories below. Subfolders are always generated automatically inside each root folder.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
