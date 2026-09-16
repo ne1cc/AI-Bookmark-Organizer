@@ -76,6 +76,29 @@ describe('generateNetscapeHTML subfolder alignment with browser writes', () => {
         expect(folderNames(html).filter(n => n === 'News')).toHaveLength(2)
     })
 
+    it('emits nested detail folders, keeps invalid details at the subcategory, and isolates same-named details by parent', () => {
+        const html = generateNetscapeHTML([
+            { title: 'React docs', url: 'https://react.dev', category: 'Tech', sub_category: 'Frontend', detail_category: 'React' },
+            { title: 'Frontend overview', url: 'https://frontend.example', category: 'Tech', sub_category: 'Frontend', detail_category: 'General' },
+            { title: 'React tools', url: 'https://tools.example', category: 'Tech', sub_category: 'Backend', detail_category: 'React' }
+        ])
+
+        expect(folderNames(html)).toEqual(['Tech', 'Frontend', 'React', 'Backend', 'React'])
+        expect(html).not.toContain('>General<')
+        expect(linkTitles(html)).toEqual(['React docs', 'Frontend overview', 'React tools'])
+
+        const frontendStart = html.indexOf('>Frontend</H3>')
+        const frontendDetailEnd = html.indexOf('\n            </DL><p>', frontendStart)
+        const frontendEnd = html.indexOf('\n        </DL><p>', frontendDetailEnd)
+        const frontendSection = html.slice(frontendStart, frontendEnd)
+        expect(frontendSection).toContain('>React</H3>')
+        expect(frontendSection).toContain('Frontend overview')
+        expect(frontendSection.indexOf('Frontend overview')).toBeGreaterThan(frontendDetailEnd - frontendStart)
+
+        const reactFolderOccurrences = html.match(/>React<\/H3>/g)
+        expect(reactFolderOccurrences).toHaveLength(2)
+    })
+
     it('leaves the flat chronological export untouched when items have no category', () => {
         const bookmarks = [
             { title: 'One', url: 'https://one.example.com', category: null, sub_category: null },

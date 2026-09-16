@@ -1,5 +1,6 @@
 import { calculateDateSpan } from '../utils/dates';
 import { shouldCreateSubFolder } from './bookmarks';
+import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // HTML escape function to prevent XSS
 function escapeHtml(text) {
@@ -70,18 +71,15 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         return html;
     }
 
-    // A Map preserves category insertion order even for numeric custom names.
-    // Subcategory groups use prototype-free objects: a proposed
-    // sub_category named "constructor" or "toString" would otherwise read as
-    // already-present via the prototype chain, skip its array initialisation,
-    // and throw on push — losing the entire export to a caught console.warn.
+    // Maps preserve insertion order and keep every level safe for arbitrary
+    // model-proposed names, including Object.prototype members.
     const structured = new Map();
 
     bookmarks.forEach(b => {
         const cat = b.category || "Uncategorized";
         const sub = b.sub_category;
 
-        if (!structured.has(cat)) structured.set(cat, Object.create(null));
+        if (!structured.has(cat)) structured.set(cat, { root: [], subcategories: new Map() });
         const content = structured.get(cat);
 
         // Mirror the browser-write path exactly: `shouldCreateSubFolder` rejects
@@ -90,11 +88,18 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         // "General" folder under every category on HTML import, while the same
         // run in browser mode filed them directly under the category.
         if (shouldCreateSubFolder(cat, sub)) {
-            if (!content[sub]) content[sub] = [];
-            content[sub].push(b);
+            if (!content.subcategories.has(sub)) {
+                content.subcategories.set(sub, { root: [], details: new Map() });
+            }
+            const subContent = content.subcategories.get(sub);
+            if (shouldCreateDetailFolder(cat, sub, b.detail_category)) {
+                if (!subContent.details.has(b.detail_category)) subContent.details.set(b.detail_category, []);
+                subContent.details.get(b.detail_category).push(b);
+            } else {
+                subContent.root.push(b);
+            }
         } else {
-            if (!content['_root']) content['_root'] = [];
-            content['_root'].push(b);
+            content.root.push(b);
         }
     });
 
@@ -103,27 +108,42 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         html += `    <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeCategory}</H3>\n`;
         html += `    <DL><p>\n`;
 
-        // Subcategories
-        for (const [sub, items] of Object.entries(content)) {
-            if (sub !== '_root') {
-                const safeSub = escapeHtml(sub);
-                html += `        <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeSub}</H3>\n`;
-                html += `        <DL><p>\n`;
+        // Subcategories and their optional detail folders
+        for (const [sub, subContent] of content.subcategories) {
+            const safeSub = escapeHtml(sub);
+            html += `        <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeSub}</H3>\n`;
+            html += `        <DL><p>\n`;
+
+            for (const [detail, items] of subContent.details) {
+                const safeDetail = escapeHtml(detail);
+                html += `            <DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${safeDetail}</H3>\n`;
+                html += `            <DL><p>\n`;
                 items.forEach(item => {
                     const safeTitle = escapeHtml(item.title);
                     const safeUrl = sanitizeUrl(item.url);
                     const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
                     if (safeUrl) {
-                        html += `            <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
+                        html += `                <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
                     }
                 });
-                html += `        </DL><p>\n`;
+                html += `            </DL><p>\n`;
             }
+
+            subContent.root.forEach(item => {
+                const safeTitle = escapeHtml(item.title);
+                const safeUrl = sanitizeUrl(item.url);
+                const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
+                if (safeUrl) {
+                    html += `            <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
+                }
+            });
+
+            html += `        </DL><p>\n`;
         }
 
         // Root items in category
-        if (content['_root']) {
-            content['_root'].forEach(item => {
+        if (content.root.length > 0) {
+            content.root.forEach(item => {
                 const safeTitle = escapeHtml(item.title);
                 const safeUrl = sanitizeUrl(item.url);
                 const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);

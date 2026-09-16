@@ -1,3 +1,5 @@
+import { shouldCreateDetailFolder } from './subcategoryIdentity';
+
 function getBookmarksApi() {
     return (typeof chrome !== 'undefined' && chrome.bookmarks) || (typeof browser !== 'undefined' && browser.bookmarks);
 }
@@ -327,6 +329,17 @@ export async function importBookmarksToBrowser(items, options = {}) {
                         createdFolders[subPath] = subFolder;
                     }
                     targetParentId = subFolder.id;
+
+                    const detailCategory = item.detail_category;
+                    if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
+                        const detailPath = `${subFolder.id}\u0000${detailCategory}`;
+                        let detailFolder = createdFolders[detailPath];
+                        if (!detailFolder) {
+                            detailFolder = await findOrCreateFolder(subFolder.id, detailCategory);
+                            createdFolders[detailPath] = detailFolder;
+                        }
+                        targetParentId = detailFolder.id;
+                    }
                 }
 
                 const created = await createBookmark(targetParentId, item.title || 'Untitled', item.url);

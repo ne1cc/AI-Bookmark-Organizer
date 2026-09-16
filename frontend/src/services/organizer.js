@@ -3,6 +3,7 @@ import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBa
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
+import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
@@ -1225,6 +1226,19 @@ export class OrganizerService {
                             createdFolders[subPath] = subFolder;
                         }
                         targetParentId = subFolder.id;
+
+                        const detailCategory = item.detail_category;
+                        if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
+                            const detailPath = `${subFolder.id}\u0000${detailCategory}`;
+                            let detailFolder;
+                            if (createdFolders[detailPath]) {
+                                detailFolder = createdFolders[detailPath];
+                            } else {
+                                detailFolder = await findOrCreateFolder(subFolder.id, detailCategory);
+                                createdFolders[detailPath] = detailFolder;
+                            }
+                            targetParentId = detailFolder.id;
+                        }
                     }
                 } catch (err) {
                     this.failedMoves.push({ title: item.title, reason: err?.message || String(err) });
