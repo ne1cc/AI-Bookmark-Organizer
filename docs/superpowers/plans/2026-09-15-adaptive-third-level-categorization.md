@@ -165,3 +165,27 @@
 - [ ] **Step 3: Run manual Chrome and Firefox smoke checks with a collection large enough to produce two detail folders, plus sparse-group, manual-mode, inferred-mode, reconnect/download, and flat-date cases.**
 - [ ] **Step 4: Update PR #70 with the three-level hierarchy, adaptive thresholds, fallback behavior, test counts, package paths, and smoke-test results.**
 - [ ] **Step 5: Only after every automated and manual check passes, create the local annotated tag `v1.4.0-rc.1`. Do not push the tag without explicit authorization.**
+
+---
+
+### Task 8: Resolve whole-branch release findings
+
+**Files:**
+- Modify: `frontend/src/services/organizer.js`
+- Modify: `frontend/src/services/ai.js`
+- Modify: `frontend/src/components/Organizer.jsx`
+- Modify: `frontend/src/background/jobRunner.js`
+- Test: `frontend/src/services/organizer.test.js`
+- Test: `frontend/src/components/Organizer.test.jsx`
+- Test: `frontend/src/background/jobRunner.test.js`
+
+**Interfaces:**
+- Consumes: the completed Tasks 1–7 implementation and existing reconnect protocol.
+- Produces: collision-safe detail assignment, bounded detail classification, and completed-result retention across automatic menu return.
+
+- [ ] **Step 1: Add a stable run-scoped record key.** Preserve an input ordinal for parsed/file-mode records, prefer `id`/`key` when present, and use the ordinal as the fallback identity. Add a same-parent, ID-less duplicate-URL test proving distinct detail assignments remain distinct.
+- [ ] **Step 2: Bound detail classification requests.** Split eligible records into bounded chunks before `classifyDetailBatch`, preserve parent-group context, combine all chunk results before reconciliation, and add a large-group test proving no detail-classification request exceeds the bounded chunk size.
+- [ ] **Step 3: Retain completed results after automatic menu return.** Separate UI return-to-menu state from destructive `RESET_JOB`; keep transient completed results available for a later panel reconnect/download until a new run, explicit clear, worker restart, or result replacement. Add a completion → automatic menu return → reconnect → download regression.
+- [ ] **Step 4: Preserve explicit reset semantics.** Existing explicit cancel/clear/close flows must still remove active or intentionally cleared job state. Do not persist generated detail schemas or assignments in settings.
+- [ ] **Step 5: Run `cd frontend && npm test`, `npm run lint`, `npm run build:chrome`, and `npm run build:firefox`; require zero failures/errors and no new warnings.**
+- [ ] **Step 6: Commit with `git add frontend/src/services/organizer.js frontend/src/services/ai.js frontend/src/components/Organizer.jsx frontend/src/background/jobRunner.js frontend/src/services/organizer.test.js frontend/src/components/Organizer.test.jsx frontend/src/background/jobRunner.test.js && git commit -m "fix(release): close detail categorization review findings"`.**
