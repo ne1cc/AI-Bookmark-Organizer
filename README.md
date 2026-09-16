@@ -110,7 +110,7 @@ Your data stays private:
 
 ## Changelog
 
-### v1.4.0
+### v1.4.1
 
 - Auto-Generated Categories: New installs can infer a complete category and subcategory structure from the full bookmark collection.
 - Preserved Manual Taxonomies: Saved manual categories remain available, ordered, and unchanged when inference is enabled.
