@@ -2249,7 +2249,7 @@ describe('fixed hierarchy placement and export', () => {
 
         expect(root.children.map(n => n.title)).toEqual(selected)
         const tech = root.children[0]
-        expect(tech.children.map(n => n.title)).toEqual(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools'])
+        expect(tech.children.map(n => n.title)).toEqual(['Alpha Tools', 'Zeta Tools'])
         const expectedTitles = {
             alpha: ['Alpha', 'Bravo', 'Charlie'],
             'date-desc': ['Bravo', 'Alpha', 'Charlie'],
@@ -2263,7 +2263,7 @@ describe('fixed hierarchy placement and export', () => {
             const html = bookmarksExport.generateNetscapeHTML(results)
             const doc = new DOMParser().parseFromString(html, 'text/html')
             expect([...doc.querySelectorAll('h3')].map(n => n.textContent)).toEqual([
-                firstCategory, ...(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools']), secondCategory, 'Investing'
+                firstCategory, 'Alpha Tools', 'Zeta Tools', secondCategory, 'Investing'
             ])
             expect([...doc.querySelectorAll('a')].slice(0, 3).map(n => n.textContent)).toEqual(expectedTitles)
         }

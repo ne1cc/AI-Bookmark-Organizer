@@ -1057,8 +1057,13 @@ export class OrganizerService {
                     for (const [key, names] of detailSchemas) {
                         if (this.isCancelled) break;
                         const records = eligibleGroups.get(key) || [];
-                        detailed.push(...await classifyDetailBatch(records, this.apiKey, names, this.model,
-                            () => this.isCancelled, null));
+                        try {
+                            detailed.push(...await classifyDetailBatch(records, this.apiKey, names, this.model,
+                                () => this.isCancelled, null));
+                        } catch (err) {
+                            if (this.isCancelled || err?.isCancelled) throw err;
+                            this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
+                        }
                     }
                     if (this.isCancelled) {
                         this.onProgress({ status: 'warning', message: 'Process cancelled.' });
@@ -1105,11 +1110,9 @@ export class OrganizerService {
                 - (categoryRank.get(b.category) ?? categoryRank.size);
             if (catDiff !== 0) return catDiff;
             const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
-            if (sortContents && subDiff !== 0) return subDiff;
-            if (a.detail_category || b.detail_category) {
-                const detailDiff = (a.detail_category || '').localeCompare(b.detail_category || '');
-                if (detailDiff !== 0) return detailDiff;
-            }
+            if (subDiff !== 0) return subDiff;
+            const detailDiff = (a.detail_category || '').localeCompare(b.detail_category || '');
+            if (detailDiff !== 0) return detailDiff;
             if (!sortContents) return 0;
 
             // Sort bookmarks within each folder according to chosen schema
