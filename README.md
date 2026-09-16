@@ -111,13 +111,9 @@ Your data stays private:
 
 ## Changelog
 
-### v1.4.0
+### v1.4.1
 
-- Auto-Generated Categories: New installs can infer a complete category and subcategory structure from the full bookmark collection.
-- Preserved Manual Taxonomies: Saved manual categories remain available, ordered, and unchanged when inference is enabled.
-- Safer Category Placement: Classification cannot invent top-level folders or place an approved subcategory beneath the wrong category.
-- Reliable Background Recovery: Reopened panels recover completed inferred results from the active worker and clearly request a rerun if transient results were lost after a worker restart.
-- Restored Category Choices: Explicitly empty manual selections and the full suggested-category pool are preserved.
+- Category Hierarchy Guidance: Clarified that chosen categories are the root-level folders and that subfolders are always generated automatically inside each root folder.
 
 ### v1.3.0
 
