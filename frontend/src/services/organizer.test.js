@@ -540,6 +540,7 @@ describe('OrganizerService detail enrichment integration', () => {
     beforeEach(() => {
         vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
         vi.spyOn(ai, 'generateSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(schema)
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map((bookmark, i) => ({ ...bookmark, category: 'Tech', sub_category: 'Frontend', _i: i })))
     })
 
@@ -548,7 +549,7 @@ describe('OrganizerService detail enrichment integration', () => {
     it('assigns detail folders through the real inferred OrganizerService run', async () => {
         vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', [], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, true)
         const results = await service.start(links)
         expect(results.map(item => item.detail_category)).toEqual(['React', 'React', 'React', 'Vue', 'Vue', 'Vue'])
         expect(results.stats.detailFoldersCount).toBe(2)
@@ -557,11 +558,12 @@ describe('OrganizerService detail enrichment integration', () => {
 
     it('preserves manual selected top-level categories while enriching deeper levels', async () => {
         vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(classified.map(item => ({ ...item, category: 'tech', sub_category: 'Frontend' })))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
         const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
         const results = await service.start(links)
-        expect(results.every(item => item.category === 'Tech' && item.sub_category === 'Frontend')).toBe(true)
-        expect(results.every(item => item.category === 'Tech' && item.sub_category === 'Frontend')).toBe(true)
+        expect(new Set(results.map(item => item.category))).toEqual(new Set(['Tech']))
+        expect(results.every(item => item.sub_category === 'Frontend')).toBe(true)
         expect(new Set(results.map(item => item.detail_category))).toEqual(new Set(['React', 'Vue']))
     })
 
@@ -579,6 +581,7 @@ describe('OrganizerService detail enrichment integration', () => {
         const flat = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, true, 'desc', undefined, false)
         await flat.start(links)
         expect(detailSchemas).not.toHaveBeenCalled()
+        expect(detailClassifier).not.toHaveBeenCalled()
     })
 
     it('keeps two-level output for sparse detail results and returns cancellation', async () => {
@@ -596,6 +599,9 @@ describe('OrganizerService detail enrichment integration', () => {
             return []
         })
         expect(await sparse.start(links)).toBeNull()
+        expect(sparse.stats.detailFoldersCount).toBe(0)
+        expect(sparse.stats.detailedSubcategories).toBe(0)
+        expect(logs.some(event => event.status === 'warning' && event.message === 'Process cancelled.')).toBe(true)
     })
 })
 
