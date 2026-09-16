@@ -1,7 +1,7 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
-import { reconcileSubcategories } from './reconcile';
+import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
@@ -269,6 +269,7 @@ export class OrganizerService {
             schemaSortOrder: this.schemaSortOrder,
             dateSpan: null,
             failedMoves: []
+            ,detailFoldersCount: 0, detailedSubcategories: 0
         };
         this.failedMoves = [];
         this.snapshotProvider = null;
@@ -505,6 +506,8 @@ export class OrganizerService {
 
     async start(fileBookmarks = null) {
         let allLinks = [];
+        this.stats.detailFoldersCount = 0;
+        this.stats.detailedSubcategories = 0;
 
         if (fileBookmarks) {
             this.onProgress({ status: 'info', message: 'Processing uploaded file...' });
@@ -694,6 +697,7 @@ export class OrganizerService {
                     dateSpan,
                     failedMoves: this.failedMoves,
                     folderTitle: labels.rootFolderTitle
+                    ,detailFoldersCount: 0, detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
@@ -726,6 +730,7 @@ export class OrganizerService {
                     dateSpan,
                     failedMoves: this.failedMoves,
                     folderTitle: labels.rootFolderTitle
+                    ,detailFoldersCount: 0, detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
@@ -1036,6 +1041,40 @@ export class OrganizerService {
                     message: `Subcategories: +${summary.proposedKept} AI-created, ~${summary.merged} merged, ${foldedTotal} folded into General.`
                 });
             }
+
+            this.onProgress({ status: 'info', message: 'Finding useful third-level groups...' });
+            const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
+            if (eligibleGroups.size > 0) {
+                try {
+                    const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
+                        () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
+                            ? `Rate limit reached while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...`
+                            : `Network issue while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
+                    if (detailSchemas.size === 0) {
+                        this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
+                    }
+                    const detailed = [];
+                    for (const [key, names] of detailSchemas) {
+                        if (this.isCancelled) break;
+                        const records = eligibleGroups.get(key) || [];
+                        detailed.push(...await classifyDetailBatch(records, this.apiKey, names, this.model,
+                            () => this.isCancelled, null));
+                    }
+                    if (this.isCancelled) {
+                        this.onProgress({ status: 'warning', message: 'Process cancelled.' });
+                        return null;
+                    }
+                    const byUrl = new Map(detailed.map(item => [item.url, item.detail_category]));
+                    classifiedActive = classifiedActive.map(item => ({ ...item, detail_category: byUrl.has(item.url) ? byUrl.get(item.url) : null }));
+                    const detailResult = reconcileDetailCategories(classifiedActive, detailSchemas);
+                    classifiedActive = detailResult.classified;
+                    this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
+                    this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
+                } catch (err) {
+                    if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
+                    this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
+                }
+            }
         }
 
         // Combine classified reachable links with archived unreachable links
@@ -1065,9 +1104,13 @@ export class OrganizerService {
             const catDiff = (categoryRank.get(a.category) ?? categoryRank.size)
                 - (categoryRank.get(b.category) ?? categoryRank.size);
             if (catDiff !== 0) return catDiff;
-            if (!sortContents) return 0;
             const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
-            if (subDiff !== 0) return subDiff;
+            if (sortContents && subDiff !== 0) return subDiff;
+            if (a.detail_category || b.detail_category) {
+                const detailDiff = (a.detail_category || '').localeCompare(b.detail_category || '');
+                if (detailDiff !== 0) return detailDiff;
+            }
+            if (!sortContents) return 0;
 
             // Sort bookmarks within each folder according to chosen schema
             switch (this.schemaSortOrder) {
@@ -1252,6 +1295,7 @@ export class OrganizerService {
             dateSpan,
             failedMoves: this.failedMoves,
             folderTitle: labels.rootFolderTitle
+            ,detailFoldersCount: this.stats.detailFoldersCount || 0, detailedSubcategories: this.stats.detailedSubcategories || 0
         };
         finalResults.stats = this.stats;
         finalResults.filename = labels.downloadFilename;

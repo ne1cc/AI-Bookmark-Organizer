@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { OrganizerService } from './organizer'
+import { normalizeDetailClassification } from './ai'
 import * as bookmarksExport from './bookmarks_export'
 import { shouldCreateDetailFolder } from './subcategoryIdentity'
 import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
@@ -344,6 +345,13 @@ describe('subcategory pipeline regression', () => {
 })
 
 describe('third-level detail reconciliation', () => {
+    it('normalizes approved detail spelling and clears unknown names', () => {
+        const schema = ['React', 'Vue']
+        expect(normalizeDetailClassification({ detail_category: ' react ' }, schema)).toBe('React')
+        expect(normalizeDetailClassification({ detail_category: 'Other' }, schema)).toBeNull()
+        expect(normalizeDetailClassification({ detail_category: 'Invented' }, schema)).toBeNull()
+    })
+
     it('accepts genuine detail names and rejects sinks, parent echoes, and paths', () => {
         expect(shouldCreateDetailFolder('Technology', 'Frontend', '  React  ')).toBe(true)
 

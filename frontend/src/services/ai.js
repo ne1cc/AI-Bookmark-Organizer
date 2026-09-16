@@ -1176,6 +1176,34 @@ export function normalizeClassificationForSchema(entry, schema) {
     return { category: known.name, sub_category: rawSub, proposed: rawSub.toLowerCase() !== 'general' };
 }
 
+// Resolve a third-level classification only against the names approved for its
+// exact parent pair. Unknown values are deliberately cleared, never proposed.
+export function normalizeDetailClassification(entry, detailSchema) {
+    const names = Array.isArray(detailSchema) ? detailSchema
+        : (detailSchema?.detail_categories || detailSchema?.detailCategories || detailSchema?.details || []);
+    const approved = new Map(names.filter(name => typeof name === 'string' && name.trim())
+        .map(name => [canonicalKey(name), name.trim().replace(/\s+/g, ' ')]));
+    if (typeof entry?.detail_category !== 'string') return null;
+    return approved.get(canonicalKey(entry.detail_category.trim())) || null;
+}
+
+export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+    const prompt = `
+    Classify each bookmark into one approved detail folder for this exact parent category/subcategory.
+    APPROVED DETAIL NAMES: ${JSON.stringify(detailSchema)}
+    Return JSON only: { "classified": [{ "i": 0, "detail_category": "..." }] }
+    Use only an approved name; use null when none fits. Every bookmark appears exactly once.
+    BOOKMARKS (each with its index "i"):
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    `;
+    return withRetry(async () => {
+        const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
+        const byIndex = new Map((parsed.classified || []).filter(e => Number.isInteger(e?.i) && e.i >= 0 && e.i < bookmarks.length)
+            .map(e => [e.i, e]));
+        return bookmarks.map((bookmark, i) => ({ ...bookmark, detail_category: normalizeDetailClassification(byIndex.get(i), detailSchema) }));
+    }, 5, 1500, isCancelled, onRetry);
+}
+
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
     const titleInstruction = cleanTitles
         ? `\n    7. Title cleanup: If clean_title is requested, provide a cleaned, human-readable title in the 'clean_title' field for each bookmark (strip site prefixes/suffixes like 'Login |', '- Wikipedia', query noise, or convert raw URL titles into clean titles). If the existing title is already clean, keep it as is.`
