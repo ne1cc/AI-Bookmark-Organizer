@@ -189,3 +189,27 @@
 - [ ] **Step 4: Preserve explicit reset semantics.** Existing explicit cancel/clear/close flows must still remove active or intentionally cleared job state. Do not persist generated detail schemas or assignments in settings.
 - [ ] **Step 5: Run `cd frontend && npm test`, `npm run lint`, `npm run build:chrome`, and `npm run build:firefox`; require zero failures/errors and no new warnings.**
 - [ ] **Step 6: Commit with `git add frontend/src/services/organizer.js frontend/src/services/ai.js frontend/src/components/Organizer.jsx frontend/src/background/jobRunner.js frontend/src/services/organizer.test.js frontend/src/components/Organizer.test.jsx frontend/src/background/jobRunner.test.js && git commit -m "fix(release): close detail categorization review findings"`.**
+
+---
+
+### Task 9: Close final review findings
+
+**Files:**
+- Modify: `frontend/src/services/reconcile.js`
+- Modify: `frontend/src/services/organizer.js`
+- Modify: `frontend/src/services/ai.js`
+- Modify: `frontend/src/components/Organizer.jsx`
+- Test: `frontend/src/services/organizer.test.js`
+- Test: `frontend/src/components/Organizer.test.jsx`
+
+**Interfaces:**
+- Consumes: completed Task 8 identity, chunking, result-retention, and detail enrichment behavior.
+- Produces: canonical parent keys, explicit detail-stage progress summaries/retry reporting, and safe result replacement at the beginning of a new run.
+
+- [ ] **Step 1: Use `canonicalKey` for detail parent grouping and schema lookup.** Add a regression for spacing/canonical variants so one logical `(category, sub_category)` group cannot split into separate detail groups.
+- [ ] **Step 2: Emit the required detail-stage start and final summaries.** Report eligible-group count, created detail-folder count, detailed-subcategory count, and groups kept at two levels; include partial schema/classification failures in a warning without discarding valid sibling groups.
+- [ ] **Step 3: Pass a detail-classification retry reporter.** Use the existing rate-limit/network message convention for detail chunks, including cancellation propagation.
+- [ ] **Step 4: Clear `organizedResultsRef.current` and any run-local completed-result reference at the start of every new run.** Add a regression proving a new run cannot download the previous run’s results when its completion message is recovered after reconnect.
+- [ ] **Step 5: Consolidate shared detail limits/sink rules into one importable module if the current implementation duplicates them; preserve the exact public behavior and constants.**
+- [ ] **Step 6: Run `cd frontend && npm test`, `npm run lint`, `npm run build:chrome`, and `npm run build:firefox`; require zero failures/errors and no new warnings.**
+- [ ] **Step 7: Commit with `git add frontend/src/services/reconcile.js frontend/src/services/organizer.js frontend/src/services/ai.js frontend/src/components/Organizer.jsx frontend/src/services/organizer.test.js frontend/src/components/Organizer.test.jsx && git commit -m "fix(release): close final categorization review findings"`.**
