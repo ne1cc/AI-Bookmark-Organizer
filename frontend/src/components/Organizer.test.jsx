@@ -803,7 +803,8 @@ describe('In-process and completion date range display', () => {
                 title: 'Generated result',
                 url: 'https://example.com/generated',
                 category: 'Generated Topic',
-                sub_category: 'Generated Detail'
+                sub_category: 'Generated Detail',
+                detail_category: 'Generated Leaf'
             }]
             const meta = {
                 count: 1,
@@ -811,6 +812,8 @@ describe('In-process and completion date range display', () => {
                 stats: {
                     categoriesCount: 1,
                     categoryBreakdown: { 'Generated Topic': 1 },
+                    detailFoldersCount: 1,
+                    detailedSubcategories: 1,
                     dateSpan: '1/1/2024 – 2/1/2024'
                 },
                 dateSpan: '1/1/2024 – 2/1/2024'
@@ -829,7 +832,12 @@ describe('In-process and completion date range display', () => {
             act(() => {
                 listeners.forEach((listener) => listener({
                     type: 'STATUS_UPDATE',
-                    payload: { id: 'job_123', status: 'complete', progress: 100 }
+                    payload: {
+                        id: 'job_123',
+                        status: 'complete',
+                        progress: 100,
+                        logs: [{ message: 'Finding useful third-level groups...', timestamp: Date.now() }]
+                    }
                 }))
             })
 
@@ -843,6 +851,10 @@ describe('In-process and completion date range display', () => {
             })
 
             const downloadButton = await screen.findByRole('button', { name: /Download Organized Bookmarks/i })
+            const statsPill = document.querySelector('.stats-pill')
+            expect(screen.getByText('Finding useful third-level groups...')).toBeDefined()
+            expect(statsPill.textContent).toContain('1 detail folder')
+            expect(statsPill.textContent).toContain('1 detailed subcategory')
             fireEvent.click(downloadButton)
 
             await waitFor(() => {
@@ -854,6 +866,7 @@ describe('In-process and completion date range display', () => {
             ].map(([payload]) => payload)
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf')
         })
 
         it('removes stale download state when transient worker results are unavailable', async () => {

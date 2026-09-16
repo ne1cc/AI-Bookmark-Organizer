@@ -2004,6 +2004,8 @@ export default function Organizer({ theme = 'light' }) {
                             {lastOrganized.stats?.duplicatesRemoved > 0 && ` · ${lastOrganized.stats.duplicatesRemoved} dupes`}
                             {lastOrganized.stats?.deadLinksArchived > 0 && ` · ${lastOrganized.stats.deadLinksArchived} archived`}
                             {lastOrganized.stats?.failedMoves?.length > 0 && ` · ${lastOrganized.stats.failedMoves.length} move${lastOrganized.stats.failedMoves.length === 1 ? '' : 's'} failed`}
+                            {lastOrganized.stats?.detailFoldersCount > 0 && ` · ${lastOrganized.stats.detailFoldersCount} detail folder${lastOrganized.stats.detailFoldersCount === 1 ? '' : 's'}`}
+                            {lastOrganized.stats?.detailedSubcategories > 0 && ` · ${lastOrganized.stats.detailedSubcategories} detailed subcategor${lastOrganized.stats.detailedSubcategories === 1 ? 'y' : 'ies'}`}
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             {lastOrganized.stats?.categoryBreakdown && Object.keys(lastOrganized.stats.categoryBreakdown).length > 0 && (
@@ -2164,6 +2166,18 @@ export default function Organizer({ theme = 'light' }) {
                                             <>
                                                 <span>•</span>
                                                 <span><strong>{SCHEMA_SORT_OPTIONS.find(o => o.id === lastOrganized.stats.schemaSortOrder)?.short || 'A–Z'}</strong></span>
+                                            </>
+                                        )}
+                                        {lastOrganized.stats.detailFoldersCount > 0 && (
+                                            <>
+                                                <span>•</span>
+                                                <span><strong>{lastOrganized.stats.detailFoldersCount}</strong> detail folder{lastOrganized.stats.detailFoldersCount === 1 ? '' : 's'}</span>
+                                            </>
+                                        )}
+                                        {lastOrganized.stats.detailedSubcategories > 0 && (
+                                            <>
+                                                <span>•</span>
+                                                <span><strong>{lastOrganized.stats.detailedSubcategories}</strong> detailed subcategor{lastOrganized.stats.detailedSubcategories === 1 ? 'y' : 'ies'}</span>
                                             </>
                                         )}
                                     </>

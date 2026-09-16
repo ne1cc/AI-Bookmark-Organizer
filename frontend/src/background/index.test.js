@@ -137,7 +137,7 @@ describe('Background Service Worker Entry Point', () => {
         startSpy.mockRestore();
     });
 
-    it('returns completed results from jobRunner memory without writing them to storage', async () => {
+    it('GET_RESULTS returns completed results with optional detail assignments without writing them to storage', async () => {
         vi.resetModules();
         let onConnectHandler = null;
         globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
@@ -148,14 +148,20 @@ describe('Background Service Worker Entry Point', () => {
             title: 'Generated result',
             url: 'https://example.com/generated',
             category: 'Generated Topic',
-            sub_category: 'Generated Detail'
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
         }];
         const state = {
             id: 'job_123',
             status: 'complete',
             count: 1,
             completedAt: 1757890000000,
-            stats: { categoriesCount: 1, categoryBreakdown: { 'Generated Topic': 1 } },
+            stats: {
+                categoriesCount: 1,
+                categoryBreakdown: { 'Generated Topic': 1 },
+                detailFoldersCount: 1,
+                detailedSubcategories: 1
+            },
             activeDateSpan: '1/1/2024 – 2/1/2024'
         };
         const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(results);
@@ -174,6 +180,11 @@ describe('Background Service Worker Entry Point', () => {
         messageHandler({ type: 'GET_RESULTS' });
 
         expect(getResultsSpy).toHaveBeenCalledOnce();
+        expect(port.postMessage.mock.calls[0][0].payload.results[0]).toEqual(expect.objectContaining({
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
+        }));
         expect(port.postMessage).toHaveBeenCalledWith({
             type: 'JOB_RESULTS',
             payload: {

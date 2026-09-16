@@ -169,17 +169,20 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().logs.map(log => log.message)).toContain('Category Source: AI inferred from bookmarks');
     });
 
-    it('keeps inferred taxonomy in memory without nesting it in Chrome storage payloads', async () => {
+    it('keeps inferred taxonomy and detail assignments in memory without nesting them in Chrome storage payloads', async () => {
         const originalImplementation = OrganizerService.getMockImplementation();
         const generatedResults = [{
             title: 'Example',
             url: 'https://example.com',
             category: 'Generated Topic',
-            sub_category: 'Generated Detail'
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
         }];
         const generatedStats = {
             categoriesCount: 1,
-            categoryBreakdown: { 'Generated Topic': 1 }
+            categoryBreakdown: { 'Generated Topic': 1 },
+            detailFoldersCount: 1,
+            detailedSubcategories: 1
         };
 
         OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
@@ -203,6 +206,8 @@ describe('BackgroundJobRunner', () => {
 
             expect(runner.getResults()).toEqual(generatedResults);
             expect(runner.getState().stats.categoryBreakdown).toEqual({ 'Generated Topic': 1 });
+            expect(runner.getState().stats.detailFoldersCount).toBe(1);
+            expect(runner.getResults()[0].detail_category).toBe('Generated Leaf');
             expect(runner.getState().logs.some(log => log.message.includes('Generated Detail'))).toBe(true);
 
             const persistedPayloads = [
@@ -211,6 +216,7 @@ describe('BackgroundJobRunner', () => {
             ].map(([payload]) => payload);
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic');
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail');
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf');
         } finally {
             OrganizerService.mockImplementation(originalImplementation);
         }
