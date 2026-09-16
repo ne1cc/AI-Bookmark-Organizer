@@ -1,17 +1,16 @@
-import { subfolderBounds } from './ai';
-import { canonicalKey } from './subcategoryIdentity';
+import { subfolderBounds, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
+import { SINK_NAMES } from './subcategoryPredicates';
+import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
-export { canonicalKey } from './subcategoryIdentity';
+export { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Where a dissolved subcategory's bookmarks go. `shouldCreateSubFolder` treats
 // this name as "no subfolder", so these land directly under their category in
 // both write paths.
 const SINK_SUBCATEGORY = 'General';
 
-// Names that already mean "no real subcategory". They are never merged, folded
-// or capped — they are the destination, not a candidate.
-const SINK_NAMES = new Set(['general', 'other', 'misc', 'miscellaneous', 'uncategorized', 'none', 'various', '']);
-
+// The shared detail sink names also identify subcategories that are never
+// merged, folded or capped — they are the destination, not a candidate.
 // Categories whose contents are bookkeeping rather than topics. Folding a
 // 2-item "Broken Links" folder into "General" would lose the distinction that
 // makes it useful.
@@ -22,6 +21,156 @@ const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an
 
 function isSink(name) {
     return typeof name !== 'string' || SINK_NAMES.has(name.trim().toLowerCase());
+}
+
+function detailGroupKey(category, subCategory) {
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
+}
+
+function isEligibleDetailParent(category, subCategory) {
+    if (typeof category !== 'string' || typeof subCategory !== 'string') return false;
+    if (!shouldCreateDetailFolder(category, subCategory, '__detail_candidate__')) return false;
+    if (SINK_NAMES.has(subCategory.trim().toLowerCase())) return false;
+    return !/[\\/]/.test(subCategory);
+}
+
+/**
+ * Group reconciled records that can support adaptive detail-folder inference.
+ * Values are arrays of the original records, kept in their first-seen order.
+ */
+export function groupEligibleDetailCandidates(classified) {
+    if (!Array.isArray(classified)) return new Map();
+
+    const groups = new Map();
+    for (const item of classified) {
+        const category = item?.category;
+        const subCategory = item?.sub_category;
+        if (!isEligibleDetailParent(category, subCategory)) continue;
+
+        const key = detailGroupKey(category, subCategory);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(item);
+    }
+
+    for (const [key, records] of groups) {
+        if (records.length < DETAIL_MIN_BOOKMARKS) groups.delete(key);
+    }
+
+    return groups;
+}
+
+function schemaEntries(detailSchemas) {
+    if (detailSchemas instanceof Map) return [...detailSchemas.entries()];
+    if (Array.isArray(detailSchemas)) {
+        return detailSchemas.map(schema => [
+            typeof schema?.category === 'string' && typeof schema?.sub_category === 'string'
+                ? detailGroupKey(schema.category, schema.sub_category)
+                : '',
+            schema
+        ]);
+    }
+    if (detailSchemas && typeof detailSchemas === 'object') {
+        if (Array.isArray(detailSchemas.groups)) return schemaEntries(detailSchemas.groups);
+        if (Array.isArray(detailSchemas.categories)) return schemaEntries(detailSchemas.categories);
+        return Object.entries(detailSchemas);
+    }
+    return [];
+}
+
+function schemaDetailNames(schema) {
+    if (Array.isArray(schema)) return schema;
+    if (!schema || typeof schema !== 'object') return [];
+    const names = schema.detail_categories || schema.detailCategories || schema.details || [];
+    return Array.isArray(names) ? names : [];
+}
+
+function normalizeDetailSchemas(detailSchemas) {
+    const normalized = new Map();
+
+    for (const [rawKey, schema] of schemaEntries(detailSchemas)) {
+        const key = typeof rawKey === 'string'
+            ? rawKey.includes('\u0000')
+                ? detailGroupKey(...rawKey.split('\u0000', 2))
+                : canonicalKey(rawKey)
+            : '';
+        if (!key) continue;
+        const approved = new Map();
+        for (const rawName of schemaDetailNames(schema)) {
+            if (typeof rawName !== 'string') continue;
+            const name = rawName.trim().replace(/\s+/g, ' ');
+            const identity = canonicalKey(name);
+            if (!identity || !shouldCreateDetailFolder(
+                schema?.category || key.split('\u0000')[0],
+                schema?.sub_category || key.split('\u0000')[1] || '',
+                name
+            )) continue;
+            if (!approved.has(identity)) approved.set(identity, name);
+        }
+        normalized.set(key, approved);
+    }
+
+    return normalized;
+}
+
+/**
+ * Deterministically retain only detail folders with at least two bookmarks and
+ * collapse any parent group that cannot keep at least two detail folders.
+ * The input records are cloned before assignments are normalized.
+ */
+export function reconcileDetailCategories(classified, detailSchemas) {
+    const summary = { detailFoldersKept: 0, detailedSubcategories: 0, groupsKeptAtTwoLevels: 0 };
+    const cloned = Array.isArray(classified)
+        ? classified.map(item => item && typeof item === 'object' ? { ...item } : item)
+        : [];
+    const schemas = normalizeDetailSchemas(detailSchemas);
+    const groups = new Map();
+
+    for (const item of cloned) {
+        const category = item?.category;
+        const subCategory = item?.sub_category;
+        if (typeof category !== 'string' || typeof subCategory !== 'string') continue;
+        const key = detailGroupKey(category, subCategory);
+        if (!schemas.has(key)) continue;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(item);
+    }
+
+    for (const [key, items] of groups) {
+        const approved = schemas.get(key);
+        const counts = new Map();
+
+        for (const item of items) {
+            const detailName = item.detail_category;
+            const identity = typeof detailName === 'string' ? canonicalKey(detailName.trim()) : '';
+            const normalized = approved.get(identity);
+            if (!normalized || !shouldCreateDetailFolder(item.category, item.sub_category, detailName)) {
+                item.detail_category = null;
+                continue;
+            }
+            item.detail_category = normalized;
+            counts.set(normalized, (counts.get(normalized) || 0) + 1);
+        }
+
+        const surviving = new Set(
+            [...counts.entries()]
+                .filter(([, count]) => count >= DETAIL_MIN_FOLDER_SIZE)
+                .map(([name]) => name)
+        );
+
+        if (surviving.size < 2) {
+            for (const item of items) item.detail_category = null;
+            summary.groupsKeptAtTwoLevels++;
+            continue;
+        }
+
+        for (const item of items) {
+            if (!surviving.has(item.detail_category)) item.detail_category = null;
+        }
+        summary.detailFoldersKept += surviving.size;
+        summary.detailedSubcategories++;
+    }
+
+    return { classified: cloned, summary };
 }
 
 function tokenize(name) {

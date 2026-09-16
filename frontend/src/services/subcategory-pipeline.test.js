@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { OrganizerService } from './organizer'
+import { normalizeDetailClassification } from './ai'
 import * as bookmarksExport from './bookmarks_export'
+import { DETAIL_SINK_NAMES, shouldCreateDetailFolder } from './subcategoryIdentity'
+import { SINK_NAMES, shouldCreateSubFolder } from './subcategoryPredicates'
+import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 import fixture from './__fixtures__/finance-heavy-bookmarks.json'
 
 // Regression suite for the "everything lands in General" bug, run through the
@@ -11,6 +15,29 @@ const bookmarks = fixture.map(({ title, url, dateAdded }) => ({ title, url, date
 const expectedByUrl = new Map(fixture.map(b => [b.url, b]))
 
 const DOMINANT_CATEGORY = 'Finance & Crypto'
+
+describe('detail sink identity', () => {
+    it('exports the canonical sink names used by detail predicates', () => {
+        expect(DETAIL_SINK_NAMES).toBe(SINK_NAMES)
+        expect(DETAIL_SINK_NAMES).toEqual(new Set([
+            'general',
+            'other',
+            'none',
+            'uncategorized',
+            'misc',
+            'miscellaneous',
+            'various',
+            ''
+        ]))
+    })
+
+    it('rejects every canonical sink name for both subcategory and detail folders', () => {
+        for (const sinkName of DETAIL_SINK_NAMES) {
+            expect(shouldCreateSubFolder('Technology', sinkName)).toBe(false)
+            expect(shouldCreateDetailFolder('Technology', 'Frontend', sinkName)).toBe(false)
+        }
+    })
+})
 
 // The structure a healthy model would return for this fixture.
 const healthySchema = {
@@ -96,15 +123,28 @@ const mockAi = ({ schemaResponses, distort = null, provider = 'openrouter' }) =>
     })
 }
 
-const runOrganizer = async (fetchMock, { subfolderTarget = '5-10', provider = 'openrouter', input = bookmarks } = {}) => {
+const runOrganizer = async (fetchMock, {
+    subfolderTarget = '5-10',
+    provider = 'openrouter',
+    input = bookmarks,
+    categories = [...new Set(fixture.map(b => b.expected_category))],
+    inferCategories = false
+} = {}) => {
     global.fetch = fetchMock
     const logs = []
     const service = new OrganizerService(
         API_KEYS[provider],
-        [...new Set(fixture.map(b => b.expected_category))],
+        categories,
         (e) => logs.push(e),
         'google/gemini-3.1-flash-lite',
-        subfolderTarget
+        subfolderTarget,
+        true,
+        true,
+        false,
+        false,
+        'desc',
+        undefined,
+        inferCategories
     )
     const results = await service.start(input)
     return { results, logs, service, messages: logs.map(l => l.message).filter(Boolean) }
@@ -115,6 +155,15 @@ const subfoldersIn = (results, category) =>
 
 const generalShare = (results) =>
     results.filter(r => (r.sub_category || '').toLowerCase() === 'general').length / results.length
+
+const detailItems = (category, sub_category, detail_category, count) =>
+    Array.from({ length: count }, (_, i) => ({
+        title: `${detail_category} ${i}`,
+        url: `https://detail.example/${category}/${sub_category}/${detail_category}/${i}`,
+        category,
+        sub_category,
+        detail_category
+    }))
 
 describe('subcategory pipeline regression', () => {
     let originalFetch
@@ -127,6 +176,65 @@ describe('subcategory pipeline regression', () => {
     afterEach(() => {
         global.fetch = originalFetch
         vi.restoreAllMocks()
+    })
+
+    it('retains inferred category names and subcategory pairs through the complete pipeline', async () => {
+        const inferredSchema = {
+            categories: [
+                { name: 'Engineering', sub_categories: ['Frontend'] },
+                { name: 'Research', sub_categories: ['Papers'] },
+                { name: 'Personal', sub_categories: ['Travel'] }
+            ]
+        }
+        const inferredBookmarks = [
+            { title: 'React', url: 'https://react.dev' },
+            { title: 'Vue', url: 'https://vuejs.org' },
+            { title: 'Attention Is All You Need', url: 'https://arxiv.org/abs/1706.03762' },
+            { title: 'BERT', url: 'https://arxiv.org/abs/1810.04805' },
+            { title: 'Kyoto Guide', url: 'https://example.com/kyoto' },
+            { title: 'Lisbon Guide', url: 'https://example.com/lisbon' }
+        ]
+        const assignments = new Map([
+            ['https://react.dev', ['Engineering', 'Frontend']],
+            ['https://vuejs.org', ['Engineering', 'Frontend']],
+            ['https://arxiv.org/abs/1706.03762', ['Research', 'Papers']],
+            ['https://arxiv.org/abs/1810.04805', ['Research', 'Papers']],
+            ['https://example.com/kyoto', ['Personal', 'Travel']],
+            ['https://example.com/lisbon', ['Personal', 'Travel']]
+        ])
+        let schemaPrompt
+        const fetchMock = vi.fn(async (_url, options) => {
+            const prompt = promptOf(options)
+            if (isSchemaCall(prompt)) {
+                schemaPrompt = prompt
+                return jsonResponse(inferredSchema)
+            }
+
+            const classified = batchFromPrompt(prompt).map(({ i, url }) => {
+                const [category, sub_category] = assignments.get(url)
+                return { i, category, sub_category }
+            })
+            return jsonResponse({ classified })
+        })
+
+        const { results } = await runOrganizer(fetchMock, {
+            input: inferredBookmarks,
+            categories: [],
+            inferCategories: true,
+            subfolderTarget: '1-3'
+        })
+
+        expect(schemaPrompt).toBeDefined()
+        for (const { url } of inferredBookmarks) expect(schemaPrompt).toContain(url)
+        expect(results).toHaveLength(inferredBookmarks.length)
+        expect(new Set(results.map(item => item.url))).toEqual(new Set(inferredBookmarks.map(item => item.url)))
+        expect(new Set(results.map(item => item.category))).toEqual(
+            new Set(['Engineering', 'Research', 'Personal'])
+        )
+        expect(new Set(results.map(item => `${item.category}/${item.sub_category}`))).toEqual(
+            new Set(['Engineering/Frontend', 'Research/Papers', 'Personal/Travel'])
+        )
+        expect(results).not.toContainEqual(expect.objectContaining({ category: 'Other' }))
     })
 
     it('produces real subfolders across categories and places every bookmark exactly once', async () => {
@@ -257,5 +365,82 @@ describe('subcategory pipeline regression', () => {
         expect(results).toHaveLength(thinInput.length)
         expect(generalShare(results)).toBeLessThan(0.2)
         expect(subfoldersIn(results, DOMINANT_CATEGORY).size).toBeGreaterThanOrEqual(3)
+    })
+})
+
+describe('third-level detail reconciliation', () => {
+    it('normalizes approved detail spelling and clears unknown names', () => {
+        const schema = ['React', 'Vue']
+        expect(normalizeDetailClassification({ detail_category: ' react ' }, schema)).toBe('React')
+        expect(normalizeDetailClassification({ detail_category: 'Other' }, schema)).toBeNull()
+        expect(normalizeDetailClassification({ detail_category: 'Invented' }, schema)).toBeNull()
+    })
+
+    it('accepts genuine detail names and rejects sinks, parent echoes, and paths', () => {
+        expect(shouldCreateDetailFolder('Technology', 'Frontend', '  React  ')).toBe(true)
+
+        for (const detail of [
+            '', 'General', 'other', 'None', 'Uncategorized', 'Misc', 'Miscellaneous', 'Various',
+            'Technology', 'Frontend', 'Frontend / React', 'Frontend\\React'
+        ]) {
+            expect(shouldCreateDetailFolder('Technology', 'Frontend', detail)).toBe(false)
+        }
+    })
+
+    it('groups only genuine subcategories with at least six records in first-seen order', () => {
+        const eligible = detailItems('Tech', 'Frontend', 'Frameworks', 6)
+        const tooSmall = detailItems('Tech', 'Backend', 'Node', 5)
+        const sink = detailItems('Tech', 'General', 'Frameworks', 6)
+        const classified = [...eligible, ...tooSmall, ...sink]
+
+        const groups = groupEligibleDetailCandidates(classified)
+
+        expect([...groups.keys()]).toEqual(['tech\u0000frontend'])
+        expect(groups.get('tech\u0000frontend')).toHaveLength(6)
+        expect(groups.get('tech\u0000frontend')[0]).toBe(eligible[0])
+    })
+
+    it('collapses a one-detail result and does not mutate classified input', () => {
+        const classified = [
+            ...detailItems('Tech', 'Frontend', 'Frameworks', 6),
+            ...detailItems('Tech', 'Frontend', 'Styling', 1)
+        ]
+        const original = structuredClone(classified)
+        const detailSchemas = new Map([
+            ['tech\u0000frontend', ['Frameworks', 'Styling']]
+        ])
+
+        const result = reconcileDetailCategories(classified, detailSchemas)
+
+        expect(classified).toEqual(original)
+        expect(result.classified.every(item => item.detail_category === null)).toBe(true)
+        expect(result.summary).toEqual({
+            detailFoldersKept: 0,
+            detailedSubcategories: 0,
+            groupsKeptAtTwoLevels: 1
+        })
+    })
+
+    it('retains two detail folders, normalizes duplicate spelling, and clears sparse assignments', () => {
+        const classified = [
+            ...detailItems('Tech', 'Frontend', 'Frameworks', 2),
+            ...detailItems('Tech', 'Frontend', 'frameworks', 2),
+            ...detailItems('Tech', 'Frontend', 'Styling', 2),
+            ...detailItems('Tech', 'Frontend', 'Sparse', 1)
+        ]
+        const detailSchemas = new Map([
+            ['tech\u0000frontend', ['Frameworks', 'Styling', 'Sparse']]
+        ])
+
+        const result = reconcileDetailCategories(classified, detailSchemas)
+
+        expect(result.classified.map(item => item.detail_category)).toEqual([
+            'Frameworks', 'Frameworks', 'Frameworks', 'Frameworks', 'Styling', 'Styling', null
+        ])
+        expect(result.summary).toEqual({
+            detailFoldersKept: 2,
+            detailedSubcategories: 1,
+            groupsKeptAtTwoLevels: 0
+        })
     })
 })

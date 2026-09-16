@@ -1,5 +1,5 @@
 import { buildAuthoritativeSchema } from './defaultSchema';
-import { canonicalKey } from './subcategoryIdentity';
+import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Shared request headers. OpenRouter recommends identifying the calling app.
 const OR_HEADERS = (apiKey) => ({
@@ -507,6 +507,13 @@ export const SCHEMA_SAMPLE_LIMIT = 200;
 // fallback that put every bookmark in "General".
 export const SCHEMA_MAX_TOKENS = 16000;
 
+export const DETAIL_SCHEMA_GROUP_LIMIT = 12;
+export const DETAIL_SCHEMA_SAMPLE_LIMIT = 60;
+export const DETAIL_CLASSIFICATION_BATCH_SIZE = 50;
+export const DETAIL_MIN_BOOKMARKS = 6;
+export const DETAIL_MIN_FOLDER_SIZE = 2;
+export const DETAIL_MAX_FOLDERS = 4;
+
 // Evenly spaced sample across the whole list. Bookmark exports are grouped by
 // folder, so spacing preserves topic variety better than taking the first N.
 function sampleForSchema(bookmarks, limit = SCHEMA_SAMPLE_LIMIT) {
@@ -537,6 +544,52 @@ export function subfolderBounds(subfolderTarget) {
 // subcategories of their own, so they never fail validation.
 const CATCH_ALL_CATEGORIES = new Set(['other', 'archive', 'uncategorized', 'general']);
 
+// In inferred mode, reject a broader family of names whose only purpose is
+// absorbing bookmarks that the model did not place topically. Keep this
+// separate from CATCH_ALL_CATEGORIES so explicit manual categories retain
+// their existing validation behavior.
+const INFERRED_FILLER_CATEGORIES = new Set([
+    ...CATCH_ALL_CATEGORIES,
+    'others',
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'everything else',
+    'other stuff',
+    'catch all',
+    'uncategorised',
+    'unclassified',
+    'unsorted',
+    'unknown',
+    'none'
+]);
+const INFERRED_FILLER_PREFIXES = new Set([
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'other',
+    'others',
+    'uncategorized',
+    'uncategorised',
+    'general'
+]);
+const INFERRED_FILLER_SUFFIXES = new Set([
+    'item',
+    'items',
+    'link',
+    'links',
+    'topic',
+    'topics',
+    'stuff',
+    'content',
+    'bookmark',
+    'bookmarks',
+    'resource',
+    'resources'
+]);
+
 // Subcategory names carrying no organizational information. They are stripped
 // before counting, so a "schema" of nothing but "General" reads as flat —
 // which is exactly what it is, and exactly the bug we are guarding against.
@@ -544,6 +597,21 @@ const FILLER_SUBCATEGORIES = new Set(['general', 'other', 'misc', 'miscellaneous
 
 function isCatchAllCategory(name) {
     return CATCH_ALL_CATEGORIES.has((name || '').trim().toLowerCase());
+}
+
+function isInferredFillerCategory(name) {
+    const normalized = (name || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (INFERRED_FILLER_CATEGORIES.has(normalized)) return true;
+
+    const [prefix, ...suffixes] = normalized.split(' ');
+    return INFERRED_FILLER_PREFIXES.has(prefix)
+        && suffixes.length > 0
+        && suffixes.every(suffix => INFERRED_FILLER_SUFFIXES.has(suffix));
 }
 
 // A collection this small cannot support a rich structure — one real
@@ -596,6 +664,15 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };
     }
 
+    if (expectedCategories === null) {
+        const catchAllNames = categories
+            .filter(category => isInferredFillerCategory(category.name))
+            .map(category => category.name);
+        if (catchAllNames.length > 0) {
+            issues.push(`catch-all top-level categories are not allowed in an inferred schema: ${catchAllNames.join(', ')}`);
+        }
+    }
+
     // A truncated response leaves omitted selected categories with only their
     // General fallback. Require enough breadth to avoid losing useful structure,
     // but never demand more categories than the user selected.
@@ -631,27 +708,24 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
     return { ok: issues.length === 0, issues, schema: { categories } };
 }
 
-export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
-    const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
+const SUBFOLDER_RULES = {
+    '1-3': 'Keep it very compact — create only 1-3 subfolders for the clearest, genuinely distinct groups. Combine related items into broader folders rather than splitting too finely.',
+    '3-6': 'Create a focused structure of 3-6 subfolders for the clearest groups. Combine closely related topics and avoid one-off folders.',
+    '6-10': 'Create a detailed but scannable structure of 6-10 subfolders. Use specific topics only when each folder has a meaningful group of bookmarks.',
+    '0-5': 'Keep it minimal — only create subfolders for truly distinct groups, and err on the side of combining related items into broader folders.',
+    '5-10': 'About 7-8 is the sweet spot: enough to be genuinely useful, few enough to scan at a glance. Scale to the content — a content-heavy category can carry more, a sparse one fewer.',
+    '10+': 'Be generous with specific subfolders for different topics, so each bookmark has a precise home.'
+};
 
-    const subfolderRules = {
-        '1-3': 'Keep it very compact — create only 1-3 subfolders for the clearest, genuinely distinct groups. Combine related items into broader folders rather than splitting too finely.',
-        '3-6': 'Create a focused structure of 3-6 subfolders for the clearest groups. Combine closely related topics and avoid one-off folders.',
-        '6-10': 'Create a detailed but scannable structure of 6-10 subfolders. Use specific topics only when each folder has a meaningful group of bookmarks.',
-        '0-5': 'Keep it minimal — only create subfolders for truly distinct groups, and err on the side of combining related items into broader folders.',
-        '5-10': 'About 7-8 is the sweet spot: enough to be genuinely useful, few enough to scan at a glance. Scale to the content — a content-heavy category can carry more, a sparse one fewer.',
-        '10+': 'Be generous with specific subfolders for different topics, so each bookmark has a precise home.'
-    };
+function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin, askMax, subfolderTarget, fixedCategories = null, issues = null, sampleLimit = SCHEMA_SAMPLE_LIMIT }) {
+    const subfolderGuidance = SUBFOLDER_RULES[subfolderTarget] || SUBFOLDER_RULES['1-3'];
 
-    const subfolderGuidance = subfolderRules[subfolderTarget] || subfolderRules['1-3'];
-
-    const schemaSource = sampleForSchema(bookmarks, sampleLimit);
-    const sampleNote = schemaSource.length < bookmarks.length
-        ? `\n    NOTE: The list below is a representative sample of ${schemaSource.length} bookmarks drawn evenly from the full collection. Design the structure for the ENTIRE collection of ${bookmarks.length}.\n`
+    const schemaSource = fixedCategories ? sampleForSchema(bookmarks, sampleLimit) : bookmarks;
+    const sampleNote = schemaSource.length < bookmarkCount
+        ? `\n    NOTE: The list below is a representative sample of ${schemaSource.length} bookmarks drawn evenly from the full collection. Design the structure for the ENTIRE collection of ${bookmarkCount}.\n`
         : '';
 
-    const buildPrompt = (issues) => {
-        const correction = issues?.length
+    const correction = issues?.length
             ? `
     CORRECTION REQUIRED — YOUR PREVIOUS ANSWER WAS REJECTED
     Reason: ${issues.join('; ')}.
@@ -659,8 +733,25 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
 `
             : '';
 
-        return `
-    You are an expert information architect designing an intuitive bookmark folder structure for a real person's collection of ${bookmarks.length} bookmarks.
+    const categoryInstructions = fixedCategories
+        ? `
+    FIXED TOP-LEVEL CATEGORIES (use every name exactly as written; do not rename, omit, or add categories):
+    ${JSON.stringify(fixedCategories)}
+`
+        : `
+    TOP-LEVEL CATEGORY DESIGN
+    Create broad, mutually exclusive top-level categories inferred from the bookmarks. Use a topical category whenever one is possible; do not create filler categories such as "Other", "Archive", "Uncategorized", or "General" just to absorb items.
+    Every category name must be 1-3 words in Title Case. Each bookmark should have exactly one obvious destination.
+`;
+    const structureInstruction = fixedCategories
+        ? 'The fixed top-level categories above are authoritative. Design subcategories inside each one; every bookmark must have a natural home.'
+        : 'The inferred top-level categories are authoritative for this response. Keep them broad and non-overlapping, and make every bookmark fit one natural home.';
+    const outlierInstruction = fixedCategories
+        ? 'A genuine outlier still belongs in the closest fixed top-level category. Use its "General" subcategory when no specific subcategory fits; do not add an "Other" category or invent a filler subcategory.'
+        : 'A genuine outlier still belongs in the closest topical category. Do not add an "Other" category or invent a filler subcategory.';
+
+    return `
+    You are an expert information architect designing an intuitive bookmark folder structure for a real person's collection of ${bookmarkCount} bookmarks.
     ${sampleNote}${correction}
 
     GOAL
@@ -671,11 +762,10 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
-    FIXED TOP-LEVEL CATEGORIES (use every name exactly as written; do not rename, omit, or add categories):
-    ${JSON.stringify(baseCategories)}
+    ${categoryInstructions}
 
     STRUCTURE RULES
-    4. The fixed top-level categories above are authoritative. Design subcategories inside each one; every bookmark must have a natural home.
+    4. ${structureInstruction}
     5. NON-REDUNDANCY IS CRITICAL. Sub-categories within a category MUST be mutually exclusive. Never create near-duplicates or synonyms as separate folders. Collapse "Tech News" + "Tech Articles" + "Tech Blogs" + "Tech Reports" into ONE folder. Collapse "Career Advice" + "Career Pathways" + "Career Roles" into ONE folder. Collapse "JS" + "JavaScript" into ONE. If two folder names could plausibly hold the same bookmark, merge them.
     6. Group by the user's INTENT, not surface keywords. Ask "why did they save this?" Links saved for the same purpose belong together even when their titles look different.
 
@@ -687,7 +777,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     QUALITY BAR
     10. No orphan folders: every sub-category should plausibly hold several bookmarks. Never create a folder for a single link — merge it into the nearest fit.
     11. Categories themselves must not overlap either. Each bookmark should have exactly ONE obvious destination, never two or three.
-    12. A genuine outlier still belongs in the closest fixed top-level category. Use its "General" subcategory when no specific subcategory fits; do not add an "Other" category or invent a filler subcategory.
+    12. ${outlierInstruction}
 
     OUTPUT — return ONLY this JSON, no markdown fences, no commentary:
     {
@@ -702,17 +792,20 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     BOOKMARKS TO ANALYZE:
     ${JSON.stringify(schemaSource.map(b => ({ title: b.title, url: b.url })))}
     `;
-    };
+}
 
-    const systemContent = "You are an expert information architect and precise JSON generator. Output only valid JSON. Do not use Markdown blocks.";
+const requestSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry(
+    () => callModel(apiKey, model, "You are an expert information architect and precise JSON generator. Output only valid JSON. Do not use Markdown blocks.", prompt, { temperature: 0.2, maxTokens: SCHEMA_MAX_TOKENS, salvageTruncated: true }, isCancelled),
+    5,
+    1500,
+    isCancelled,
+    onRetry
+);
 
-    const attempt = (issues) => withRetry(
-        () => callModel(apiKey, model, systemContent, buildPrompt(issues), { temperature: 0.2, maxTokens: SCHEMA_MAX_TOKENS, salvageTruncated: true }, isCancelled),
-        5,
-        1500,
-        isCancelled,
-        onRetry
-    );
+export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
+    const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
+    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askMax, subfolderTarget, fixedCategories: baseCategories, issues, sampleLimit });
+    const attempt = issues => requestSchema(buildPrompt(issues), apiKey, model, isCancelled, onRetry);
 
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: baseCategories };
 
@@ -734,6 +827,308 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
     // caller merges them with curated defaults rather than starting from zero.
     error.partialSchema = second.schema;
     throw error;
+}
+
+export async function generateInferredSchema(
+    bookmarks,
+    apiKey,
+    model = 'google/gemini-3.1-flash-lite',
+    subfolderTarget = '1-3',
+    isCancelled = null,
+    onRetry = null
+) {
+    const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
+    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askMax, subfolderTarget, fixedCategories: null, issues });
+    const attempt = issues => requestSchema(buildPrompt(issues), apiKey, model, isCancelled, onRetry);
+    const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: null };
+
+    const first = validateSchema(await attempt(null), options);
+    if (first.ok) return first.schema;
+    if (typeof onRetry === 'function') {
+        onRetry({ attempt: 1, delayMs: 0, error: new Error(first.issues.join('; ')), isRateLimit: false, isSchemaCorrection: true });
+    }
+
+    const second = validateSchema(await attempt(first.issues), options);
+    if (second.ok) return second.schema;
+
+    const error = new Error(`the AI could not infer a usable folder structure (${second.issues.join('; ')})`);
+    error.schemaInvalid = true;
+    throw error;
+}
+
+const DETAIL_FILLER_NAMES = new Set([
+    'general',
+    'other',
+    'none',
+    'uncategorized',
+    'uncategorised',
+    'misc',
+    'miscellaneous',
+    'various',
+    'assorted',
+    'everything else',
+    'other stuff',
+    'catch all',
+    'catch-all',
+    'unclassified',
+    'unsorted',
+    'unknown',
+    'bookmarks',
+    'links',
+    'items',
+    'resources',
+    'content',
+    'stuff'
+]);
+
+function canonicalDetailParentKey(category, subCategory) {
+    if (typeof category !== 'string' || typeof subCategory !== 'string') return '';
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
+}
+
+function recordsForDetailGroup(value) {
+    if (Array.isArray(value)) return value;
+    if (Array.isArray(value?.bookmarks)) return value.bookmarks;
+    if (Array.isArray(value?.records)) return value.records;
+    if (Array.isArray(value?.items)) return value.items;
+    return [];
+}
+
+function detailGroupEntries(groups) {
+    let rawEntries = [];
+    if (groups instanceof Map) {
+        rawEntries = [...groups.entries()].map(([key, value]) => ({ key, value }));
+    } else if (Array.isArray(groups)) {
+        rawEntries = groups.map((value, index) => {
+            if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string') {
+                return { key: value[0], value: value[1] };
+            }
+            return { key: typeof value?.key === 'string' ? value.key : index, value };
+        });
+    } else if (groups && typeof groups === 'object') {
+        rawEntries = Object.entries(groups).map(([key, value]) => ({ key, value }));
+    }
+
+    const entries = [];
+    const seen = new Set();
+    for (const { key: rawKey, value } of rawEntries) {
+        const records = recordsForDetailGroup(value);
+        const first = records.find(record => typeof record?.category === 'string' && typeof record?.sub_category === 'string');
+        const keyParts = typeof rawKey === 'string' ? rawKey.split('\u0000') : [];
+        const category = typeof value?.category === 'string'
+            ? value.category.trim()
+            : (first?.category?.trim() || keyParts[0]?.trim() || '');
+        const sub_category = typeof value?.sub_category === 'string'
+            ? value.sub_category.trim()
+            : (first?.sub_category?.trim() || keyParts[1]?.trim() || '');
+        const canonicalPair = canonicalDetailParentKey(category, sub_category);
+        if (!canonicalPair || seen.has(canonicalPair)) continue;
+        seen.add(canonicalPair);
+        entries.push({
+            key: typeof rawKey === 'string' ? rawKey : `${category.toLowerCase()}\u0000${sub_category.toLowerCase()}`,
+            canonicalPair,
+            category,
+            sub_category,
+            records
+        });
+    }
+    return entries;
+}
+
+function normalizeDetailName(rawName, category, subCategory) {
+    if (typeof rawName !== 'string') return null;
+    const name = rawName.trim().replace(/\s+/g, ' ');
+    if (!name || DETAIL_FILLER_NAMES.has(name.toLowerCase())) return null;
+    if (canonicalKey(name) === canonicalKey(category) || canonicalKey(name) === canonicalKey(subCategory)) return null;
+    if (!shouldCreateDetailFolder(category, subCategory, name)) return null;
+    return name;
+}
+
+/**
+ * Validate a model-generated detail schema against the eligible parent groups.
+ * The returned Map keeps the requested group's original key and approved name
+ * spelling, which is the shape consumed by detail reconciliation.
+ */
+export function validateDetailSchema(response, requestedGroups) {
+    const requested = detailGroupEntries(requestedGroups);
+    const requestedByPair = new Map(requested.map(group => [group.canonicalPair, group]));
+    const namesByGroup = new Map(requested.map(group => [group.key, []]));
+    const issues = [];
+    const rawGroups = Array.isArray(response?.groups) ? response.groups : [];
+
+    if (rawGroups.length === 0) issues.push('the response contained no detail groups');
+
+    for (const rawGroup of rawGroups) {
+        const category = typeof rawGroup?.category === 'string' ? rawGroup.category.trim() : '';
+        const subCategory = typeof rawGroup?.sub_category === 'string' ? rawGroup.sub_category.trim() : '';
+        const requestedGroup = requestedByPair.get(canonicalDetailParentKey(category, subCategory));
+        if (!requestedGroup) {
+            issues.push(`ignored unknown detail parent pair "${category}/${subCategory}"`);
+            continue;
+        }
+
+        const names = Array.isArray(rawGroup.detail_categories) ? rawGroup.detail_categories : [];
+        const seenNames = new Set(namesByGroup.get(requestedGroup.key).map(name => canonicalKey(name)));
+        for (const rawName of names) {
+            const name = normalizeDetailName(rawName, requestedGroup.category, requestedGroup.sub_category);
+            if (!name) continue;
+            const identity = canonicalKey(name);
+            if (seenNames.has(identity)) continue;
+            seenNames.add(identity);
+            namesByGroup.get(requestedGroup.key).push(name);
+        }
+    }
+
+    const schemas = new Map();
+    for (const group of requested) {
+        const names = namesByGroup.get(group.key);
+        const maxNames = Math.min(
+            DETAIL_MAX_FOLDERS,
+            Math.floor(group.records.length / DETAIL_MIN_FOLDER_SIZE)
+        );
+        if (names.length < 2 || maxNames < 2) {
+            if (rawGroups.length > 0) {
+                issues.push(`the detail group "${group.category}/${group.sub_category}" had fewer than two usable names`);
+            }
+            continue;
+        }
+        schemas.set(group.key, names.slice(0, maxNames));
+    }
+
+    if (schemas.size === 0) {
+        issues.push('no requested detail group had at least two usable detail names');
+    }
+
+    return { ok: schemas.size > 0, schemas, issues };
+}
+
+/**
+ * Build the bounded prompt used to infer detail folders. Groups are limited
+ * before serialization and each group's sample is evenly spaced through its
+ * original records.
+ */
+export function buildDetailSchemaPrompt(groups, issues = null) {
+    const selectedGroups = detailGroupEntries(groups).slice(0, DETAIL_SCHEMA_GROUP_LIMIT);
+    const promptGroups = selectedGroups.map(group => ({
+        category: group.category,
+        sub_category: group.sub_category,
+        bookmarks: sampleForSchema(group.records, DETAIL_SCHEMA_SAMPLE_LIMIT).map((bookmark, i) => ({
+            i,
+            title: bookmark?.title || '',
+            url: bookmark?.url || ''
+        }))
+    }));
+    const correction = issues?.length
+        ? `
+    CORRECTION REQUIRED — YOUR PREVIOUS DETAIL SCHEMA WAS REJECTED.
+    Reason: ${issues.join('; ')}.
+    Return at least two meaningful detail names for at least one requested group, and omit invalid or unusable groups.
+`
+        : '';
+
+    return `
+    You are an expert information architect inferring useful third-level bookmark folders from real examples.
+    ${correction}
+
+    GOAL
+    Propose detail folders only where the bookmarks show at least two meaningful, specific groups. A detail folder must make the existing category and subcategory easier to scan.
+
+    NAMING RULES
+    1. Use short human-readable names in Title Case, preferably 1-3 words.
+    2. Do not use filler names such as "General", "Other", "Misc", "Various", "Bookmarks", or "Links".
+    3. Never use a name that echoes the category or subcategory, is empty, or contains a slash or backslash. Do not invent path-like names.
+    4. Use at most 4 detail names per group and only return names that could each contain at least two bookmarks.
+    5. Keep requested category and sub_category spellings exactly as provided. Do not add unknown parent pairs.
+
+    OUTPUT — return ONLY this JSON object, with no markdown or commentary:
+    { "groups": [{ "category": "...", "sub_category": "...", "detail_categories": ["..."] }] }
+
+    BOOKMARK GROUPS:
+    ${JSON.stringify(promptGroups)}
+    `;
+}
+
+const requestDetailSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry(
+    () => callModel(
+        apiKey,
+        model,
+        'You are a precise information architect and JSON generator. Output only valid JSON. Do not use Markdown blocks.',
+        prompt,
+        { temperature: 0.2, maxTokens: 8000, salvageTruncated: true },
+        isCancelled
+    ),
+    5,
+    1500,
+    isCancelled,
+    onRetry
+);
+
+function isDetailCancelled(isCancelled) {
+    return typeof isCancelled === 'function' ? isCancelled() : Boolean(isCancelled);
+}
+
+function detailCancellationError() {
+    const error = new Error('Operation cancelled.');
+    error.isCancelled = true;
+    return error;
+}
+
+/**
+ * Infer detail schemas in independent, bounded batches. A failed batch is
+ * allowed to remain at two levels while valid sibling batches are retained.
+ */
+export async function generateDetailSchemas(
+    groups,
+    apiKey,
+    model = 'google/gemini-3.1-flash-lite',
+    isCancelled = null,
+    onRetry = null
+) {
+    if (isDetailCancelled(isCancelled)) throw detailCancellationError();
+
+    const entries = detailGroupEntries(groups);
+    const schemas = new Map();
+
+    for (let start = 0; start < entries.length; start += DETAIL_SCHEMA_GROUP_LIMIT) {
+        if (isDetailCancelled(isCancelled)) throw detailCancellationError();
+        const batch = entries.slice(start, start + DETAIL_SCHEMA_GROUP_LIMIT);
+        let first;
+        try {
+            first = validateDetailSchema(
+                await requestDetailSchema(buildDetailSchemaPrompt(batch), apiKey, model, isCancelled, onRetry),
+                batch
+            );
+        } catch (error) {
+            if (error?.isCancelled) throw error;
+            continue;
+        }
+
+        let result = first;
+        if (!first.ok) {
+            if (typeof onRetry === 'function') {
+                onRetry({
+                    attempt: 1,
+                    delayMs: 0,
+                    error: new Error(first.issues.join('; ')),
+                    isRateLimit: false,
+                    isSchemaCorrection: true
+                });
+            }
+            try {
+                result = validateDetailSchema(
+                    await requestDetailSchema(buildDetailSchemaPrompt(batch, first.issues), apiKey, model, isCancelled, onRetry),
+                    batch
+                );
+            } catch (error) {
+                if (error?.isCancelled) throw error;
+                continue;
+            }
+        }
+
+        for (const [key, names] of result.schemas) schemas.set(key, names);
+    }
+
+    return schemas;
 }
 
 // A non-empty authoritative schema always starts with a user-selected category.
@@ -780,6 +1175,34 @@ export function normalizeClassificationForSchema(entry, schema) {
     if (belongsToAnotherCategory) return { category: known.name, sub_category: 'General', proposed: false };
 
     return { category: known.name, sub_category: rawSub, proposed: rawSub.toLowerCase() !== 'general' };
+}
+
+// Resolve a third-level classification only against the names approved for its
+// exact parent pair. Unknown values are deliberately cleared, never proposed.
+export function normalizeDetailClassification(entry, detailSchema) {
+    const names = Array.isArray(detailSchema) ? detailSchema
+        : (detailSchema?.detail_categories || detailSchema?.detailCategories || detailSchema?.details || []);
+    const approved = new Map(names.filter(name => typeof name === 'string' && name.trim())
+        .map(name => [canonicalKey(name), name.trim().replace(/\s+/g, ' ')]));
+    if (typeof entry?.detail_category !== 'string') return null;
+    return approved.get(canonicalKey(entry.detail_category.trim())) || null;
+}
+
+export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+    const prompt = `
+    Classify each bookmark into one approved detail folder for this exact parent category/subcategory.
+    APPROVED DETAIL NAMES: ${JSON.stringify(detailSchema)}
+    Return JSON only: { "classified": [{ "i": 0, "detail_category": "..." }] }
+    Use only an approved name; use null when none fits. Every bookmark appears exactly once.
+    BOOKMARKS (each with its index "i"):
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    `;
+    return withRetry(async () => {
+        const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
+        const byIndex = new Map((parsed.classified || []).filter(e => Number.isInteger(e?.i) && e.i >= 0 && e.i < bookmarks.length)
+            .map(e => [e.i, e]));
+        return bookmarks.map((bookmark, i) => ({ ...bookmark, detail_category: normalizeDetailClassification(byIndex.get(i), detailSchema) }));
+    }, 5, 1500, isCancelled, onRetry);
 }
 
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {

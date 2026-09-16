@@ -47,6 +47,13 @@ describe('App Component Layout', () => {
         expect(closeBtn).toBeDefined()
     })
 
+    it('defaults to dark mode when no theme preference is saved', () => {
+        render(<App />)
+
+        expect(screen.getByRole('radio', { name: 'Dark' }).getAttribute('aria-checked')).toBe('true')
+        expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    })
+
     it('shows a gentle close reminder without closing the app', () => {
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
         const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})

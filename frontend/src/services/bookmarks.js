@@ -1,3 +1,8 @@
+import { shouldCreateDetailFolder } from './subcategoryIdentity';
+import { shouldCreateSubFolder } from './subcategoryPredicates';
+
+export { shouldCreateSubFolder } from './subcategoryPredicates';
+
 function getBookmarksApi() {
     return (typeof chrome !== 'undefined' && chrome.bookmarks) || (typeof browser !== 'undefined' && browser.bookmarks);
 }
@@ -206,13 +211,6 @@ export function clearFolderCache() {
     folderCache = {};
 }
 
-export function shouldCreateSubFolder(category, subCategory) {
-    if (!subCategory) return false;
-    const sub = subCategory.trim().toLowerCase();
-    const cat = category.trim().toLowerCase();
-    return sub !== '' && sub !== 'general' && sub !== 'none' && sub !== 'uncategorized' && sub !== cat;
-}
-
 export async function findOrCreateFolder(parentId, title, index) {
     const key = `${parentId}_${title}`;
     if (folderCache[key]) {
@@ -327,6 +325,17 @@ export async function importBookmarksToBrowser(items, options = {}) {
                         createdFolders[subPath] = subFolder;
                     }
                     targetParentId = subFolder.id;
+
+                    const detailCategory = item.detail_category;
+                    if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
+                        const detailPath = `${subFolder.id}\u0000${detailCategory}`;
+                        let detailFolder = createdFolders[detailPath];
+                        if (!detailFolder) {
+                            detailFolder = await findOrCreateFolder(subFolder.id, detailCategory);
+                            createdFolders[detailPath] = detailFolder;
+                        }
+                        targetParentId = detailFolder.id;
+                    }
                 }
 
                 const created = await createBookmark(targetParentId, item.title || 'Untitled', item.url);

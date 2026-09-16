@@ -1,8 +1,9 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, classifyBatch, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
-import { reconcileSubcategories } from './reconcile';
+import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
+import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
@@ -18,6 +19,37 @@ export async function checkUrlReachable(url, timeoutMs = 2500) {
     } finally {
         clearTimeout(timer);
     }
+}
+
+// Detail classification returns clones of the original bookmark records. Keep
+// assignments tied to that record and its reconciled parent pair so duplicate
+// URLs cannot overwrite one another. File records carry a run-scoped ordinal
+// because they do not reliably have a browser bookmark id.
+function detailAssignmentKey(item) {
+    const category = typeof item?.category === 'string' ? item.category.trim().toLowerCase() : '';
+    const subCategory = typeof item?.sub_category === 'string' ? item.sub_category.trim().toLowerCase() : '';
+    const stableId = [item?.id, item?.key]
+        .find(value => (typeof value === 'string' && value.trim()) || (typeof value === 'number' && Number.isFinite(value)));
+    const ordinal = Number.isInteger(item?._detailRunOrdinal) ? item._detailRunOrdinal : null;
+    const recordKey = stableId === undefined
+        ? `ordinal:${ordinal ?? `url:${typeof item?.url === 'string' ? item.url : ''}`}`
+        : `id:${String(stableId).trim()}`;
+    return `${category}\u0000${subCategory}\u0000${recordKey}`;
+}
+
+function retainDetailRunOrdinals(classified, sourceRecords) {
+    return classified.map((item, index) => {
+        if (Number.isInteger(item?._detailRunOrdinal)) return item;
+        const ordinal = sourceRecords[index]?._detailRunOrdinal;
+        return Number.isInteger(ordinal) ? { ...item, _detailRunOrdinal: ordinal } : item;
+    });
+}
+
+function canonicalDetailGroupKey(rawKey) {
+    if (typeof rawKey !== 'string') return '';
+    const [category, subCategory] = rawKey.split('\u0000', 2);
+    if (subCategory === undefined) return '';
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
 }
 
 // Concurrently probes bookmark URLs in parallel chunks so verification completes in seconds.
@@ -235,7 +267,7 @@ export function isNonSubdividableError(err) {
 }
 
 export class OrganizerService {
-    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined) {
+    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategories = true) {
         this.apiKey = apiKey;
         this.categories = categories;
         this.onProgress = onProgress || (() => { });
@@ -245,6 +277,7 @@ export class OrganizerService {
         this.cleanTitles = cleanTitles;
         this.flatDateSort = flatDateSort;
         this.dateSortOrder = dateSortOrder; // 'desc' (newest first) or 'asc' (oldest first)
+        this.inferCategories = inferCategories;
 
         // schemaSortOrder can be 'alpha', 'date-desc', 'date-asc', 'domain', or 'none'
         if (schemaSortOrder !== undefined) {
@@ -268,6 +301,7 @@ export class OrganizerService {
             schemaSortOrder: this.schemaSortOrder,
             dateSpan: null,
             failedMoves: []
+            ,detailFoldersCount: 0, detailedSubcategories: 0
         };
         this.failedMoves = [];
         this.snapshotProvider = null;
@@ -275,6 +309,10 @@ export class OrganizerService {
 
     cancel() {
         this.isCancelled = true;
+    }
+
+    isInferenceMode() {
+        return Boolean(this.inferCategories);
     }
 
     async moveItems(pairs) {
@@ -500,6 +538,8 @@ export class OrganizerService {
 
     async start(fileBookmarks = null) {
         let allLinks = [];
+        this.stats.detailFoldersCount = 0;
+        this.stats.detailedSubcategories = 0;
 
         if (fileBookmarks) {
             this.onProgress({ status: 'info', message: 'Processing uploaded file...' });
@@ -528,6 +568,14 @@ export class OrganizerService {
                 }
             };
             traverse(tree);
+        }
+
+        // File exports have no Chrome node id. Preserve their input position
+        // across classification/reconciliation so duplicate URLs remain
+        // distinguishable during this run. Browser records retain the same
+        // ordinal defensively but still prefer their native id above.
+        if (!this.flatDateSort) {
+            allLinks = allLinks.map((bookmark, ordinal) => ({ ...bookmark, _detailRunOrdinal: ordinal }));
         }
 
         const initialDateSpan = calculateDateSpan(allLinks);
@@ -689,6 +737,7 @@ export class OrganizerService {
                     dateSpan,
                     failedMoves: this.failedMoves,
                     folderTitle: labels.rootFolderTitle
+                    ,detailFoldersCount: 0, detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
@@ -721,6 +770,7 @@ export class OrganizerService {
                     dateSpan,
                     failedMoves: this.failedMoves,
                     folderTitle: labels.rootFolderTitle
+                    ,detailFoldersCount: 0, detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
@@ -790,47 +840,55 @@ export class OrganizerService {
         const deadLinks = [];
 
         let classifiedActive = [];
+        let runSchema = null;
 
         if (activeLinks.length > 0) {
             // --- Phase 1: Generate Schema ---
-            if (this.categories && this.categories.length > 0) {
+            const inferenceMode = this.isInferenceMode();
+            if (!inferenceMode && this.categories && this.categories.length > 0) {
                 this.onProgress({ status: 'info', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...` });
             } else {
                 this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate categories automatically...' });
             }
             if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
-                this.onProgress({ status: 'info', message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.` });
+                this.onProgress({
+                    status: 'info',
+                    message: inferenceMode
+                        ? `Large collection: analyzing all ${activeLinks.length.toLocaleString()} bookmarks to infer the folder structure. All bookmarks will then be classified.`
+                        : `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
+                });
             }
 
             let schema;
             try {
-                schema = await generateSchema(
-                    activeLinks,
-                    this.apiKey,
-                    this.categories,
-                    this.model,
-                    this.subfolderTarget,
-                    () => this.isCancelled,
-                    ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
-                        // The corrective round-trip is not a transport failure:
-                        // reporting it as one hides the only signal that says
-                        // why the structure came back flat.
-                        if (isSchemaCorrection) {
-                            this.onProgress({
-                                status: 'warning',
-                                message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
-                            });
-                            return;
-                        }
-                        const sec = Math.ceil(delayMs / 1000);
+                const schemaRetryReporter = ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
+                    // The corrective round-trip is not a transport failure:
+                    // reporting it as one hides the only signal that says
+                    // why the structure came back flat.
+                    if (isSchemaCorrection) {
                         this.onProgress({
                             status: 'warning',
-                            message: isRateLimit
-                                ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
-                                : `Network issue during schema generation. Retrying in ${sec}s...`
+                            message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
                         });
+                        return;
                     }
-                );
+                    const sec = Math.ceil(delayMs / 1000);
+                    this.onProgress({
+                        status: 'warning',
+                        message: isRateLimit
+                            ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
+                            : `Network issue during schema generation. Retrying in ${sec}s...`
+                    });
+                };
+                schema = inferenceMode
+                    ? await generateInferredSchema(
+                        activeLinks, this.apiKey, this.model, this.subfolderTarget,
+                        () => this.isCancelled, schemaRetryReporter
+                    )
+                    : await generateSchema(
+                        activeLinks, this.apiKey, this.categories, this.model, this.subfolderTarget,
+                        () => this.isCancelled, schemaRetryReporter
+                    );
                 this.onProgress({ status: 'info', message: 'Generated category schema:' });
                 if (schema && schema.categories) {
                     schema.categories.forEach(cat => {
@@ -845,6 +903,14 @@ export class OrganizerService {
                 if (this.isCancelled || err?.isCancelled) {
                     this.onProgress({ status: 'warning', message: 'Process cancelled.' });
                     return null;
+                }
+
+                if (inferenceMode) {
+                    this.onProgress({
+                        status: 'error',
+                        message: `Could not infer categories from your bookmarks: ${err.message}`
+                    });
+                    throw err;
                 }
 
                 console.error('Schema generation failed, falling back to curated default folders:', err);
@@ -892,7 +958,10 @@ export class OrganizerService {
             // The selected categories are authoritative even when an adapter or
             // a recovery path supplies the schema. Classifiers and placement
             // below therefore share the same two-level source of truth.
-            schema = buildAuthoritativeSchema(this.categories, schema);
+            if (!inferenceMode) {
+                schema = buildAuthoritativeSchema(this.categories, schema);
+            }
+            runSchema = schema;
 
             const total = activeLinks.length;
             let processed = 0;
@@ -945,7 +1014,7 @@ export class OrganizerService {
                     if (this.isCancelled) return;
 
                     // Accumulate results
-                    results[index] = classified;
+                    results[index] = retainDetailRunOrdinals(classified, batchData);
                     processed += batchData.length;
                     this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
 
@@ -978,7 +1047,10 @@ export class OrganizerService {
                 if (this.isCancelled) break;
 
                 this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...` });
-                results[index] = await this.classifyWithSubdivision(batchData, schema, label);
+                results[index] = retainDetailRunOrdinals(
+                    await this.classifyWithSubdivision(batchData, schema, label),
+                    batchData
+                );
                 if (this.isCancelled) break;
                 processed += batchData.length;
                 this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
@@ -1012,6 +1084,98 @@ export class OrganizerService {
                     message: `Subcategories: +${summary.proposedKept} AI-created, ~${summary.merged} merged, ${foldedTotal} folded into General.`
                 });
             }
+
+            const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
+            const eligibleGroupCount = eligibleGroups.size;
+            this.onProgress({
+                status: 'info',
+                message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`
+            });
+            let detailSchemaFailures = 0;
+            let detailClassificationFailures = 0;
+            if (eligibleGroupCount > 0) {
+                try {
+                    const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
+                        () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
+                            ? `Rate limit reached while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...`
+                            : `Network issue while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
+                    if (detailSchemas.size === 0) {
+                        this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
+                    }
+                    const canonicalDetailSchemas = new Map(
+                        [...detailSchemas.entries()]
+                            .map(([key, names]) => [canonicalDetailGroupKey(key), names])
+                            .filter(([key]) => key)
+                    );
+                    detailSchemaFailures = [...eligibleGroups.keys()].filter(key => !canonicalDetailSchemas.has(key)).length;
+                    if (detailSchemaFailures > 0 && canonicalDetailSchemas.size > 0) {
+                        this.onProgress({
+                            status: 'warning',
+                            message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
+                        });
+                    }
+                    const detailed = [];
+                    for (const [key, names] of canonicalDetailSchemas) {
+                        if (this.isCancelled) break;
+                        const records = eligibleGroups.get(key) || [];
+                        try {
+                            for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
+                                const chunk = records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE);
+                                const detailChunkLabel = `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`;
+                                detailed.push(...retainDetailRunOrdinals(
+                                    await classifyDetailBatch(chunk, this.apiKey, names, this.model,
+                                        () => this.isCancelled,
+                                        ({ delayMs, isRateLimit }) => this.onProgress({
+                                            status: 'warning',
+                                            message: isRateLimit
+                                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${detailChunkLabel}...`
+                                                : `Network issue on detail chunk ${detailChunkLabel}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                        })
+                                    ),
+                                    chunk
+                                ));
+                            }
+                        } catch (err) {
+                            if (this.isCancelled || err?.isCancelled) throw err;
+                            detailClassificationFailures++;
+                            this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
+                        }
+                    }
+                    if (this.isCancelled) {
+                        this.onProgress({ status: 'warning', message: 'Process cancelled.' });
+                        return null;
+                    }
+                    const detailAssignments = new Map(detailed.map(item => [detailAssignmentKey(item), item.detail_category]));
+                    classifiedActive = classifiedActive.map(item => ({
+                        ...item,
+                        detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
+                    }));
+                    const detailResult = reconcileDetailCategories(classifiedActive, canonicalDetailSchemas);
+                    classifiedActive = detailResult.classified;
+                    this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
+                    this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
+                } catch (err) {
+                    if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
+                    detailSchemaFailures = eligibleGroupCount;
+                    this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
+                }
+            }
+
+            const detailGroupsKeptAtTwoLevels = eligibleGroupCount - (this.stats.detailedSubcategories || 0);
+            this.onProgress({
+                status: 'info',
+                message: `Third-level enrichment summary: ${eligibleGroupCount} eligible group${eligibleGroupCount === 1 ? '' : 's'}, ${this.stats.detailFoldersCount || 0} detail folder${this.stats.detailFoldersCount === 1 ? '' : 's'} created, ${this.stats.detailedSubcategories || 0} detailed subcategor${this.stats.detailedSubcategories === 1 ? 'y' : 'ies'}, ${detailGroupsKeptAtTwoLevels} group${detailGroupsKeptAtTwoLevels === 1 ? '' : 's'} kept at two levels.`
+            });
+            if (detailSchemaFailures > 0 || detailClassificationFailures > 0) {
+                this.onProgress({
+                    status: 'warning',
+                    message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
+                });
+            }
+
+            // The ordinal is run-local reconciliation metadata, never part of
+            // the bookmark result or downloaded file.
+            classifiedActive = classifiedActive.map(({ _detailRunOrdinal, ...item }) => item);
         }
 
         // Combine classified reachable links with archived unreachable links
@@ -1019,7 +1183,7 @@ export class OrganizerService {
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
-        const categoryRank = new Map(buildAuthoritativeSchema(this.categories).categories
+        const categoryRank = new Map((runSchema || buildAuthoritativeSchema(this.categories)).categories
             .map((category, index) => [category.name, index]));
         const sortContents = this.schemaSortOrder && this.schemaSortOrder !== 'none';
         if (sortContents) {
@@ -1041,9 +1205,11 @@ export class OrganizerService {
             const catDiff = (categoryRank.get(a.category) ?? categoryRank.size)
                 - (categoryRank.get(b.category) ?? categoryRank.size);
             if (catDiff !== 0) return catDiff;
-            if (!sortContents) return 0;
             const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
             if (subDiff !== 0) return subDiff;
+            const detailDiff = (a.detail_category || '').localeCompare(b.detail_category || '');
+            if (detailDiff !== 0) return detailDiff;
+            if (!sortContents) return 0;
 
             // Sort bookmarks within each folder according to chosen schema
             switch (this.schemaSortOrder) {
@@ -1155,6 +1321,19 @@ export class OrganizerService {
                             createdFolders[subPath] = subFolder;
                         }
                         targetParentId = subFolder.id;
+
+                        const detailCategory = item.detail_category;
+                        if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
+                            const detailPath = `${subFolder.id}\u0000${detailCategory}`;
+                            let detailFolder;
+                            if (createdFolders[detailPath]) {
+                                detailFolder = createdFolders[detailPath];
+                            } else {
+                                detailFolder = await findOrCreateFolder(subFolder.id, detailCategory);
+                                createdFolders[detailPath] = detailFolder;
+                            }
+                            targetParentId = detailFolder.id;
+                        }
                     }
                 } catch (err) {
                     this.failedMoves.push({ title: item.title, reason: err?.message || String(err) });
@@ -1228,6 +1407,7 @@ export class OrganizerService {
             dateSpan,
             failedMoves: this.failedMoves,
             folderTitle: labels.rootFolderTitle
+            ,detailFoldersCount: this.stats.detailFoldersCount || 0, detailedSubcategories: this.stats.detailedSubcategories || 0
         };
         finalResults.stats = this.stats;
         finalResults.filename = labels.downloadFilename;

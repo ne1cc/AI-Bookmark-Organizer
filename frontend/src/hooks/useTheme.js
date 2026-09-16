@@ -17,9 +17,9 @@ function applyTheme(mode) {
 
 function getInitialTheme() {
     try {
-        return localStorage.getItem(STORAGE_KEY) || 'light';
+        return localStorage.getItem(STORAGE_KEY) || 'dark';
     } catch {
-        return 'light';
+        return 'dark';
     }
 }
 

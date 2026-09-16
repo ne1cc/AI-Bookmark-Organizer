@@ -120,9 +120,10 @@ describe('Background Service Worker Entry Point', () => {
 
         // Success path: JOB_ACK is posted immediately on receipt, before the
         // run starts, so the panel can tell a live worker from a dead port.
-        startHandler({ type: 'START_JOB', payload: { config: { apiKey: 'k' }, parsedBookmarks: null } });
+        const inferredConfig = { apiKey: 'k', categories: [], inferCategories: true };
+        startHandler({ type: 'START_JOB', payload: { config: inferredConfig, parsedBookmarks: null } });
         expect(port.postMessage).toHaveBeenCalledWith({ type: 'JOB_ACK', payload: {} });
-        await vi.waitFor(() => expect(startSpy).toHaveBeenCalledWith({ apiKey: 'k' }, null));
+        await vi.waitFor(() => expect(startSpy).toHaveBeenCalledWith(inferredConfig, null));
 
         // Failure path: start failures surface as JOB_ERROR in the panel
         // instead of dying silently in the worker console.
@@ -134,5 +135,100 @@ describe('Background Service Worker Entry Point', () => {
         });
 
         startSpy.mockRestore();
+    });
+
+    it('GET_RESULTS returns completed results with optional detail assignments without writing them to storage', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const results = [{
+            title: 'Generated result',
+            url: 'https://example.com/generated',
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
+        }];
+        const state = {
+            id: 'job_123',
+            status: 'complete',
+            count: 1,
+            completedAt: 1757890000000,
+            stats: {
+                categoriesCount: 1,
+                categoryBreakdown: { 'Generated Topic': 1 },
+                detailFoldersCount: 1,
+                detailedSubcategories: 1
+            },
+            activeDateSpan: '1/1/2024 – 2/1/2024'
+        };
+        const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(results);
+        vi.spyOn(freshRunner, 'getState').mockReturnValue(state);
+
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        port.postMessage.mockClear();
+
+        const messageHandler = port.onMessage.addListener.mock.calls[0][0];
+        messageHandler({ type: 'GET_RESULTS' });
+
+        expect(getResultsSpy).toHaveBeenCalledOnce();
+        expect(port.postMessage.mock.calls[0][0].payload.results[0]).toEqual(expect.objectContaining({
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
+        }));
+        expect(port.postMessage).toHaveBeenCalledWith({
+            type: 'JOB_RESULTS',
+            payload: {
+                results,
+                meta: {
+                    count: 1,
+                    savedAt: 1757890000000,
+                    stats: state.stats,
+                    dateSpan: '1/1/2024 – 2/1/2024'
+                }
+            }
+        });
+        expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+    });
+
+    it('reports that transient results are unavailable after worker memory is lost', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(null);
+
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        port.postMessage.mockClear();
+
+        const messageHandler = port.onMessage.addListener.mock.calls[0][0];
+        messageHandler({ type: 'GET_RESULTS' });
+
+        expect(getResultsSpy).toHaveBeenCalledOnce();
+        expect(port.postMessage).toHaveBeenCalledWith({
+            type: 'JOB_RESULTS_UNAVAILABLE',
+            payload: {
+                message: 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
+            }
+        });
+        expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+        expect(globalThis.chrome.storage.local).not.toHaveProperty('set');
     });
 });

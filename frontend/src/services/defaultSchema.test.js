@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFallbackSchema, curatedSubcategories } from './defaultSchema'
+import { buildAuthoritativeSchema, buildFallbackSchema, curatedSubcategories } from './defaultSchema'
 import { DEFAULT_CATEGORIES, SUGGESTED_ADDABLE_CATEGORIES } from '../components/Organizer'
 
 const find = (schema, name) => schema.categories.find(c => c.name === name)
@@ -71,5 +71,12 @@ describe('buildFallbackSchema', () => {
     it('uses Other as the sole safe catch-all for an empty selected list', () => {
         expect(buildFallbackSchema([]).schema.categories).toEqual([{ name: 'Other', sub_categories: [] }])
         expect(buildFallbackSchema(null).schema.categories).toEqual([{ name: 'Other', sub_categories: [] }])
+    })
+})
+
+describe('empty manual category compatibility', () => {
+    it('keeps Other as the direct-call fallback for both manual schema helpers', () => {
+        expect(buildAuthoritativeSchema([]).categories).toEqual([{ name: 'Other', sub_categories: [] }])
+        expect(buildFallbackSchema([]).schema.categories).toEqual([{ name: 'Other', sub_categories: [] }])
     })
 })

@@ -5,6 +5,7 @@ import { classifyBatch, generateSchema, withRetry, geminiModelId, isNetworkError
 import * as bookmarksExport from './bookmarks_export'
 import * as bookmarksService from './bookmarks'
 import { DEFAULT_CATEGORIES, SUGGESTED_ADDABLE_CATEGORIES, SCHEMA_SORT_OPTIONS } from '../components/Organizer'
+import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 
 class FakeBookmarkStore {
     constructor() {
@@ -63,6 +64,14 @@ const wireStore = (store) => {
     vi.spyOn(bookmarksService, 'moveBookmark').mockImplementation((id, dest) => store.move(id, dest));
     vi.spyOn(bookmarksService, 'removeBookmark').mockImplementation((id) => store.remove(id));
     vi.spyOn(bookmarksService, 'getBookmarkChildren').mockImplementation((pid) => store.childrenOf(pid));
+};
+
+// Most organizer tests exercise the pre-existing manual path. Make that mode
+// explicit now that the production constructor defaults new callers to inference.
+const createOrganizerService = (...args) => {
+    const constructorArgs = [...args];
+    if (constructorArgs[11] === undefined) constructorArgs[11] = false;
+    return new OrganizerService(...constructorArgs);
 };
 
 describe('FakeBookmarkStore', () => {
@@ -267,7 +276,7 @@ describe('filterReachableBookmarks', () => {
 
 describe('OrganizerService adaptive batch sizes', () => {
     it('uses larger batch sizes up to 50 for faster processing with Flash models', () => {
-        const service = new OrganizerService('test-key', [], () => {}, 'google/gemini-3.8-flash')
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.8-flash')
 
         expect(service.calculateAdaptiveBatchSize(30)).toBe(30)
         expect(service.calculateAdaptiveBatchSize(150)).toBe(45)
@@ -397,12 +406,12 @@ describe('OrganizerService cleanTitles integration', () => {
     })
 
     it('defaults cleanTitles to false when omitted', () => {
-        const service = new OrganizerService('test-key', [], () => {})
+        const service = createOrganizerService('test-key', [], () => {})
         expect(service.cleanTitles).toBe(false)
     })
 
     it('stores cleanTitles as true when passed in constructor', () => {
-        const service = new OrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, true)
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, true)
         expect(service.cleanTitles).toBe(true)
     })
 
@@ -417,7 +426,7 @@ describe('OrganizerService cleanTitles integration', () => {
             { title: 'Original Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
         ])
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {})
+        const service = createOrganizerService('test-key', ['Tech'], () => {})
 
         const bookmarks = [{ title: 'Original Tech', url: 'https://example.com' }]
         await service.start(bookmarks)
@@ -444,7 +453,7 @@ describe('OrganizerService cleanTitles integration', () => {
             { title: 'Clean Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
         ])
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -484,7 +493,7 @@ describe('OrganizerService cleanTitles integration', () => {
                 { title: 'Clean Tech', url: 'https://example.com', category: 'Tech', sub_category: 'Coding' }
             ])
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -521,6 +530,269 @@ describe('OrganizerService cleanTitles integration', () => {
             expect.any(Function),
             expect.any(Function)
         )
+    })
+})
+
+describe('OrganizerService detail enrichment integration', () => {
+    const links = Array.from({ length: 6 }, (_, i) => ({ title: `Link ${i}`, url: `https://detail.test/${i}` }))
+    const schema = { categories: [{ name: 'Tech', sub_categories: ['Frontend'] }] }
+    const classified = links.map((bookmark, i) => ({ ...bookmark, category: 'Tech', sub_category: 'Frontend', _i: i }))
+
+    beforeEach(() => {
+        vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(schema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map((bookmark, i) => ({ ...bookmark, category: 'Tech', sub_category: 'Frontend', _i: i })))
+    })
+
+    afterEach(() => vi.restoreAllMocks())
+
+    it('groups spacing and canonical parent variants into one detail group and schema lookup', () => {
+        const classifiedVariants = Array.from({ length: 12 }, (_, index) => ({
+            title: `Variant ${index}`,
+            url: `https://detail.test/variant/${index}`,
+            category: 'Tech',
+            sub_category: index < 6 ? ' Web   Development ' : 'Web Developments',
+            detail_category: index % 2 === 0 ? 'React' : 'Vue'
+        }))
+
+        const groups = groupEligibleDetailCandidates(classifiedVariants)
+        expect(groups.size).toBe(1)
+        expect([...groups.values()][0]).toHaveLength(12)
+
+        const result = reconcileDetailCategories(classifiedVariants, new Map([
+            ['tech\u0000web development', ['React', 'Vue']]
+        ]))
+
+        expect(result.summary).toEqual({
+            detailFoldersKept: 2,
+            detailedSubcategories: 1,
+            groupsKeptAtTwoLevels: 0
+        })
+        expect(result.classified.filter(item => item.detail_category === 'React')).toHaveLength(6)
+        expect(result.classified.filter(item => item.detail_category === 'Vue')).toHaveLength(6)
+    })
+
+    it('assigns detail folders through the real inferred OrganizerService run', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
+        const service = createOrganizerService('test-key', [], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, true)
+        const results = await service.start(links)
+        expect(results.map(item => item.detail_category)).toEqual(['React', 'React', 'React', 'Vue', 'Vue', 'Vue'])
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(results.stats.detailedSubcategories).toBe(1)
+    })
+
+    it('preserves manual selected top-level categories while enriching deeper levels', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(classified.map(item => ({ ...item, category: 'tech', sub_category: 'Frontend' })))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const results = await service.start(links)
+        expect(new Set(results.map(item => item.category))).toEqual(new Set(['Tech']))
+        expect(results.every(item => item.sub_category === 'Frontend')).toBe(true)
+        expect(new Set(results.map(item => item.detail_category))).toEqual(new Set(['React', 'Vue']))
+    })
+
+    it('keeps duplicate URLs scoped to their original parent group and bookmark id', async () => {
+        const groupedLinks = [
+            ...Array.from({ length: 6 }, (_, i) => ({
+                id: `tech-${i}`,
+                title: `Tech ${i}`,
+                url: i === 0 ? 'https://shared.test/bookmark' : `https://tech.test/${i}`
+            })),
+            ...Array.from({ length: 6 }, (_, i) => ({
+                id: `design-${i}`,
+                title: `Design ${i}`,
+                url: i === 0 ? 'https://shared.test/bookmark' : `https://design.test/${i}`
+            }))
+        ]
+        const groupedSchema = {
+            categories: [
+                { name: 'Tech', sub_categories: ['Frontend'] },
+                { name: 'Design', sub_categories: ['Systems'] }
+            ]
+        }
+
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(groupedSchema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(bookmark => ({
+            ...bookmark,
+            category: bookmark.id.startsWith('tech-') ? 'Tech' : 'Design',
+            sub_category: bookmark.id.startsWith('tech-') ? 'Frontend' : 'Systems'
+        })))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']],
+            ['design\u0000systems', ['Tokens', 'Components']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => records.map((bookmark, index) => ({
+            ...bookmark,
+            detail_category: bookmark.category === 'Tech'
+                ? (index < 3 ? 'React' : 'Vue')
+                : (index < 3 ? 'Tokens' : 'Components')
+        })))
+
+        const service = createOrganizerService('test-key', ['Tech', 'Design'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(groupedLinks)
+
+        expect(results.find(item => item.id === 'tech-0')).toMatchObject({
+            category: 'Tech', sub_category: 'Frontend', detail_category: 'React'
+        })
+        expect(results.find(item => item.id === 'design-0')).toMatchObject({
+            category: 'Design', sub_category: 'Systems', detail_category: 'Tokens'
+        })
+    })
+
+    it('keeps same-parent ID-less duplicate URLs in their distinct detail folders', async () => {
+        const duplicateLinks = Array.from({ length: 6 }, (_, index) => ({
+            title: index === 0 ? 'React duplicate' : index === 3 ? 'Vue duplicate' : `Link ${index}`,
+            url: index === 0 || index === 3 ? 'https://shared.test/bookmark' : `https://detail.test/${index}`
+        }))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => records.map((bookmark, index) => ({
+            ...bookmark,
+            detail_category: index < 3 ? 'React' : 'Vue'
+        })))
+
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(duplicateLinks)
+
+        expect(results.find(item => item.title === 'React duplicate')?.detail_category).toBe('React')
+        expect(results.find(item => item.title === 'Vue duplicate')?.detail_category).toBe('Vue')
+    })
+
+    it('classifies a large detail parent in bounded chunks before reconciling all assignments', async () => {
+        const largeGroup = Array.from({ length: 120 }, (_, index) => ({
+            title: `Large detail ${index}`,
+            url: `https://large-detail.test/${index}`
+        }))
+        const detailCalls = []
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => {
+            detailCalls.push(records)
+            return records.map(bookmark => ({
+                ...bookmark,
+                detail_category: Number(bookmark.title.replace('Large detail ', '')) % 2 === 0 ? 'React' : 'Vue'
+            }))
+        })
+
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(largeGroup)
+
+        expect(detailCalls.map(records => records.length)).toEqual([50, 50, 20])
+        expect(detailCalls.every(records => records.every(record => record.category === 'Tech' && record.sub_category === 'Frontend'))).toBe(true)
+        expect(results.filter(item => item.detail_category === 'React')).toHaveLength(60)
+        expect(results.filter(item => item.detail_category === 'Vue')).toHaveLength(60)
+        expect(results.stats.detailFoldersCount).toBe(2)
+    })
+
+    it('summarizes detail progress and keeps valid siblings visible after a partial classification failure', async () => {
+        const multiGroupLinks = Array.from({ length: 12 }, (_, index) => ({
+            title: `Multi group ${index}`,
+            url: `https://multi-detail.test/${index}`
+        }))
+        const multiGroupSchema = {
+            categories: [{ name: 'Tech', sub_categories: ['Frontend', 'Backend'] }]
+        }
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(multiGroupSchema)
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(multiGroupLinks.map((bookmark, index) => ({
+            ...bookmark,
+            category: 'Tech',
+            sub_category: index < 6 ? 'Frontend' : 'Backend'
+        })))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']],
+            ['tech\u0000backend', ['APIs', 'Servers']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (records) => {
+            if (records[0].sub_category === 'Backend') throw new Error('detail classifier unavailable')
+            return records.map((bookmark, index) => ({
+                ...bookmark,
+                detail_category: index < 3 ? 'React' : 'Vue'
+            }))
+        })
+        const logs = []
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+
+        const results = await service.start(multiGroupLinks)
+
+        expect(results.filter(item => item.detail_category === 'React')).toHaveLength(3)
+        expect(results.filter(item => item.detail_category === 'Vue')).toHaveLength(3)
+        expect(results.filter(item => item.sub_category === 'Backend').every(item => item.detail_category === null)).toBe(true)
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(results.stats.detailedSubcategories).toBe(1)
+        expect(logs.some(event => event.message === 'Finding useful third-level groups for 2 eligible parent groups...')).toBe(true)
+        expect(logs.some(event => event.message === 'Third-level enrichment summary: 2 eligible groups, 2 detail folders created, 1 detailed subcategory, 1 group kept at two levels.')).toBe(true)
+        expect(logs.some(event => event.status === 'warning' && event.message.includes('tech/backend') && event.message.includes('detail classifier unavailable'))).toBe(true)
+    })
+
+    it('reports detail chunk retries with cancellation-aware callbacks', async () => {
+        const retryEvents = []
+        const cancellationChecks = []
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (records, _apiKey, _names, _model, isCancelled, onRetry) => {
+            cancellationChecks.push(isCancelled)
+            onRetry({ delayMs: 8000, isRateLimit: true })
+            retryEvents.push(true)
+            return records.map((bookmark, index) => ({
+                ...bookmark,
+                detail_category: index < 3 ? 'React' : 'Vue'
+            }))
+        })
+        const logs = []
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+
+        const results = await service.start(links)
+
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(retryEvents).toHaveLength(1)
+        expect(cancellationChecks).toHaveLength(1)
+        expect(cancellationChecks[0]()).toBe(false)
+        expect(logs.some(event => event.message === 'Rate limit reached (429). Pausing for 8s before retrying detail chunk tech/frontend #1...')).toBe(true)
+    })
+
+    it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {
+        const detailSchemas = vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map())
+        const detailClassifier = vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue([])
+        detailSchemas.mockClear()
+        detailClassifier.mockClear()
+        const small = links.slice(0, 5)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        await service.start(small)
+        expect(detailSchemas).not.toHaveBeenCalled()
+        expect(detailClassifier).not.toHaveBeenCalled()
+
+        const flat = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, true, 'desc', undefined, false)
+        await flat.start(links)
+        expect(detailSchemas).not.toHaveBeenCalled()
+        expect(detailClassifier).not.toHaveBeenCalled()
+    })
+
+    it('keeps two-level output and warns when detail enrichment has no usable schemas, then returns cancellation', async () => {
+        vi.spyOn(ai, 'generateDetailSchemas')
+            .mockResolvedValueOnce(new Map())
+            .mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map(item => ({ ...item, detail_category: 'React' })))
+        const logs = []
+        const sparse = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const sparseResults = await sparse.start(links)
+        expect(sparseResults.every(item => item.detail_category === null)).toBe(true)
+        expect(logs.some(event => typeof event.message === 'string' && event.message.includes('Finding useful third-level groups'))).toBe(true)
+        expect(logs).toContainEqual({
+            status: 'warning',
+            message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.'
+        })
+
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (_records, _key, _names, _model, isCancelled) => {
+            sparse.cancel()
+            if (isCancelled()) { const error = new Error('Operation cancelled.'); error.isCancelled = true; throw error }
+            return []
+        })
+        expect(await sparse.start(links)).toBeNull()
+        expect(sparse.stats.detailFoldersCount).toBe(0)
+        expect(sparse.stats.detailedSubcategories).toBe(0)
+        expect(logs.some(event => event.status === 'warning' && event.message === 'Process cancelled.')).toBe(true)
     })
 })
 
@@ -873,7 +1145,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
     })
 
     it('defaults model to google/gemini-3.1-flash-lite in constructor', () => {
-        const service = new OrganizerService('test-key', ['Tech'], () => {})
+        const service = createOrganizerService('test-key', ['Tech'], () => {})
         expect(service.model).toBe('google/gemini-3.1-flash-lite')
     })
 
@@ -909,7 +1181,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
                 bookmarks.slice(5).map(b => ({ ...b, category: 'Engineering', sub_category: 'Backend' }))
             )
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // classifyBatch called 4 times: initial, retry-full, sub-batch 1, sub-batch 2
@@ -954,7 +1226,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
             .mockRejectedValueOnce(new Error('Unrecoverable parsing failure'))
 
-        const service = new OrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering', 'Finance'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(results).toHaveLength(4)
@@ -972,7 +1244,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'generateSchema').mockImplementation(async () => {
             service.cancel()
@@ -999,7 +1271,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async () => {
             service.cancel()
@@ -1023,7 +1295,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         const progressEvents = []
         const onProgress = (evt) => progressEvents.push(evt)
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
 
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async (b, key, sch, m, c, isCanc, onRetry) => {
             // Simulate rate-limit notification from withRetry
@@ -1069,7 +1341,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(notFoundError)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5
@@ -1100,7 +1372,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(networkError)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5 when network fails
@@ -1134,7 +1406,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
 
         vi.spyOn(ai, 'classifyBatch').mockRejectedValue(rateLimitErr)
 
-        const service = new OrganizerService('test-key', ['Engineering'], onProgress)
+        const service = createOrganizerService('test-key', ['Engineering'], onProgress)
         const results = await service.start(bookmarks)
 
         // It should NOT attempt to split 20 -> 10 -> 5 on rate limits
@@ -1152,7 +1424,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             const progressEvents = []
             const onProgress = (evt) => progressEvents.push(evt)
 
-            const service = new OrganizerService('test-key', ['Tech'], onProgress)
+            const service = createOrganizerService('test-key', ['Tech'], onProgress)
             const bookmarks = [{ title: 'Site', url: 'https://example.com' }]
             const result = await service.start(bookmarks)
 
@@ -1192,7 +1464,7 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             { title: 'Site 3', url: 'https://site3.com' }
         ]
 
-        const service = new OrganizerService('test-key', ['Tech', 'News'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech', 'News'], onProgress)
         const results = await service.start(bookmarks)
 
         expect(service.stats.categoryBreakdown).toEqual({
@@ -1267,7 +1539,11 @@ describe('OrganizerService flat chronological date sorting', () => {
 
     it('sorts bookmarks descending (newest first) and bypasses AI schema and classification', async () => {
         const schemaSpy = vi.spyOn(ai, 'generateSchema')
+        const inferredSchemaSpy = vi.spyOn(ai, 'generateInferredSchema')
         const classifySpy = vi.spyOn(ai, 'classifyBatch')
+        schemaSpy.mockClear()
+        inferredSchemaSpy.mockClear()
+        classifySpy.mockClear()
 
         const progressMessages = []
         const onProgress = (evt) => {
@@ -1280,7 +1556,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Middle', url: 'https://middle.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             onProgress,
@@ -1296,6 +1572,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         const results = await service.start(bookmarks)
 
         expect(schemaSpy).not.toHaveBeenCalled()
+        expect(inferredSchemaSpy).not.toHaveBeenCalled()
         expect(classifySpy).not.toHaveBeenCalled()
 
         expect(results.map(b => b.title)).toEqual(['Newest', 'Middle', 'Oldest'])
@@ -1315,7 +1592,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Middle', url: 'https://middle.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1346,7 +1623,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'New Article - Site', url: 'https://new.com', add_date: '1700000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1372,7 +1649,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Mango', url: 'https://mango.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1396,7 +1673,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             { title: 'Unique Page', url: 'https://unique.com', add_date: '1600000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1425,7 +1702,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         vi.spyOn(bookmarksService, 'createBookmark')
         wireStore(store)
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, true, false,
             true,  // flatDateSort
@@ -1453,7 +1730,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Chronological Bookmarks' })
         wireStore(store)
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, true, false,
             true, 'desc'
@@ -1492,7 +1769,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         });
         wireStore(store);
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, false, false,
             true,  // flatDateSort
@@ -1541,7 +1818,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         });
         wireStore(store);
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', true, false, false,
             false, // AI Categorized mode
@@ -1577,13 +1854,157 @@ describe('OrganizerService flat chronological date sorting', () => {
         })
 
         const messages = []
-        const service = new OrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
         expect(results).toBeNull()
         expect(messages.some(m => m.includes('partially reorganized'))).toBe(true)
         expect(messages.some(m => m.includes('Run again to finish'))).toBe(true)
+    })
+})
+
+describe('OrganizerService inferred category runs', () => {
+    it('keeps saved manual categories dormant whenever inference is enabled', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Generated Topic', sub_categories: ['Generated Detail'] }]
+        }
+        const generateInferred = vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        const generateManual = vi.spyOn(ai, 'generateSchema')
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'Example', url: 'https://example.com', category: 'Generated Topic', sub_category: 'Generated Detail' }
+        ])
+
+        const service = createOrganizerService(
+            'test-key', ['Saved Manual Category'], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+        await service.start([{ title: 'Example', url: 'https://example.com' }])
+
+        expect(generateInferred).toHaveBeenCalled()
+        expect(generateManual).not.toHaveBeenCalled()
+        expect(classify.mock.calls[0][2]).toEqual(inferred)
+    })
+
+    it('reports full-collection analysis instead of sampled analysis in inference mode', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Generated Topic', sub_categories: ['Generated Detail'] }]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(bookmark => ({
+            ...bookmark,
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail'
+        })))
+        const messages = []
+        const bookmarks = Array.from({ length: 205 }, (_, index) => ({
+            title: `Bookmark ${index + 1}`,
+            url: `https://example.com/${index + 1}`
+        }))
+        const service = createOrganizerService(
+            'test-key', ['Dormant Manual Category'], event => messages.push(event.message),
+            undefined, undefined, undefined, undefined, undefined, false,
+            undefined, undefined, true
+        )
+
+        await service.start(bookmarks)
+
+        expect(messages).toContain('Large collection: analyzing all 205 bookmarks to infer the folder structure. All bookmarks will then be classified.')
+        expect(messages.some(message => message?.includes('sample of 200'))).toBe(false)
+    })
+
+    it('classifies against the run-scoped inferred schema instead of replacing it with Other', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [
+                { name: 'Engineering', sub_categories: ['Frontend'] },
+                { name: 'Research', sub_categories: ['Papers'] }
+            ]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+
+        const service = createOrganizerService(
+            'test-key', [], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+        await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+        expect(classify.mock.calls[0][2]).toEqual(inferred)
+        expect(classify.mock.calls[0][2].categories[0].name).not.toBe('Other')
+    })
+
+    it('stops when category inference fails instead of classifying against Other', async () => {
+        vi.clearAllMocks()
+        vi.spyOn(ai, 'generateInferredSchema').mockRejectedValue(new Error('invalid schema'))
+        const classify = vi.spyOn(ai, 'classifyBatch')
+        const progress = vi.fn()
+        const service = createOrganizerService(
+            'test-key', [], progress, undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, true
+        )
+
+        await expect(service.start([{ title: 'React', url: 'https://react.dev' }]))
+            .rejects.toThrow('invalid schema')
+
+        expect(classify).not.toHaveBeenCalled()
+        expect(progress).toHaveBeenCalledWith({
+            status: 'error',
+            message: 'Could not infer categories from your bookmarks: invalid schema'
+        })
+    })
+
+    it('keeps selected categories authoritative in manual mode', async () => {
+        vi.clearAllMocks()
+        const generated = vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [{ name: 'Unselected', sub_categories: ['Ignored'] }]
+        })
+        const inferred = vi.spyOn(ai, 'generateInferredSchema')
+        const classify = vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+        const service = createOrganizerService(
+            'test-key', ['Engineering'], vi.fn(), undefined, undefined, undefined,
+            undefined, undefined, false, undefined, undefined, false
+        )
+
+        await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+        expect(generated).toHaveBeenCalled()
+        expect(inferred).not.toHaveBeenCalled()
+        expect(classify.mock.calls[0][2].categories.map(category => category.name)).toEqual(['Engineering'])
+    })
+
+    it('reports inferred categories in stats without persisting them through a storage API', async () => {
+        vi.clearAllMocks()
+        const inferred = {
+            categories: [{ name: 'Engineering', sub_categories: ['Frontend'] }]
+        }
+        vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(inferred)
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue([
+            { title: 'React', url: 'https://react.dev', category: 'Engineering', sub_category: 'Frontend' }
+        ])
+        const storageSet = vi.fn()
+        const originalChrome = globalThis.chrome
+        globalThis.chrome = { storage: { local: { set: storageSet } } }
+
+        try {
+            const service = createOrganizerService(
+                'test-key', [], vi.fn(), undefined, undefined, undefined,
+                undefined, undefined, false, undefined, undefined, true
+            )
+            const results = await service.start([{ title: 'React', url: 'https://react.dev' }])
+
+            expect(results.stats.categoryBreakdown).toEqual({ Engineering: 1 })
+            expect(results.stats.categoriesCount).toBe(1)
+            expect(storageSet).not.toHaveBeenCalled()
+        } finally {
+            globalThis.chrome = originalChrome
+        }
     })
 })
 
@@ -1667,7 +2088,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Newest Design', url: 'https://design.com/newest', add_date: '1800000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech', 'Design'],
             () => {},
@@ -1700,7 +2121,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Older Tech', url: 'https://tech.com/old', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1727,7 +2148,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'ArXiv Paper', url: 'https://arxiv.org/abs/1234' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1760,7 +2181,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             { title: 'Beta Tech', url: 'https://tech.com/beta' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1846,7 +2267,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Newest Link', url: 'https://new.com', add_date: '1700000000' }
         ]
 
-        const service = new OrganizerService('test-key', ['Tech'], onProgress)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
         const results = await service.start(bookmarks)
 
         const oldestDate = new Date(1500000000000).toLocaleDateString()
@@ -1865,7 +2286,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Older Bookmark', url: 'https://older.com', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1897,7 +2318,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             { title: 'Oldest Tech', url: 'https://tech.com/oldest', add_date: '1500000000' }
         ]
 
-        const service = new OrganizerService(
+        const service = createOrganizerService(
             'test-key',
             ['Tech'],
             () => {},
@@ -1966,7 +2387,7 @@ describe('schema fallback path reporting', () => {
         const spy = vi.spyOn(ai, 'generateSchema').mockImplementation(generateSchemaImpl)
 
         const events = []
-        const service = new OrganizerService('test-key', ['Engineering', 'Finance', 'Travel'], (e) => events.push(e))
+        const service = createOrganizerService('test-key', ['Engineering', 'Finance', 'Travel'], (e) => events.push(e))
         await service.start(bookmarks)
 
         return { spy, events, messages: events.map(e => e.message).filter(Boolean) }
@@ -2046,7 +2467,7 @@ describe('fixed hierarchy placement and export', () => {
         wireStore(store)
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
             store.node(parentId).children.find(n => !n.url && n.title === title))
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {})
         service.snapshotProvider = async () => {}
 
         await service.start(null)
@@ -2084,7 +2505,7 @@ describe('fixed hierarchy placement and export', () => {
             return found || store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = new OrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
+        const service = createOrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
         service.snapshotProvider = async () => {}
         const browserResults = await service.start(null)
         const fileResults = await service.start([...classifications.keys()].map(id => ({ ...store.node(id) })))
@@ -2092,7 +2513,7 @@ describe('fixed hierarchy placement and export', () => {
 
         expect(root.children.map(n => n.title)).toEqual(selected)
         const tech = root.children[0]
-        expect(tech.children.map(n => n.title)).toEqual(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools'])
+        expect(tech.children.map(n => n.title)).toEqual(['Alpha Tools', 'Zeta Tools'])
         const expectedTitles = {
             alpha: ['Alpha', 'Bravo', 'Charlie'],
             'date-desc': ['Bravo', 'Alpha', 'Charlie'],
@@ -2106,7 +2527,7 @@ describe('fixed hierarchy placement and export', () => {
             const html = bookmarksExport.generateNetscapeHTML(results)
             const doc = new DOMParser().parseFromString(html, 'text/html')
             expect([...doc.querySelectorAll('h3')].map(n => n.textContent)).toEqual([
-                firstCategory, ...(sortOrder === 'none' ? ['Zeta Tools', 'Alpha Tools'] : ['Alpha Tools', 'Zeta Tools']), secondCategory, 'Investing'
+                firstCategory, 'Alpha Tools', 'Zeta Tools', secondCategory, 'Investing'
             ])
             expect([...doc.querySelectorAll('a')].slice(0, 3).map(n => n.textContent)).toEqual(expectedTitles)
         }
@@ -2128,7 +2549,7 @@ describe('fixed hierarchy placement and export', () => {
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockImplementation(async (parentId, title) =>
             store.node(parentId).children.find(n => !n.url && n.title === title) || store.addFolder(parentId, `folder-${parentId}-${title}`, title))
 
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {})
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {})
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
         const tech = [...store.nodes.values()].find(n => !n.url && n.title === 'Tech')
@@ -2163,7 +2584,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, id, title)
         })
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2201,7 +2622,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = new OrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2228,7 +2649,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2253,7 +2674,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.move(id, dest)
         })
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2272,7 +2693,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = new OrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2291,7 +2712,7 @@ describe('Phase B reorder pass and idempotency', () => {
         store.addUrl('f1', '11', 'https://b.com', 'B', 1600000000000)
         wireStore(store)
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite')
         await service.reorderFolder('f1', ['10', '11', '12'])
 
         const childIds = (await store.childrenOf('f1')).map(c => c.id)
@@ -2310,14 +2731,14 @@ describe('Phase B reorder pass and idempotency', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Chronological Bookmarks' })
         wireStore(store)
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {} // installed for real in Task 7
 
         await service.start(null)
         const opsAfterFirst = store.ops.length
         expect(opsAfterFirst).toBeGreaterThan(0)
 
-        const service2 = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service2 = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service2.snapshotProvider = async () => {}
         await service2.start(null)
 
@@ -2340,7 +2761,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         wireStore(store)
         const downloadSpy = vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         await service.start(null)
 
         expect(downloadSpy).toHaveBeenCalledTimes(1)
@@ -2355,7 +2776,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         wireStore(store)
 
-        const service = new OrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
         service.snapshotProvider = async () => { throw new Error('disk full') }
         const results = await service.start(null)
 

@@ -10,6 +10,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
   - Compact (1 to 3 subfolders per category) for simple, broad organization (recommended).
   - Balanced (3 to 6 subfolders) for everyday collections.
   - Detailed (6 to 10 subfolders) for large, topic-rich collections.
+- Adaptive Detail Folders: In either AI-inferred or manually selected category mode, a non-General category/subcategory with at least six bookmarks may be split into a third level. The split is retained only when at least two meaningful detail folders each contain two or more bookmarks; otherwise, or if detail inference cannot complete, bookmarks remain in the normal two-level category/subcategory layout. The same hierarchy is used for Browser Mode and File Mode.
 - Subfolder Hierarchy Diagrams: Visual diagrams for both light and dark themes that illustrate exactly how each subfolder compactness mode organizes your links.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
 - Model Options: Choose the Gemini model that fits your needs:
@@ -108,6 +109,14 @@ Your data stays private:
 - AI: Google Gemini models via Google AI Studio or OpenRouter API
 
 ## Changelog
+
+### v1.4.0
+
+- Auto-Generated Categories: New installs can infer a complete category and subcategory structure from the full bookmark collection.
+- Preserved Manual Taxonomies: Saved manual categories remain available, ordered, and unchanged when inference is enabled.
+- Safer Category Placement: Classification cannot invent top-level folders or place an approved subcategory beneath the wrong category.
+- Reliable Background Recovery: Reopened panels recover completed inferred results from the active worker and clearly request a rerun if transient results were lost after a worker restart.
+- Restored Category Choices: Explicitly empty manual selections and the full suggested-category pool are preserved.
 
 ### v1.3.0
 

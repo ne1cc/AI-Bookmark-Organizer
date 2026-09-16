@@ -102,7 +102,7 @@ describe('bookmark date preservation: original file → organized file', () => {
             'test-key', ['Tech', 'News'], () => {}, 'google/gemini-3.1-flash-lite',
             '5-10', false, true, false,
             false,  // categorized (AI) mode
-            'desc'
+            'desc', undefined, false
         )
 
         const html = await organizeFileToHtml(service, links)

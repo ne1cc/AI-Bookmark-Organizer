@@ -4,8 +4,17 @@ import {
     subfolderBounds,
     salvagePartialJson,
     generateSchema,
+    generateInferredSchema,
     classifyBatch,
-    SCHEMA_MAX_TOKENS
+    SCHEMA_MAX_TOKENS,
+    validateDetailSchema,
+    buildDetailSchemaPrompt,
+    generateDetailSchemas,
+    DETAIL_SCHEMA_GROUP_LIMIT,
+    DETAIL_SCHEMA_SAMPLE_LIMIT,
+    DETAIL_MIN_BOOKMARKS,
+    DETAIL_MIN_FOLDER_SIZE,
+    DETAIL_MAX_FOLDERS
 } from './ai'
 
 // Builds an OpenRouter-shaped success response carrying `content` verbatim.
@@ -196,10 +205,122 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(withCatchAll, { subfolderTarget: '5-10', bookmarkCount: 3000 })
+        const result = validateSchema(withCatchAll, {
+            subfolderTarget: '5-10',
+            bookmarkCount: 3000,
+            expectedCategories: withCatchAll.categories.map(category => category.name)
+        })
 
         expect(result.ok).toBe(true)
         expect(result.schema.categories.map(c => c.name)).toContain('Other')
+    })
+
+    it('rejects an inferred schema whose only top-level category is Other', () => {
+        const result = validateSchema(
+            { categories: [{ name: 'Other', sub_categories: [] }] },
+            { bookmarkCount: 12, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toMatch(/catch-all.*Other/i)
+    })
+
+    it('rejects catch-all top-level entries mixed into an inferred schema', () => {
+        const result = validateSchema(
+            {
+                categories: [
+                    ...healthySchema.categories,
+                    { name: 'Archive', sub_categories: [] }
+                ]
+            },
+            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toMatch(/catch-all.*Archive/i)
+    })
+
+    it.each([
+        'Misc',
+        'Misc.',
+        'Miscellaneous',
+        'Miscellaneous Items',
+        'Miscellaneous Resources',
+        'Various',
+        'Various Topics',
+        'Various Resources',
+        'Assorted',
+        'Assorted Links',
+        'Everything Else',
+        'Other Stuff',
+        'Other Resources',
+        'Others',
+        'Catch-All',
+        'Uncategorized Links',
+        'General Items',
+        'Unsorted',
+        'Unclassified',
+        'None'
+    ])('rejects inferred filler top-level category "%s"', (fillerName) => {
+        const result = validateSchema(
+            {
+                categories: [
+                    ...healthySchema.categories,
+                    {
+                        name: fillerName,
+                        sub_categories: ['Fallback One', 'Fallback Two', 'Fallback Three']
+                    }
+                ]
+            },
+            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+        )
+
+        expect(result.ok).toBe(false)
+        expect(result.issues.join(' ')).toContain(fillerName)
+    })
+
+    it.each([
+        'Miscellaneous',
+        'Other Resources',
+        'Uncategorized Links',
+        'General Items'
+    ])('does not apply inferred filler-name rejection to explicit manual category "%s"', (categoryName) => {
+        const manualSchema = {
+            categories: [
+                ...healthySchema.categories,
+                {
+                    name: categoryName,
+                    sub_categories: ['Household Records', 'Reference Links', 'Saved Reading']
+                }
+            ]
+        }
+
+        const result = validateSchema(manualSchema, {
+            subfolderTarget: '5-10',
+            bookmarkCount: 3000,
+            expectedCategories: manualSchema.categories.map(category => category.name)
+        })
+
+        expect(result.ok).toBe(true)
+    })
+
+    it.each([
+        'Developer Resources',
+        'Learning Resources',
+        'General Aviation',
+        'Other Languages'
+    ])('accepts topical inferred category "%s"', (categoryName) => {
+        const schema = {
+            categories: [
+                ...healthySchema.categories,
+                {
+                    name: categoryName,
+                    sub_categories: ['Guides', 'Reference', 'News']
+                }
+            ]
+        }
+
+        expect(validateSchema(schema, { bookmarkCount: 100 }).ok).toBe(true)
     })
 
     it('flags a structure that is flat on average even when each category clears the floor', () => {
@@ -398,6 +519,265 @@ describe('generateSchema validation and corrective retry', () => {
 
         expect(JSON.parse(global.fetch.mock.calls[0][1].body).max_tokens).toBe(SCHEMA_MAX_TOKENS)
         expect(SCHEMA_MAX_TOKENS).toBe(16000)
+    })
+})
+
+describe('detail schema validation', () => {
+    const records = (category, sub_category, count) => Array.from({ length: count }, (_, i) => ({
+        title: `${sub_category} Bookmark ${i + 1}`,
+        url: `https://example.test/${category}/${sub_category}/${i + 1}`,
+        category,
+        sub_category
+    }))
+
+    it('accepts valid names, normalizes duplicates, rejects invalid names, and caps folders by group size', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['finance\u0000markets', records('Finance', 'Markets', 12)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            {
+                category: 'Tech',
+                sub_category: 'Frontend',
+                detail_categories: [
+                    '  React  ', 'react', 'CSS', 'Frontend', 'General', 'Other',
+                    'Docs / Guides', '', 'Components'
+                ]
+            },
+            {
+                category: 'Finance',
+                sub_category: 'Markets',
+                detail_categories: ['Stocks', 'Options', 'Crypto', 'Investing', 'Trading']
+            }
+        ] }, requested)
+
+        expect(result.ok).toBe(true)
+        expect(result.schemas.get('tech\u0000frontend')).toEqual(['React', 'CSS', 'Components'])
+        expect(result.schemas.get('finance\u0000markets')).toEqual(['Stocks', 'Options', 'Crypto', 'Investing'])
+        expect(result.schemas.has('unknown\u0000parent')).toBe(false)
+    })
+
+    it('isolates unknown parent pairs and omits groups with fewer than two valid names', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['design\u0000systems', records('Design', 'Systems', 6)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            { category: 'Unknown', sub_category: 'Parent', detail_categories: ['One', 'Two'] },
+            { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'General'] },
+            { category: 'Design', sub_category: 'Systems', detail_categories: ['One Valid', 'Systems', 'Docs / Guides'] }
+        ] }, requested)
+
+        expect(result.ok).toBe(false)
+        expect(result.schemas.size).toBe(0)
+        expect(result.issues.join(' ')).toMatch(/usable|valid/i)
+    })
+
+    it('returns false only when every requested group is unusable', () => {
+        const requested = new Map([
+            ['tech\u0000frontend', records('Tech', 'Frontend', 6)],
+            ['design\u0000systems', records('Design', 'Systems', 6)]
+        ])
+
+        const result = validateDetailSchema({ groups: [
+            { category: 'Unknown', sub_category: 'Parent', detail_categories: ['One', 'Two'] },
+            { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'Libraries'] },
+            { category: 'Design', sub_category: 'Systems', detail_categories: ['General', 'Systems'] }
+        ] }, requested)
+
+        expect(result.ok).toBe(true)
+        expect([...result.schemas.entries()]).toEqual([
+            ['tech\u0000frontend', ['Frameworks', 'Libraries']]
+        ])
+    })
+
+    it('builds a bounded, evenly sampled prompt with the required detail JSON contract', () => {
+        const requested = new Map(Array.from({ length: 13 }, (_, groupIndex) => {
+            const category = `Category ${groupIndex + 1}`
+            const sub_category = `Topic ${groupIndex + 1}`
+            return [`${category.toLowerCase()}\u0000${sub_category.toLowerCase()}`, records(category, sub_category, 70)]
+        }))
+
+        const prompt = buildDetailSchemaPrompt(requested)
+        const encoded = prompt.slice(prompt.indexOf('BOOKMARK GROUPS:') + 'BOOKMARK GROUPS:'.length).trim()
+        const groups = JSON.parse(encoded)
+
+        expect(groups).toHaveLength(DETAIL_SCHEMA_GROUP_LIMIT)
+        expect(groups[0].bookmarks).toHaveLength(DETAIL_SCHEMA_SAMPLE_LIMIT)
+        expect(groups[0].bookmarks[0]).toMatchObject({ title: 'Topic 1 Bookmark 1', url: expect.any(String), i: 0 })
+        expect(groups[0].bookmarks.at(-1).i).toBe(59)
+        expect(prompt).toContain('{ "groups": [{ "category": "...", "sub_category": "...", "detail_categories": ["..."] }] }')
+        expect(prompt).toMatch(/Title Case|at least 2|meaningful/i)
+        expect(prompt).toMatch(/no filler|path/i)
+    })
+
+    it('exports the exact detail limits used by validation and prompting', () => {
+        expect(DETAIL_SCHEMA_GROUP_LIMIT).toBe(12)
+        expect(DETAIL_SCHEMA_SAMPLE_LIMIT).toBe(60)
+        expect(DETAIL_MIN_BOOKMARKS).toBe(6)
+        expect(DETAIL_MIN_FOLDER_SIZE).toBe(2)
+        expect(DETAIL_MAX_FOLDERS).toBe(4)
+    })
+})
+
+describe('generate detail schemas', () => {
+    const group = (category, sub_category, count = 6) => Array.from({ length: count }, (_, i) => ({
+        title: `${category} ${sub_category} ${i + 1}`,
+        url: `https://example.test/${category}/${sub_category}/${i + 1}`,
+        category,
+        sub_category
+    }))
+
+    it('retries one invalid response for correction and returns its usable schemas', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [
+                { category: 'Tech', sub_category: 'Frontend', detail_categories: ['Frameworks', 'Styling'] }
+            ] })))
+
+        const events = []
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key', undefined, null, (event) => events.push(event))
+
+        expect(result.get('tech\u0000frontend')).toEqual(['Frameworks', 'Styling'])
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({ isSchemaCorrection: true, isRateLimit: false })
+        expect(JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content).toContain('CORRECTION REQUIRED')
+    })
+
+    it('keeps valid sibling batches when another batch remains unusable', async () => {
+        const requested = new Map(Array.from({ length: 13 }, (_, i) => [
+            `category ${i + 1}\u0000topic ${i + 1}`,
+            group(`Category ${i + 1}`, `Topic ${i + 1}`)
+        ]))
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [] })))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify({ groups: [
+                { category: 'Category 13', sub_category: 'Topic 13', detail_categories: ['Alpha', 'Beta'] }
+            ] })))
+
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key')
+
+        expect(result.size).toBe(1)
+        expect(result.get('category 13\u0000topic 13')).toEqual(['Alpha', 'Beta'])
+        expect(global.fetch).toHaveBeenCalledTimes(3)
+    })
+
+    it('returns an empty map for a terminal detail-stage request failure', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        global.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 400,
+            text: async () => JSON.stringify({ error: { message: 'invalid request' } })
+        }))
+
+        const result = await generateDetailSchemas(requested, 'sk-or-test-key')
+
+        expect(result).toEqual(new Map())
+        expect(global.fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves the existing cancellation path', async () => {
+        const requested = new Map([['tech\u0000frontend', group('Tech', 'Frontend')]])
+        const isCancelled = vi.fn(() => true)
+        global.fetch = vi.fn()
+
+        await expect(generateDetailSchemas(requested, 'sk-or-test-key', undefined, isCancelled))
+            .rejects.toMatchObject({ isCancelled: true })
+        expect(global.fetch).not.toHaveBeenCalled()
+    })
+})
+
+describe('generateInferredSchema', () => {
+    let originalFetch
+
+    beforeEach(() => {
+        originalFetch = global.fetch
+    })
+
+    afterEach(() => {
+        global.fetch = originalFetch
+        vi.restoreAllMocks()
+    })
+
+    it('uses every bookmark and permits model-generated top-level categories', async () => {
+        const bookmarks = Array.from({ length: 205 }, (_, index) => ({
+            title: `Bookmark ${index + 1}`,
+            url: `https://example.com/${index + 1}`
+        }))
+        let body
+        global.fetch = vi.fn(async (url, options) => {
+            body = JSON.parse(options.body)
+            return orResponse(JSON.stringify({
+                categories: [
+                    { name: 'Engineering', sub_categories: ['Frontend', 'Backend'] },
+                    { name: 'Research', sub_categories: ['Papers', 'Reference'] },
+                    { name: 'Personal', sub_categories: ['Health', 'Travel'] }
+                ]
+            }))
+        })
+
+        const schema = await generateInferredSchema(bookmarks, 'sk-or-test-key')
+        const prompt = body.messages[1].content
+
+        expect(prompt).toContain('Bookmark 1')
+        expect(prompt).toContain('Bookmark 205')
+        expect(prompt).not.toContain('FIXED TOP-LEVEL CATEGORIES')
+        expect(schema.categories.map(category => category.name)).toEqual(['Engineering', 'Research', 'Personal'])
+    })
+
+    it('rejects two unusable inferred schemas with schemaInvalid', async () => {
+        const flat = { categories: [{ name: 'Links', sub_categories: [] }] }
+        global.fetch = vi.fn(async () => orResponse(JSON.stringify(flat)))
+
+        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, '5-10'))
+            .rejects.toMatchObject({ schemaInvalid: true })
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('reports inferred schema correction through onRetry', async () => {
+        const flat = { categories: [{ name: 'Links', sub_categories: [] }] }
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(flat)))
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
+
+        const events = []
+        const schema = await generateInferredSchema(
+            manyBookmarks,
+            'sk-or-test-key',
+            undefined,
+            '5-10',
+            null,
+            (event) => events.push(event)
+        )
+
+        expect(global.fetch).toHaveBeenCalledTimes(2)
+        expect(schema).toEqual(healthySchema)
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({
+            attempt: 1,
+            delayMs: 0,
+            isRateLimit: false,
+            isSchemaCorrection: true
+        })
+        expect(events[0].error.message).toMatch(/subcategories|flat/i)
+    })
+
+    it('passes cancellation and retry callbacks through to inferred generation', async () => {
+        const isCancelled = vi.fn(() => true)
+        const onRetry = vi.fn()
+        global.fetch = vi.fn()
+
+        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, '1-3', isCancelled, onRetry))
+            .rejects.toMatchObject({ isCancelled: true })
+
+        expect(isCancelled).toHaveBeenCalled()
+        expect(onRetry).not.toHaveBeenCalled()
+        expect(global.fetch).not.toHaveBeenCalled()
     })
 })
 

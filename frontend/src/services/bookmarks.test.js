@@ -10,6 +10,7 @@ import {
     createFolder,
     createBookmark,
     importBookmarksToBrowser,
+    clearFolderCache,
     findDuplicateBookmarks,
     removeDuplicateBookmarksFromBrowser
 } from './bookmarks';
@@ -282,6 +283,56 @@ describe('bookmarks write wrappers', () => {
         expect(res.importedCount).toBe(2)
         expect(createdNodes[0].title).toBe('Test Categorized')
         expect(createdNodes[0].index).toBe(0)
+    })
+
+    it('importBookmarksToBrowser parents valid detail folders by their subcategory and keeps fallback bookmarks at that subcategory', async () => {
+        clearFolderCache()
+        const nodes = new Map([
+            ['0', { id: '0', children: [{ id: '2', title: 'Other Bookmarks', children: [] }] }],
+            ['2', { id: '2', title: 'Other Bookmarks', children: [] }]
+        ])
+        let nextId = 1
+        const addNode = (data) => {
+            const node = { id: `node-${nextId++}`, ...data, ...(data.url ? {} : { children: [] }) }
+            nodes.set(node.id, node)
+            nodes.get(data.parentId).children.push(node)
+            return node
+        }
+
+        global.chrome = {
+            runtime: {},
+            bookmarks: {
+                getTree: vi.fn((cb) => cb([nodes.get('0')])),
+                getChildren: vi.fn((parentId, cb) => cb([...nodes.get(parentId).children])),
+                create: vi.fn((data, cb) => cb(addNode(data))),
+                move: vi.fn((id, destination, cb) => cb({ id, ...destination }))
+            }
+        }
+
+        const items = [
+            { title: 'React docs', url: 'https://react.dev', category: 'Tech', sub_category: 'Frontend', detail_category: 'React' },
+            { title: 'Frontend overview', url: 'https://frontend.example', category: 'Tech', sub_category: 'Frontend', detail_category: 'General' },
+            { title: 'React tools', url: 'https://tools.example', category: 'Tech', sub_category: 'Backend', detail_category: 'React' },
+            { title: 'Tech overview', url: 'https://tech.example', category: 'Tech', sub_category: 'General', detail_category: 'React' }
+        ]
+
+        const result = await importBookmarksToBrowser(items, { folderTitle: 'Test Third Level' })
+        const root = nodes.get(result.rootFolder.id)
+        const category = root.children.find(node => node.title === 'Tech')
+        const frontend = category.children.find(node => node.title === 'Frontend')
+        const backend = category.children.find(node => node.title === 'Backend')
+        const frontendReact = frontend.children.find(node => node.title === 'React')
+        const backendReact = backend.children.find(node => node.title === 'React')
+        const bookmark = (title) => [...nodes.values()].find(node => node.url && node.title === title)
+
+        expect(frontendReact.parentId).toBe(frontend.id)
+        expect(backendReact.parentId).toBe(backend.id)
+        expect(bookmark('React docs').parentId).toBe(frontendReact.id)
+        expect(bookmark('Frontend overview').parentId).toBe(frontend.id)
+        expect(bookmark('React tools').parentId).toBe(backendReact.id)
+        expect(bookmark('Tech overview').parentId).toBe(category.id)
+        expect(frontend.children.filter(node => !node.url).map(node => node.title)).toEqual(['React'])
+        expect(backend.children.filter(node => !node.url).map(node => node.title)).toEqual(['React'])
     })
 
 })

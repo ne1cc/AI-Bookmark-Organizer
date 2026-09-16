@@ -1,11 +1,26 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackgroundJobRunner } from './jobRunner';
+import { OrganizerService } from '../services/organizer';
+
+vi.mock('../services/organizer', () => ({
+    OrganizerService: vi.fn(function (apiKey, categories, onProgress) {
+        this.onProgress = onProgress;
+        this.start = vi.fn(async () => [
+            { title: 'Example 1', url: 'https://example.com/1' },
+            { title: 'Example 2', url: 'https://example.com/2' }
+        ]);
+        this.cancel = vi.fn();
+        this.isCancelled = false;
+        this.stats = null;
+    })
+}));
 
 describe('BackgroundJobRunner', () => {
     let runner;
 
     beforeEach(() => {
         vi.useFakeTimers();
+        OrganizerService.mockClear();
 
         // Mock chrome extension APIs
         globalThis.chrome = {
@@ -64,6 +79,7 @@ describe('BackgroundJobRunner', () => {
         expect(state.progress).toBe(0);
         expect(state.logs).toEqual([]);
         expect(state.activeDateSpan).toBeNull();
+        expect(state.completedAt).toBeNull();
         expect(runner.getResults()).toBeNull();
     });
 
@@ -74,6 +90,7 @@ describe('BackgroundJobRunner', () => {
         const config = {
             apiKey: 'AIzaSyFakeKey',
             categories: ['Tech'],
+            inferCategories: false,
             selectedModel: 'google/gemini-3.8-flash',
             subfolderTarget: '5-10',
             sortAlphabetically: true,
@@ -89,7 +106,6 @@ describe('BackgroundJobRunner', () => {
         // Check that state immediately transitions to processing
         expect(runner.getState().status).toBe('processing');
         expect(globalThis.chrome.storage.session.set).toHaveBeenCalled();
-
         // Simulate OrganizerService callback
         runner.organizer.onProgress({
             status: 'progress',
@@ -104,6 +120,7 @@ describe('BackgroundJobRunner', () => {
         expect(results).toHaveLength(2);
         expect(runner.getState().status).toBe('complete');
         expect(runner.getState().progress).toBe(100);
+        expect(runner.getState().completedAt).toEqual(expect.any(Number));
         expect(runner.getResults()).toEqual(results);
 
         // Should have stored organizedData in session and organizedMeta in local
@@ -116,6 +133,93 @@ describe('BackgroundJobRunner', () => {
                 organizedData: results
             })
         );
+    });
+
+    it('forwards inferred category mode to OrganizerService and logs its source', async () => {
+        const config = {
+            apiKey: 'AIzaSyFakeKey',
+            categories: [],
+            inferCategories: true,
+            selectedModel: 'google/gemini-3.8-flash',
+            subfolderTarget: '5-10',
+            sortAlphabetically: true,
+            removeDuplicates: true,
+            cleanTitles: false,
+            flatDateSort: false,
+            dateSortOrder: 'desc',
+            schemaSortOrder: 'alpha'
+        };
+
+        await runner.startJob(config, null);
+
+        expect(OrganizerService).toHaveBeenCalledWith(
+            expect.any(String),
+            [],
+            expect.any(Function),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+            false,
+            expect.anything(),
+            expect.anything(),
+            true
+        );
+        expect(runner.getState().logs.map(log => log.message)).toContain('Category Source: AI inferred from bookmarks');
+    });
+
+    it('keeps inferred taxonomy and detail assignments in memory without nesting them in Chrome storage payloads', async () => {
+        const originalImplementation = OrganizerService.getMockImplementation();
+        const generatedResults = [{
+            title: 'Example',
+            url: 'https://example.com',
+            category: 'Generated Topic',
+            sub_category: 'Generated Detail',
+            detail_category: 'Generated Leaf'
+        }];
+        const generatedStats = {
+            categoriesCount: 1,
+            categoryBreakdown: { 'Generated Topic': 1 },
+            detailFoldersCount: 1,
+            detailedSubcategories: 1
+        };
+
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.start = vi.fn(async () => {
+                onProgress({ status: 'info', message: '  • Generated Topic (Generated Detail)' });
+                return generatedResults;
+            });
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = generatedStats;
+        });
+
+        try {
+            await runner.startJob({
+                apiKey: 'AIzaSyFakeKey',
+                categories: ['Dormant Manual Category'],
+                inferCategories: true,
+                flatDateSort: false
+            });
+
+            expect(runner.getResults()).toEqual(generatedResults);
+            expect(runner.getState().stats.categoryBreakdown).toEqual({ 'Generated Topic': 1 });
+            expect(runner.getState().stats.detailFoldersCount).toBe(1);
+            expect(runner.getResults()[0].detail_category).toBe('Generated Leaf');
+            expect(runner.getState().logs.some(log => log.message.includes('Generated Detail'))).toBe(true);
+
+            const persistedPayloads = [
+                ...globalThis.chrome.storage.local.set.mock.calls,
+                ...globalThis.chrome.storage.session.set.mock.calls
+            ].map(([payload]) => payload);
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic');
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail');
+            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf');
+        } finally {
+            OrganizerService.mockImplementation(originalImplementation);
+        }
     });
 
     it('keeps service worker alive during job and stops keep-alive on completion', async () => {
@@ -152,14 +256,18 @@ describe('BackgroundJobRunner', () => {
     });
 
     it('resets job state and removes session storage snapshot', () => {
+        const completedResults = [{ title: 'Completed', url: 'https://example.com/completed' }];
         runner.currentJob.status = 'complete';
         runner.currentJob.progress = 100;
+        runner.cachedResults = completedResults;
 
         runner.resetJob();
 
         expect(runner.getState().status).toBe('idle');
         expect(runner.getState().progress).toBe(0);
-        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState']);
+        expect(runner.getResults()).toBeNull();
+        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
+        expect(globalThis.chrome.storage.local.remove).toHaveBeenCalledWith(['organizedMeta', 'organizedData']);
     });
 
     it('handles unexpected organizer errors gracefully', async () => {
