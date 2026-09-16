@@ -88,6 +88,13 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
     })
 
+    it('explains that chosen categories are root folders and subfolders remain automatic', () => {
+        render(<Organizer />)
+
+        expect(screen.getByText(/Your chosen categories become the root-level folders/i)).toBeDefined()
+        expect(screen.getAllByText(/Subfolders are always generated automatically inside each root folder/i).length).toBeGreaterThan(0)
+    })
+
     it('renders the complete suggested category pool when manual editing is enabled', () => {
         localStorage.setItem('inferCategories', 'false')
         render(<Organizer />)

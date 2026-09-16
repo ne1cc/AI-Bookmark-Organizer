@@ -1778,6 +1778,11 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
                         </div>
 
+                    <div style={{ margin: '0.75rem 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.45' }}>
+                        <span style={{ display: 'block' }}>Your chosen categories become the root-level folders.</span>
+                        <span style={{ display: 'block' }}>Subfolders are always generated automatically inside each root folder.</span>
+                    </div>
+
                     {/* Custom Category Input */}
                     <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.3rem', marginBottom: '1rem' }}>
                         <input
@@ -1843,7 +1848,7 @@ export default function Organizer({ theme = 'light' }) {
                             borderRadius: '8px',
                             border: '1px dashed var(--border)'
                         }}>
-                            No manual categories selected. The app will infer categories from your bookmark file. Turn off Infer categories to choose from the suggestions below.
+                            No manual categories selected. The app will infer root-level folders from your bookmark file. Turn off Infer categories to choose the root folders below. Subfolders are always generated automatically inside each root folder.
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
