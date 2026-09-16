@@ -1,17 +1,9 @@
 // Shared identity for schema validation, classification and reconciliation.
 // Independent batches vary casing, whitespace and trailing singular/plural s.
-import { shouldCreateSubFolder } from './subcategoryPredicates';
+import { SINK_NAMES, shouldCreateSubFolder } from './subcategoryPredicates';
 
-export const DETAIL_SINK_NAMES = new Set([
-    'general',
-    'other',
-    'none',
-    'uncategorized',
-    'misc',
-    'miscellaneous',
-    'various',
-    ''
-]);
+// Preserve the detail identity export while keeping one canonical sink set.
+export const DETAIL_SINK_NAMES = SINK_NAMES;
 
 export function canonicalKey(name) {
     return name

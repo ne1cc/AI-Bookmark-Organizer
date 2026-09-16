@@ -3,6 +3,7 @@ import { OrganizerService } from './organizer'
 import { normalizeDetailClassification } from './ai'
 import * as bookmarksExport from './bookmarks_export'
 import { DETAIL_SINK_NAMES, shouldCreateDetailFolder } from './subcategoryIdentity'
+import { SINK_NAMES, shouldCreateSubFolder } from './subcategoryPredicates'
 import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 import fixture from './__fixtures__/finance-heavy-bookmarks.json'
 
@@ -17,6 +18,7 @@ const DOMINANT_CATEGORY = 'Finance & Crypto'
 
 describe('detail sink identity', () => {
     it('exports the canonical sink names used by detail predicates', () => {
+        expect(DETAIL_SINK_NAMES).toBe(SINK_NAMES)
         expect(DETAIL_SINK_NAMES).toEqual(new Set([
             'general',
             'other',
@@ -27,6 +29,13 @@ describe('detail sink identity', () => {
             'various',
             ''
         ]))
+    })
+
+    it('rejects every canonical sink name for both subcategory and detail folders', () => {
+        for (const sinkName of DETAIL_SINK_NAMES) {
+            expect(shouldCreateSubFolder('Technology', sinkName)).toBe(false)
+            expect(shouldCreateDetailFolder('Technology', 'Frontend', sinkName)).toBe(false)
+        }
     })
 })
 

@@ -1,5 +1,6 @@
 import { subfolderBounds, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
-import { canonicalKey, DETAIL_SINK_NAMES, shouldCreateDetailFolder } from './subcategoryIdentity';
+import { SINK_NAMES } from './subcategoryPredicates';
+import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 export { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
@@ -19,7 +20,7 @@ const EXEMPT_CATEGORIES = new Set(['archive']);
 const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an', '&']);
 
 function isSink(name) {
-    return typeof name !== 'string' || DETAIL_SINK_NAMES.has(name.trim().toLowerCase());
+    return typeof name !== 'string' || SINK_NAMES.has(name.trim().toLowerCase());
 }
 
 function detailGroupKey(category, subCategory) {
@@ -29,7 +30,7 @@ function detailGroupKey(category, subCategory) {
 function isEligibleDetailParent(category, subCategory) {
     if (typeof category !== 'string' || typeof subCategory !== 'string') return false;
     if (!shouldCreateDetailFolder(category, subCategory, '__detail_candidate__')) return false;
-    if (DETAIL_SINK_NAMES.has(subCategory.trim().toLowerCase())) return false;
+    if (SINK_NAMES.has(subCategory.trim().toLowerCase())) return false;
     return !/[\\/]/.test(subCategory);
 }
 
