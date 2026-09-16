@@ -567,6 +567,54 @@ describe('OrganizerService detail enrichment integration', () => {
         expect(new Set(results.map(item => item.detail_category))).toEqual(new Set(['React', 'Vue']))
     })
 
+    it('keeps duplicate URLs scoped to their original parent group and bookmark id', async () => {
+        const groupedLinks = [
+            ...Array.from({ length: 6 }, (_, i) => ({
+                id: `tech-${i}`,
+                title: `Tech ${i}`,
+                url: i === 0 ? 'https://shared.test/bookmark' : `https://tech.test/${i}`
+            })),
+            ...Array.from({ length: 6 }, (_, i) => ({
+                id: `design-${i}`,
+                title: `Design ${i}`,
+                url: i === 0 ? 'https://shared.test/bookmark' : `https://design.test/${i}`
+            }))
+        ]
+        const groupedSchema = {
+            categories: [
+                { name: 'Tech', sub_categories: ['Frontend'] },
+                { name: 'Design', sub_categories: ['Systems'] }
+            ]
+        }
+
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(groupedSchema)
+        vi.spyOn(ai, 'classifyBatch').mockImplementation(async batch => batch.map(bookmark => ({
+            ...bookmark,
+            category: bookmark.id.startsWith('tech-') ? 'Tech' : 'Design',
+            sub_category: bookmark.id.startsWith('tech-') ? 'Frontend' : 'Systems'
+        })))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']],
+            ['design\u0000systems', ['Tokens', 'Components']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => records.map((bookmark, index) => ({
+            ...bookmark,
+            detail_category: bookmark.category === 'Tech'
+                ? (index < 3 ? 'React' : 'Vue')
+                : (index < 3 ? 'Tokens' : 'Components')
+        })))
+
+        const service = createOrganizerService('test-key', ['Tech', 'Design'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(groupedLinks)
+
+        expect(results.find(item => item.id === 'tech-0')).toMatchObject({
+            category: 'Tech', sub_category: 'Frontend', detail_category: 'React'
+        })
+        expect(results.find(item => item.id === 'design-0')).toMatchObject({
+            category: 'Design', sub_category: 'Systems', detail_category: 'Tokens'
+        })
+    })
+
     it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {
         const detailSchemas = vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map())
         const detailClassifier = vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue([])

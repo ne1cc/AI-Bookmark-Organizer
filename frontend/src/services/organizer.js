@@ -21,6 +21,20 @@ export async function checkUrlReachable(url, timeoutMs = 2500) {
     }
 }
 
+// Detail classification returns clones of the original bookmark records. Keep
+// assignments tied to that record and its reconciled parent pair so duplicate
+// URLs from different groups cannot overwrite one another.
+function detailAssignmentKey(item) {
+    const category = typeof item?.category === 'string' ? item.category.trim().toLowerCase() : '';
+    const subCategory = typeof item?.sub_category === 'string' ? item.sub_category.trim().toLowerCase() : '';
+    const stableId = [item?.id, item?.key]
+        .find(value => (typeof value === 'string' && value.trim()) || (typeof value === 'number' && Number.isFinite(value)));
+    const recordKey = stableId === undefined
+        ? `url:${typeof item?.url === 'string' ? item.url : ''}`
+        : `id:${String(stableId).trim()}`;
+    return `${category}\u0000${subCategory}\u0000${recordKey}`;
+}
+
 // Concurrently probes bookmark URLs in parallel chunks so verification completes in seconds.
 // Dead/unreachable links are segregated to Archive -> Broken Links to bypass AI classification.
 export async function filterReachableBookmarks(bookmarks, onProgress, isCancelled) {
@@ -1070,8 +1084,11 @@ export class OrganizerService {
                         this.onProgress({ status: 'warning', message: 'Process cancelled.' });
                         return null;
                     }
-                    const byUrl = new Map(detailed.map(item => [item.url, item.detail_category]));
-                    classifiedActive = classifiedActive.map(item => ({ ...item, detail_category: byUrl.has(item.url) ? byUrl.get(item.url) : null }));
+                    const detailAssignments = new Map(detailed.map(item => [detailAssignmentKey(item), item.detail_category]));
+                    classifiedActive = classifiedActive.map(item => ({
+                        ...item,
+                        detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
+                    }));
                     const detailResult = reconcileDetailCategories(classifiedActive, detailSchemas);
                     classifiedActive = detailResult.classified;
                     this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
