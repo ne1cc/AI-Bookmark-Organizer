@@ -1767,6 +1767,10 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
                         </div>
 
+                    <div style={{ margin: '0.75rem 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.45' }}>
+                        Your chosen categories become the top-level folders. AI will still infer relevant subcategories and deeper folder levels within each one.
+                    </div>
+
                     {/* Custom Category Input */}
                     <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
                         <input

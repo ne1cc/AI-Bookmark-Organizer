@@ -12,6 +12,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
   - Detailed (6 to 10 subfolders) for large, topic-rich collections.
 - Subfolder Hierarchy Diagrams: Visual diagrams for both light and dark themes that illustrate exactly how each subfolder compactness mode organizes your links.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
+- Category Scope: Your chosen categories become the top-level folders, while AI continues to infer relevant subcategories and deeper folder levels within each one.
 - Model Options: Choose the Gemini model that fits your needs:
   - Gemini 3.1 Flash Lite: Fast, low cost, and great for most collections (default).
   - Gemini 3.8 Flash: Balanced speed and categorization quality.
@@ -38,7 +39,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 
 1. Read: The extension reads your bookmarks (or an uploaded HTML bookmark file).
 2. Backup: In browser mode, it saves a backup HTML file to your Downloads folder first.
-3. Design: The AI reviews your collection and creates a clean folder layout.
+3. Design: The AI reviews your collection and creates a clean folder layout. Your chosen categories are used as the top-level folders; deeper subcategories and folder levels are inferred from your bookmarks.
 4. Sort: Links are placed into their best matching folders.
 5. Finish: In browser mode, bookmarks are placed into a new dated folder in your browser. In file mode, your organized bookmark file is ready to download.
 

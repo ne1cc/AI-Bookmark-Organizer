@@ -88,6 +88,13 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/Add custom category/i).disabled).toBe(true)
     })
 
+    it('explains that chosen categories are top-level while deeper folders remain AI-inferred', () => {
+        render(<Organizer />)
+
+        expect(screen.getByText(/Your chosen categories become the top-level folders/i)).toBeDefined()
+        expect(screen.getByText(/AI will still infer relevant subcategories and deeper folder levels within each one/i)).toBeDefined()
+    })
+
     it('renders the complete suggested category pool when manual editing is enabled', () => {
         localStorage.setItem('inferCategories', 'false')
         render(<Organizer />)
