@@ -1,8 +1,8 @@
 // Shared identity for schema validation, classification and reconciliation.
 // Independent batches vary casing, whitespace and trailing singular/plural s.
-import { shouldCreateSubFolder } from './bookmarks';
+import { shouldCreateSubFolder } from './subcategoryPredicates';
 
-const DETAIL_SINK_NAMES = new Set([
+export const DETAIL_SINK_NAMES = new Set([
     'general',
     'other',
     'none',

@@ -935,11 +935,23 @@ describe('In-process and completion date range display', () => {
             localStorage.setItem('apiKey', 'sk-or-test-new-run')
             const listeners = []
             const oldResults = [{ title: 'Old result', url: 'https://example.com/old', category: 'Old', sub_category: 'Old' }]
-            const meta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            const freshResults = [{ title: 'Fresh result', url: 'https://example.com/fresh', category: 'Fresh', sub_category: 'Fresh' }]
+            const oldMeta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            const freshMeta = { count: 1, savedAt: 1757890001000, stats: { categoriesCount: 1 } }
+            let resultsRequestCount = 0
             const mockPort = {
                 postMessage: vi.fn((message) => {
                     if (message.type === 'START_JOB') {
                         listeners.forEach(listener => listener({ type: 'JOB_ACK' }))
+                    }
+                    if (message.type === 'GET_RESULTS') {
+                        resultsRequestCount += 1
+                        const results = resultsRequestCount === 1 ? oldResults : freshResults
+                        const meta = resultsRequestCount === 1 ? oldMeta : freshMeta
+                        listeners.forEach(listener => listener({
+                            type: 'JOB_RESULTS',
+                            payload: { results, meta }
+                        }))
                     }
                 }),
                 onMessage: { addListener: vi.fn(listener => listeners.push(listener)), removeListener: vi.fn() },
@@ -962,13 +974,16 @@ describe('In-process and completion date range display', () => {
                 }))
                 listeners.forEach(listener => listener({
                     type: 'JOB_RESULTS',
-                    payload: { results: oldResults, meta }
+                    payload: { results: oldResults, meta: oldMeta }
                 }))
             })
             expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
 
             act(() => vi.advanceTimersByTime(10000))
-            fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                await Promise.resolve()
+            })
 
             act(() => {
                 listeners.forEach(listener => listener({
@@ -978,6 +993,12 @@ describe('In-process and completion date range display', () => {
             })
 
             expect(mockPort.postMessage.mock.calls.filter(([message]) => message.type === 'GET_RESULTS')).toHaveLength(2)
+            bookmarksExport.downloadBookmarks.mockClear()
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: /Download Organized Bookmarks/i }))
+                await Promise.resolve()
+            })
+            expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(freshResults)
             vi.useRealTimers()
         })
 

@@ -1,4 +1,7 @@
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
+import { shouldCreateSubFolder } from './subcategoryPredicates';
+
+export { shouldCreateSubFolder } from './subcategoryPredicates';
 
 function getBookmarksApi() {
     return (typeof chrome !== 'undefined' && chrome.bookmarks) || (typeof browser !== 'undefined' && browser.bookmarks);
@@ -206,13 +209,6 @@ let folderCache = {};
 
 export function clearFolderCache() {
     folderCache = {};
-}
-
-export function shouldCreateSubFolder(category, subCategory) {
-    if (!subCategory) return false;
-    const sub = subCategory.trim().toLowerCase();
-    const cat = category.trim().toLowerCase();
-    return sub !== '' && sub !== 'general' && sub !== 'none' && sub !== 'uncategorized' && sub !== cat;
 }
 
 export async function findOrCreateFolder(parentId, title, index) {

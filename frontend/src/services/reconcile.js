@@ -1,5 +1,5 @@
 import { subfolderBounds, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
-import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
+import { canonicalKey, DETAIL_SINK_NAMES, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 export { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
@@ -8,10 +8,8 @@ export { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 // both write paths.
 const SINK_SUBCATEGORY = 'General';
 
-// Names that already mean "no real subcategory". They are never merged, folded
-// or capped — they are the destination, not a candidate.
-const SINK_NAMES = new Set(['general', 'other', 'misc', 'miscellaneous', 'uncategorized', 'none', 'various', '']);
-
+// The shared detail sink names also identify subcategories that are never
+// merged, folded or capped — they are the destination, not a candidate.
 // Categories whose contents are bookkeeping rather than topics. Folding a
 // 2-item "Broken Links" folder into "General" would lose the distinction that
 // makes it useful.
@@ -21,7 +19,7 @@ const EXEMPT_CATEGORIES = new Set(['archive']);
 const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an', '&']);
 
 function isSink(name) {
-    return typeof name !== 'string' || SINK_NAMES.has(name.trim().toLowerCase());
+    return typeof name !== 'string' || DETAIL_SINK_NAMES.has(name.trim().toLowerCase());
 }
 
 function detailGroupKey(category, subCategory) {
@@ -31,7 +29,7 @@ function detailGroupKey(category, subCategory) {
 function isEligibleDetailParent(category, subCategory) {
     if (typeof category !== 'string' || typeof subCategory !== 'string') return false;
     if (!shouldCreateDetailFolder(category, subCategory, '__detail_candidate__')) return false;
-    if (SINK_NAMES.has(subCategory.trim().toLowerCase())) return false;
+    if (DETAIL_SINK_NAMES.has(subCategory.trim().toLowerCase())) return false;
     return !/[\\/]/.test(subCategory);
 }
 

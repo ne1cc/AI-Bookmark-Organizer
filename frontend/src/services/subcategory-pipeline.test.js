@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { OrganizerService } from './organizer'
 import { normalizeDetailClassification } from './ai'
 import * as bookmarksExport from './bookmarks_export'
-import { shouldCreateDetailFolder } from './subcategoryIdentity'
+import { DETAIL_SINK_NAMES, shouldCreateDetailFolder } from './subcategoryIdentity'
 import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 import fixture from './__fixtures__/finance-heavy-bookmarks.json'
 
@@ -14,6 +14,21 @@ const bookmarks = fixture.map(({ title, url, dateAdded }) => ({ title, url, date
 const expectedByUrl = new Map(fixture.map(b => [b.url, b]))
 
 const DOMINANT_CATEGORY = 'Finance & Crypto'
+
+describe('detail sink identity', () => {
+    it('exports the canonical sink names used by detail predicates', () => {
+        expect(DETAIL_SINK_NAMES).toEqual(new Set([
+            'general',
+            'other',
+            'none',
+            'uncategorized',
+            'misc',
+            'miscellaneous',
+            'various',
+            ''
+        ]))
+    })
+})
 
 // The structure a healthy model would return for this fixture.
 const healthySchema = {
