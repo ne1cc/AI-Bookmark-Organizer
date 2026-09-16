@@ -1,4 +1,4 @@
-import { subfolderBounds } from './ai';
+import { subfolderBounds, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
 import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
 export { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
@@ -20,15 +20,12 @@ const EXEMPT_CATEGORIES = new Set(['archive']);
 // Tokens too common to signal that two folder names are related.
 const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an', '&']);
 
-const DETAIL_MIN_BOOKMARKS = 6;
-const DETAIL_MIN_FOLDER_SIZE = 2;
-
 function isSink(name) {
     return typeof name !== 'string' || SINK_NAMES.has(name.trim().toLowerCase());
 }
 
 function detailGroupKey(category, subCategory) {
-    return `${category.trim().toLowerCase()}\u0000${subCategory.trim().toLowerCase()}`;
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
 }
 
 function isEligibleDetailParent(category, subCategory) {
@@ -92,7 +89,11 @@ function normalizeDetailSchemas(detailSchemas) {
     const normalized = new Map();
 
     for (const [rawKey, schema] of schemaEntries(detailSchemas)) {
-        const key = typeof rawKey === 'string' ? rawKey.trim().toLowerCase() : '';
+        const key = typeof rawKey === 'string'
+            ? rawKey.includes('\u0000')
+                ? detailGroupKey(...rawKey.split('\u0000', 2))
+                : canonicalKey(rawKey)
+            : '';
         if (!key) continue;
         const approved = new Map();
         for (const rawName of schemaDetailNames(schema)) {

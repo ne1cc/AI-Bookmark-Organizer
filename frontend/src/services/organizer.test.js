@@ -5,6 +5,7 @@ import { classifyBatch, generateSchema, withRetry, geminiModelId, isNetworkError
 import * as bookmarksExport from './bookmarks_export'
 import * as bookmarksService from './bookmarks'
 import { DEFAULT_CATEGORIES, SUGGESTED_ADDABLE_CATEGORIES, SCHEMA_SORT_OPTIONS } from '../components/Organizer'
+import { groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile'
 
 class FakeBookmarkStore {
     constructor() {
@@ -546,6 +547,32 @@ describe('OrganizerService detail enrichment integration', () => {
 
     afterEach(() => vi.restoreAllMocks())
 
+    it('groups spacing and canonical parent variants into one detail group and schema lookup', () => {
+        const classifiedVariants = Array.from({ length: 12 }, (_, index) => ({
+            title: `Variant ${index}`,
+            url: `https://detail.test/variant/${index}`,
+            category: 'Tech',
+            sub_category: index < 6 ? ' Web   Development ' : 'Web Developments',
+            detail_category: index % 2 === 0 ? 'React' : 'Vue'
+        }))
+
+        const groups = groupEligibleDetailCandidates(classifiedVariants)
+        expect(groups.size).toBe(1)
+        expect([...groups.values()][0]).toHaveLength(12)
+
+        const result = reconcileDetailCategories(classifiedVariants, new Map([
+            ['tech\u0000web development', ['React', 'Vue']]
+        ]))
+
+        expect(result.summary).toEqual({
+            detailFoldersKept: 2,
+            detailedSubcategories: 1,
+            groupsKeptAtTwoLevels: 0
+        })
+        expect(result.classified.filter(item => item.detail_category === 'React')).toHaveLength(6)
+        expect(result.classified.filter(item => item.detail_category === 'Vue')).toHaveLength(6)
+    })
+
     it('assigns detail folders through the real inferred OrganizerService run', async () => {
         vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
@@ -656,6 +683,73 @@ describe('OrganizerService detail enrichment integration', () => {
         expect(results.filter(item => item.detail_category === 'React')).toHaveLength(60)
         expect(results.filter(item => item.detail_category === 'Vue')).toHaveLength(60)
         expect(results.stats.detailFoldersCount).toBe(2)
+    })
+
+    it('summarizes detail progress and keeps valid siblings visible after a partial classification failure', async () => {
+        const multiGroupLinks = Array.from({ length: 12 }, (_, index) => ({
+            title: `Multi group ${index}`,
+            url: `https://multi-detail.test/${index}`
+        }))
+        const multiGroupSchema = {
+            categories: [{ name: 'Tech', sub_categories: ['Frontend', 'Backend'] }]
+        }
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue(multiGroupSchema)
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(multiGroupLinks.map((bookmark, index) => ({
+            ...bookmark,
+            category: 'Tech',
+            sub_category: index < 6 ? 'Frontend' : 'Backend'
+        })))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']],
+            ['tech\u0000backend', ['APIs', 'Servers']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (records) => {
+            if (records[0].sub_category === 'Backend') throw new Error('detail classifier unavailable')
+            return records.map((bookmark, index) => ({
+                ...bookmark,
+                detail_category: index < 3 ? 'React' : 'Vue'
+            }))
+        })
+        const logs = []
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+
+        const results = await service.start(multiGroupLinks)
+
+        expect(results.filter(item => item.detail_category === 'React')).toHaveLength(3)
+        expect(results.filter(item => item.detail_category === 'Vue')).toHaveLength(3)
+        expect(results.filter(item => item.sub_category === 'Backend').every(item => item.detail_category === null)).toBe(true)
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(results.stats.detailedSubcategories).toBe(1)
+        expect(logs.some(event => event.message === 'Finding useful third-level groups for 2 eligible parent groups...')).toBe(true)
+        expect(logs.some(event => event.message === 'Third-level enrichment summary: 2 eligible groups, 2 detail folders created, 1 detailed subcategory, 1 group kept at two levels.')).toBe(true)
+        expect(logs.some(event => event.status === 'warning' && event.message.includes('tech/backend') && event.message.includes('detail classifier unavailable'))).toBe(true)
+    })
+
+    it('reports detail chunk retries with cancellation-aware callbacks', async () => {
+        const retryEvents = []
+        const cancellationChecks = []
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']]
+        ]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (records, _apiKey, _names, _model, isCancelled, onRetry) => {
+            cancellationChecks.push(isCancelled)
+            onRetry({ delayMs: 8000, isRateLimit: true })
+            retryEvents.push(true)
+            return records.map((bookmark, index) => ({
+                ...bookmark,
+                detail_category: index < 3 ? 'React' : 'Vue'
+            }))
+        })
+        const logs = []
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+
+        const results = await service.start(links)
+
+        expect(results.stats.detailFoldersCount).toBe(2)
+        expect(retryEvents).toHaveLength(1)
+        expect(cancellationChecks).toHaveLength(1)
+        expect(cancellationChecks[0]()).toBe(false)
+        expect(logs.some(event => event.message === 'Rate limit reached (429). Pausing for 8s before retrying detail chunk tech/frontend #1...')).toBe(true)
     })
 
     it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {

@@ -1,7 +1,7 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
 import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
-import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile';
+import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
@@ -43,6 +43,13 @@ function retainDetailRunOrdinals(classified, sourceRecords) {
         const ordinal = sourceRecords[index]?._detailRunOrdinal;
         return Number.isInteger(ordinal) ? { ...item, _detailRunOrdinal: ordinal } : item;
     });
+}
+
+function canonicalDetailGroupKey(rawKey) {
+    if (typeof rawKey !== 'string') return '';
+    const [category, subCategory] = rawKey.split('\u0000', 2);
+    if (subCategory === undefined) return '';
+    return `${canonicalKey(category)}\u0000${canonicalKey(subCategory)}`;
 }
 
 // Concurrently probes bookmark URLs in parallel chunks so verification completes in seconds.
@@ -1078,9 +1085,15 @@ export class OrganizerService {
                 });
             }
 
-            this.onProgress({ status: 'info', message: 'Finding useful third-level groups...' });
             const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
-            if (eligibleGroups.size > 0) {
+            const eligibleGroupCount = eligibleGroups.size;
+            this.onProgress({
+                status: 'info',
+                message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`
+            });
+            let detailSchemaFailures = 0;
+            let detailClassificationFailures = 0;
+            if (eligibleGroupCount > 0) {
                 try {
                     const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
                         () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
@@ -1089,21 +1102,42 @@ export class OrganizerService {
                     if (detailSchemas.size === 0) {
                         this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
                     }
+                    const canonicalDetailSchemas = new Map(
+                        [...detailSchemas.entries()]
+                            .map(([key, names]) => [canonicalDetailGroupKey(key), names])
+                            .filter(([key]) => key)
+                    );
+                    detailSchemaFailures = [...eligibleGroups.keys()].filter(key => !canonicalDetailSchemas.has(key)).length;
+                    if (detailSchemaFailures > 0 && canonicalDetailSchemas.size > 0) {
+                        this.onProgress({
+                            status: 'warning',
+                            message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
+                        });
+                    }
                     const detailed = [];
-                    for (const [key, names] of detailSchemas) {
+                    for (const [key, names] of canonicalDetailSchemas) {
                         if (this.isCancelled) break;
                         const records = eligibleGroups.get(key) || [];
                         try {
                             for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
                                 const chunk = records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE);
+                                const detailChunkLabel = `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`;
                                 detailed.push(...retainDetailRunOrdinals(
                                     await classifyDetailBatch(chunk, this.apiKey, names, this.model,
-                                        () => this.isCancelled, null),
+                                        () => this.isCancelled,
+                                        ({ delayMs, isRateLimit }) => this.onProgress({
+                                            status: 'warning',
+                                            message: isRateLimit
+                                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${detailChunkLabel}...`
+                                                : `Network issue on detail chunk ${detailChunkLabel}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                        })
+                                    ),
                                     chunk
                                 ));
                             }
                         } catch (err) {
                             if (this.isCancelled || err?.isCancelled) throw err;
+                            detailClassificationFailures++;
                             this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
                         }
                     }
@@ -1116,14 +1150,27 @@ export class OrganizerService {
                         ...item,
                         detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
                     }));
-                    const detailResult = reconcileDetailCategories(classifiedActive, detailSchemas);
+                    const detailResult = reconcileDetailCategories(classifiedActive, canonicalDetailSchemas);
                     classifiedActive = detailResult.classified;
                     this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
                     this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
                 } catch (err) {
                     if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
+                    detailSchemaFailures = eligibleGroupCount;
                     this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
                 }
+            }
+
+            const detailGroupsKeptAtTwoLevels = eligibleGroupCount - (this.stats.detailedSubcategories || 0);
+            this.onProgress({
+                status: 'info',
+                message: `Third-level enrichment summary: ${eligibleGroupCount} eligible group${eligibleGroupCount === 1 ? '' : 's'}, ${this.stats.detailFoldersCount || 0} detail folder${this.stats.detailFoldersCount === 1 ? '' : 's'} created, ${this.stats.detailedSubcategories || 0} detailed subcategor${this.stats.detailedSubcategories === 1 ? 'y' : 'ies'}, ${detailGroupsKeptAtTwoLevels} group${detailGroupsKeptAtTwoLevels === 1 ? '' : 's'} kept at two levels.`
+            });
+            if (detailSchemaFailures > 0 || detailClassificationFailures > 0) {
+                this.onProgress({
+                    status: 'warning',
+                    message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
+                });
             }
 
             // The ordinal is run-local reconciliation metadata, never part of

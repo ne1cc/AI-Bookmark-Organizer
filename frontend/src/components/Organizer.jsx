@@ -896,6 +896,8 @@ export default function Organizer({ theme = 'light' }) {
         setIsCancelling(false);
         cancelRequestedRef.current = false;
         resultsRequestPendingRef.current = false
+        organizedResultsRef.current = null;
+        setLastOrganized(null);
         let reportedErrorMessage = '';
 
         try {

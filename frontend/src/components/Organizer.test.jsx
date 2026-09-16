@@ -930,6 +930,57 @@ describe('In-process and completion date range display', () => {
             })
         })
 
+        it('replaces the previous in-memory result before a new delegated run can complete', async () => {
+            vi.useFakeTimers()
+            localStorage.setItem('apiKey', 'sk-or-test-new-run')
+            const listeners = []
+            const oldResults = [{ title: 'Old result', url: 'https://example.com/old', category: 'Old', sub_category: 'Old' }]
+            const meta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            const mockPort = {
+                postMessage: vi.fn((message) => {
+                    if (message.type === 'START_JOB') {
+                        listeners.forEach(listener => listener({ type: 'JOB_ACK' }))
+                    }
+                }),
+                onMessage: { addListener: vi.fn(listener => listeners.push(listener)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+            act(() => {
+                listeners.forEach(listener => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'old-run', status: 'complete', progress: 100, logs: [] }
+                }))
+                listeners.forEach(listener => listener({
+                    type: 'JOB_RESULTS',
+                    payload: { results: oldResults, meta }
+                }))
+            })
+            expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
+
+            act(() => vi.advanceTimersByTime(10000))
+            fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+
+            act(() => {
+                listeners.forEach(listener => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'fresh-run', status: 'complete', progress: 100, logs: [] }
+                }))
+            })
+
+            expect(mockPort.postMessage.mock.calls.filter(([message]) => message.type === 'GET_RESULTS')).toHaveLength(2)
+            vi.useRealTimers()
+        })
+
         it('removes stale download state when transient worker results are unavailable', async () => {
             const listeners = []
             const staleResults = [{
