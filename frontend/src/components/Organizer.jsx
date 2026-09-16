@@ -1712,7 +1712,10 @@ export default function Organizer({ theme = 'light' }) {
                                 <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', fontWeight: 600 }}>Infer categories</div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
                                     {inferCategories
-                                        ? 'AI is choosing the root folders for this run. Turn off Infer categories to use your chosen categories instead.'
+                                        ? <>
+                                            <span style={{ display: 'block' }}>AI is choosing the root folders for this run.</span>
+                                            <span style={{ display: 'block' }}>Turn off Infer categories to use your chosen categories instead.</span>
+                                        </>
                                         : 'Chosen categories are the root folders when Infer categories is off.'}
                                 </div>
                             </div>
