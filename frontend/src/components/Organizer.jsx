@@ -249,7 +249,7 @@ export default function Organizer({ theme = 'light' }) {
     const resultsRequestPendingRef = useRef(false)
     const cancelRequestedRef = useRef(false)
     const completionTimerRef = useRef(null)
-    const resetAppRef = useRef(null)
+    const returnToMenuRef = useRef(null)
     const statusRef = useRef('idle')
     useEffect(() => { statusRef.current = status }, [status])
 
@@ -265,12 +265,13 @@ export default function Organizer({ theme = 'light' }) {
     // Organization mode is transient: after a run completes, leave the
     // completion summary up briefly, then hand control back to the main
     // menu (the last-run banner keeps the results downloadable there).
-    // resetApp is reached through a ref because it is defined below.
+    // This is deliberately separate from an explicit reset, which clears the
+    // worker's completed result cache.
     const scheduleReturnToMenu = useCallback(() => {
         if (completionTimerRef.current) clearTimeout(completionTimerRef.current)
         completionTimerRef.current = setTimeout(() => {
             completionTimerRef.current = null
-            if (resetAppRef.current) resetAppRef.current()
+            if (returnToMenuRef.current) returnToMenuRef.current()
         }, RETURN_TO_MENU_DELAY_MS)
     }, [])
 
@@ -839,20 +840,11 @@ export default function Organizer({ theme = 'light' }) {
         addLog('Cancellation requested — halting operations...');
     }, [addLog]);
 
-    const resetApp = useCallback(() => {
-        cancelRequestedRef.current = true;
+    const returnToMenu = useCallback(() => {
         resultsRequestPendingRef.current = false
         if (completionTimerRef.current) {
             clearTimeout(completionTimerRef.current);
             completionTimerRef.current = null;
-        }
-        if (portRef.current) {
-            try {
-                portRef.current.postMessage({ type: 'RESET_JOB' });
-            } catch {}
-        }
-        if (organizerRef.current) {
-            organizerRef.current.cancel();
         }
         setIsCancelling(false);
         setStatus('idle')
@@ -866,7 +858,24 @@ export default function Organizer({ theme = 'light' }) {
         if (fileInputRef.current) fileInputRef.current.value = '';
     }, [lastOrganized])
 
-    useEffect(() => { resetAppRef.current = resetApp }, [resetApp])
+    const resetApp = useCallback(() => {
+        cancelRequestedRef.current = true;
+        resultsRequestPendingRef.current = false
+        if (portRef.current) {
+            try {
+                portRef.current.postMessage({ type: 'RESET_JOB' });
+            } catch {}
+        }
+        if (organizerRef.current) {
+            organizerRef.current.cancel();
+        }
+        returnToMenu()
+        organizedResultsRef.current = null;
+        setLastOrganized(null)
+        setActiveDateSpan(null)
+    }, [returnToMenu])
+
+    useEffect(() => { returnToMenuRef.current = returnToMenu }, [returnToMenu])
 
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;

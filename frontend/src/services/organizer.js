@@ -1,5 +1,5 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
@@ -23,16 +23,26 @@ export async function checkUrlReachable(url, timeoutMs = 2500) {
 
 // Detail classification returns clones of the original bookmark records. Keep
 // assignments tied to that record and its reconciled parent pair so duplicate
-// URLs from different groups cannot overwrite one another.
+// URLs cannot overwrite one another. File records carry a run-scoped ordinal
+// because they do not reliably have a browser bookmark id.
 function detailAssignmentKey(item) {
     const category = typeof item?.category === 'string' ? item.category.trim().toLowerCase() : '';
     const subCategory = typeof item?.sub_category === 'string' ? item.sub_category.trim().toLowerCase() : '';
     const stableId = [item?.id, item?.key]
         .find(value => (typeof value === 'string' && value.trim()) || (typeof value === 'number' && Number.isFinite(value)));
+    const ordinal = Number.isInteger(item?._detailRunOrdinal) ? item._detailRunOrdinal : null;
     const recordKey = stableId === undefined
-        ? `url:${typeof item?.url === 'string' ? item.url : ''}`
+        ? `ordinal:${ordinal ?? `url:${typeof item?.url === 'string' ? item.url : ''}`}`
         : `id:${String(stableId).trim()}`;
     return `${category}\u0000${subCategory}\u0000${recordKey}`;
+}
+
+function retainDetailRunOrdinals(classified, sourceRecords) {
+    return classified.map((item, index) => {
+        if (Number.isInteger(item?._detailRunOrdinal)) return item;
+        const ordinal = sourceRecords[index]?._detailRunOrdinal;
+        return Number.isInteger(ordinal) ? { ...item, _detailRunOrdinal: ordinal } : item;
+    });
 }
 
 // Concurrently probes bookmark URLs in parallel chunks so verification completes in seconds.
@@ -553,6 +563,14 @@ export class OrganizerService {
             traverse(tree);
         }
 
+        // File exports have no Chrome node id. Preserve their input position
+        // across classification/reconciliation so duplicate URLs remain
+        // distinguishable during this run. Browser records retain the same
+        // ordinal defensively but still prefer their native id above.
+        if (!this.flatDateSort) {
+            allLinks = allLinks.map((bookmark, ordinal) => ({ ...bookmark, _detailRunOrdinal: ordinal }));
+        }
+
         const initialDateSpan = calculateDateSpan(allLinks);
         this.dateSpan = initialDateSpan;
         this.stats.dateSpan = initialDateSpan;
@@ -989,7 +1007,7 @@ export class OrganizerService {
                     if (this.isCancelled) return;
 
                     // Accumulate results
-                    results[index] = classified;
+                    results[index] = retainDetailRunOrdinals(classified, batchData);
                     processed += batchData.length;
                     this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
 
@@ -1022,7 +1040,10 @@ export class OrganizerService {
                 if (this.isCancelled) break;
 
                 this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...` });
-                results[index] = await this.classifyWithSubdivision(batchData, schema, label);
+                results[index] = retainDetailRunOrdinals(
+                    await this.classifyWithSubdivision(batchData, schema, label),
+                    batchData
+                );
                 if (this.isCancelled) break;
                 processed += batchData.length;
                 this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
@@ -1073,8 +1094,14 @@ export class OrganizerService {
                         if (this.isCancelled) break;
                         const records = eligibleGroups.get(key) || [];
                         try {
-                            detailed.push(...await classifyDetailBatch(records, this.apiKey, names, this.model,
-                                () => this.isCancelled, null));
+                            for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
+                                const chunk = records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE);
+                                detailed.push(...retainDetailRunOrdinals(
+                                    await classifyDetailBatch(chunk, this.apiKey, names, this.model,
+                                        () => this.isCancelled, null),
+                                    chunk
+                                ));
+                            }
                         } catch (err) {
                             if (this.isCancelled || err?.isCancelled) throw err;
                             this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
@@ -1098,6 +1125,10 @@ export class OrganizerService {
                     this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
                 }
             }
+
+            // The ordinal is run-local reconciliation metadata, never part of
+            // the bookmark result or downloaded file.
+            classifiedActive = classifiedActive.map(({ _detailRunOrdinal, ...item }) => item);
         }
 
         // Combine classified reachable links with archived unreachable links

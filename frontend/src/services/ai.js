@@ -509,6 +509,7 @@ export const SCHEMA_MAX_TOKENS = 16000;
 
 export const DETAIL_SCHEMA_GROUP_LIMIT = 12;
 export const DETAIL_SCHEMA_SAMPLE_LIMIT = 60;
+export const DETAIL_CLASSIFICATION_BATCH_SIZE = 50;
 export const DETAIL_MIN_BOOKMARKS = 6;
 export const DETAIL_MIN_FOLDER_SIZE = 2;
 export const DETAIL_MAX_FOLDERS = 4;

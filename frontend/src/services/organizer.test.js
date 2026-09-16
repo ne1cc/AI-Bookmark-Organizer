@@ -615,6 +615,49 @@ describe('OrganizerService detail enrichment integration', () => {
         })
     })
 
+    it('keeps same-parent ID-less duplicate URLs in their distinct detail folders', async () => {
+        const duplicateLinks = Array.from({ length: 6 }, (_, index) => ({
+            title: index === 0 ? 'React duplicate' : index === 3 ? 'Vue duplicate' : `Link ${index}`,
+            url: index === 0 || index === 3 ? 'https://shared.test/bookmark' : `https://detail.test/${index}`
+        }))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => records.map((bookmark, index) => ({
+            ...bookmark,
+            detail_category: index < 3 ? 'React' : 'Vue'
+        })))
+
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(duplicateLinks)
+
+        expect(results.find(item => item.title === 'React duplicate')?.detail_category).toBe('React')
+        expect(results.find(item => item.title === 'Vue duplicate')?.detail_category).toBe('Vue')
+    })
+
+    it('classifies a large detail parent in bounded chunks before reconciling all assignments', async () => {
+        const largeGroup = Array.from({ length: 120 }, (_, index) => ({
+            title: `Large detail ${index}`,
+            url: `https://large-detail.test/${index}`
+        }))
+        const detailCalls = []
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => {
+            detailCalls.push(records)
+            return records.map(bookmark => ({
+                ...bookmark,
+                detail_category: Number(bookmark.title.replace('Large detail ', '')) % 2 === 0 ? 'React' : 'Vue'
+            }))
+        })
+
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(largeGroup)
+
+        expect(detailCalls.map(records => records.length)).toEqual([50, 50, 20])
+        expect(detailCalls.every(records => records.every(record => record.category === 'Tech' && record.sub_category === 'Frontend'))).toBe(true)
+        expect(results.filter(item => item.detail_category === 'React')).toHaveLength(60)
+        expect(results.filter(item => item.detail_category === 'Vue')).toHaveLength(60)
+        expect(results.stats.detailFoldersCount).toBe(2)
+    })
+
     it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {
         const detailSchemas = vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map())
         const detailClassifier = vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue([])

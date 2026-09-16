@@ -869,6 +869,67 @@ describe('In-process and completion date range display', () => {
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf')
         })
 
+        it('keeps completed worker results available after the automatic menu return and a reconnect', async () => {
+            vi.useFakeTimers()
+            const listeners = []
+            const generatedResults = [{
+                title: 'Generated result',
+                url: 'https://example.com/generated',
+                category: 'Generated Topic',
+                sub_category: 'Generated Detail'
+            }]
+            const meta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 } }
+            let resultsAvailable = true
+            const mockPort = {
+                postMessage: vi.fn((message) => {
+                    if (message.type === 'RESET_JOB') resultsAvailable = false
+                    if (message.type === 'GET_RESULTS') {
+                        listeners.forEach(listener => listener(resultsAvailable
+                            ? { type: 'JOB_RESULTS', payload: { results: generatedResults, meta } }
+                            : { type: 'JOB_RESULTS_UNAVAILABLE', payload: {} }))
+                    }
+                }),
+                onMessage: { addListener: vi.fn(listener => listeners.push(listener)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            const firstPanel = render(<Organizer />)
+            act(() => {
+                listeners.forEach(listener => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_complete', status: 'complete', progress: 100, logs: [] }
+                }))
+            })
+            expect(screen.getByRole('button', { name: /Download Organized Bookmarks/i })).toBeDefined()
+
+            act(() => vi.advanceTimersByTime(10000))
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+            expect(mockPort.postMessage).not.toHaveBeenCalledWith({ type: 'RESET_JOB' })
+            vi.useRealTimers()
+
+            firstPanel.unmount()
+            render(<Organizer />)
+            act(() => {
+                listeners.forEach(listener => listener({
+                    type: 'STATUS_UPDATE',
+                    payload: { id: 'job_complete', status: 'complete', progress: 100, logs: [] }
+                }))
+            })
+            const downloadButton = await screen.findByRole('button', { name: /Download Organized Bookmarks/i })
+            fireEvent.click(downloadButton)
+            await waitFor(() => {
+                expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(generatedResults)
+            })
+        })
+
         it('removes stale download state when transient worker results are unavailable', async () => {
             const listeners = []
             const staleResults = [{

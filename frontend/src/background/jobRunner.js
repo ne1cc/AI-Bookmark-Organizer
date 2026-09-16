@@ -341,7 +341,14 @@ export class BackgroundJobRunner {
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.remove(['activeJobState']);
+                chrome.storage.session.remove(['activeJobState', 'organizedData']);
+            } catch {
+                // Ignore removal error
+            }
+        }
+        if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+            try {
+                chrome.storage.local.remove(['organizedMeta', 'organizedData']);
             } catch {
                 // Ignore removal error
             }

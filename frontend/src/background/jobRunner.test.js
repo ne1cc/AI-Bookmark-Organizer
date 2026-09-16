@@ -256,14 +256,18 @@ describe('BackgroundJobRunner', () => {
     });
 
     it('resets job state and removes session storage snapshot', () => {
+        const completedResults = [{ title: 'Completed', url: 'https://example.com/completed' }];
         runner.currentJob.status = 'complete';
         runner.currentJob.progress = 100;
+        runner.cachedResults = completedResults;
 
         runner.resetJob();
 
         expect(runner.getState().status).toBe('idle');
         expect(runner.getState().progress).toBe(0);
-        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState']);
+        expect(runner.getResults()).toBeNull();
+        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
+        expect(globalThis.chrome.storage.local.remove).toHaveBeenCalledWith(['organizedMeta', 'organizedData']);
     });
 
     it('handles unexpected organizer errors gracefully', async () => {
