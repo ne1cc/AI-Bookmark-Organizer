@@ -57,6 +57,9 @@ npm run lint
   - Choose an intra-folder sorting option (Alphabetical A–Z, Date Added Newest/Oldest First, Website / Domain A–Z, Reverse Alphabetical).
 - **Subfolder Hierarchy Settings**:
   - Cycle through **Compact**, **Balanced**, and **Detailed** subfolder depth options. Verify that the illustrative diagram updates to match the selection and theme.
+- **Adaptive Detail Folders**:
+  - Test both AI-inferred categories and manually selected categories in Browser Mode and File Mode. For a non-General category/subcategory with at least six bookmarks that naturally separates into two or more topics, verify that each retained third-level detail folder contains at least two bookmarks.
+  - For a group with fewer than six bookmarks, a sparse split, or an unavailable detail-inference response, verify that the bookmarks remain directly under their category/subcategory (the two-level fallback) and no empty or one-bookmark detail folder is created.
 - **Organization Modes**:
   - **Browser Mode**: Without uploading a file, click **Organize My Bookmarks**. Verify that it scans your browser bookmarks, shows real-time batch progression in the terminal, and creates an `AI Organized Bookmarks-[Date]` folder under *Other Bookmarks*.
   - **File Mode**: Drag and drop a bookmarks HTML file (or browse to select one), and click **Organize File & Download**. Verify that an organized bookmarks file download is initiated with all links preserved.
