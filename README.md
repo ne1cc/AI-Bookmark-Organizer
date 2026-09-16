@@ -13,6 +13,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 - Adaptive Detail Folders: In either AI-inferred or manually selected category mode, a non-General category/subcategory with at least six bookmarks may be split into a third level. The split is retained only when at least two meaningful detail folders each contain two or more bookmarks; otherwise, or if detail inference cannot complete, bookmarks remain in the normal two-level category/subcategory layout. The same hierarchy is used for Browser Mode and File Mode.
 - Subfolder Hierarchy Diagrams: Visual diagrams for both light and dark themes that illustrate exactly how each subfolder compactness mode organizes your links.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.
+- Category Scope: Your chosen categories become the root-level folders. Subfolders are always generated automatically inside each root folder from your bookmarks.
 - Model Options: Choose the Gemini model that fits your needs:
   - Gemini 3.1 Flash Lite: Fast, low cost, and great for most collections (default).
   - Gemini 3.8 Flash: Balanced speed and categorization quality.
@@ -39,7 +40,7 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 
 1. Read: The extension reads your bookmarks (or an uploaded HTML bookmark file).
 2. Backup: In browser mode, it saves a backup HTML file to your Downloads folder first.
-3. Design: The AI reviews your collection and creates a clean folder layout.
+3. Design: The AI reviews your collection and creates a clean folder layout. Your chosen categories are used as the root-level folders; subfolders are generated automatically inside each root folder from your bookmarks.
 4. Sort: Links are placed into their best matching folders.
 5. Finish: In browser mode, bookmarks are placed into a new dated folder in your browser. In file mode, your organized bookmark file is ready to download.
 
@@ -110,13 +111,9 @@ Your data stays private:
 
 ## Changelog
 
-### v1.4.0
+### v1.4.1
 
-- Auto-Generated Categories: New installs can infer a complete category and subcategory structure from the full bookmark collection.
-- Preserved Manual Taxonomies: Saved manual categories remain available, ordered, and unchanged when inference is enabled.
-- Safer Category Placement: Classification cannot invent top-level folders or place an approved subcategory beneath the wrong category.
-- Reliable Background Recovery: Reopened panels recover completed inferred results from the active worker and clearly request a rerun if transient results were lost after a worker restart.
-- Restored Category Choices: Explicitly empty manual selections and the full suggested-category pool are preserved.
+- Category Hierarchy Guidance: Clarified that chosen categories are the root-level folders and that subfolders are always generated automatically inside each root folder.
 
 ### v1.3.0
 
