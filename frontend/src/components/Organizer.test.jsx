@@ -91,16 +91,17 @@ describe('Organizer Component UI Tests', () => {
     it('explains that inferred categories are roots and subfolders are generated automatically', () => {
         render(<Organizer />)
 
-        expect(screen.getByText(/AI chooses the root-level categories for this run/i)).toBeDefined()
-        expect(screen.getByText(/AI automatically generates subfolders inside each root folder from your bookmarks/i)).toBeDefined()
+        expect(screen.getByText(/AI is choosing the root folders for this run/i)).toBeDefined()
+        expect(screen.getByText(/Turn off Infer categories to use your chosen categories instead/i)).toBeDefined()
+        expect(screen.getAllByText(/Subfolders are always generated automatically inside each root folder/i).length).toBeGreaterThan(0)
     })
 
     it('explains that manual categories become roots while subfolders remain automatic', () => {
         render(<Organizer />)
         fireEvent.click(screen.getByRole('switch', { name: /Infer categories/i }))
 
-        expect(screen.getByText(/Your chosen categories become the root-level folders/i)).toBeDefined()
-        expect(screen.getByText(/AI automatically generates subfolders inside each root folder from your bookmarks/i)).toBeDefined()
+        expect(screen.getByText(/Chosen categories are the root folders when Infer categories is off/i)).toBeDefined()
+        expect(screen.getAllByText(/Subfolders are always generated automatically inside each root folder/i).length).toBeGreaterThan(0)
     })
 
     it('renders the complete suggested category pool when manual editing is enabled', () => {

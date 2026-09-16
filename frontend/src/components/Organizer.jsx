@@ -1712,8 +1712,8 @@ export default function Organizer({ theme = 'light' }) {
                                 <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', fontWeight: 600 }}>Infer categories</div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
                                     {inferCategories
-                                        ? 'AI chooses the root-level categories for this run.'
-                                        : 'Your chosen categories become the root-level folders.'}
+                                        ? 'AI is choosing the root folders for this run. Turn off Infer categories to use your chosen categories instead.'
+                                        : 'Chosen categories are the root folders when Infer categories is off.'}
                                 </div>
                             </div>
                             <button
@@ -1784,7 +1784,7 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
 
                     <div style={{ margin: '0.75rem 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.45' }}>
-                        AI automatically generates subfolders inside each root folder from your bookmarks.
+                        Subfolders are always generated automatically inside each root folder from your bookmarks.
                     </div>
 
                     {/* Custom Category Input */}
