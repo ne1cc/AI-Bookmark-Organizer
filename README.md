@@ -6,10 +6,10 @@ Turn messy, unsorted bookmarks into a clean, organized folder structure in one c
 
 - One-Click Organizing: Automatically sorts hundreds or thousands of messy bookmarks into clear, logical folders.
 - No Duplicate Folders: Plans the full folder layout first before sorting, so you never get redundant folders like "Tech Articles" and "Tech News".
-- Choose Folder Detail: Pick how many subfolders you want:
-  - Compact (1 to 3 subfolders per category) for simple, broad organization (recommended).
-  - Balanced (3 to 6 subfolders) for everyday collections.
-  - Detailed (6 to 10 subfolders) for large, topic-rich collections.
+- Choose Folder Detail: Pick how many subfolders you want. The count adapts twice: to your collection size, and to how much material each category actually holds (a quick AI census of your bookmarks measures which categories dominate, and the folder budget shrinks or grows accordingly):
+  - Compact (3 to 5 subfolders per category) for clear, broad organization (recommended).
+  - Balanced (5 to 8 subfolders) for everyday collections.
+  - Detailed (8 to 12 subfolders) for large, topic-rich collections.
 - Adaptive Detail Folders: In either AI-inferred or manually selected category mode, a non-General category/subcategory with at least six bookmarks may be split into a third level. The split is retained only when at least two meaningful detail folders each contain two or more bookmarks; otherwise, or if detail inference cannot complete, bookmarks remain in the normal two-level category/subcategory layout. The same hierarchy is used for Browser Mode and File Mode.
 - Subfolder Hierarchy Diagrams: Visual diagrams for both light and dark themes that illustrate exactly how each subfolder compactness mode organizes your links.
 - Custom Categories: Start with 10 standard categories, add your own, pick from quick suggestions, or clear them all with one click.

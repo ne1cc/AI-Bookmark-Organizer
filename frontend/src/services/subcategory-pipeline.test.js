@@ -77,10 +77,18 @@ const promptOf = (options) => {
     return body.messages ? body.messages[1].content : body.contents[0].parts[0].text
 }
 const isSchemaCall = (prompt) => prompt.includes('BOOKMARKS TO ANALYZE')
+const isCensusCall = (prompt) => prompt.includes('CATEGORY CENSUS')
 
 // Pulls the batch the classifier was handed back out of its prompt.
 const batchFromPrompt = (prompt) => {
     const marker = 'BOOKMARKS (each with its index "i"):'
+    const start = prompt.indexOf(marker) + marker.length
+    return JSON.parse(prompt.slice(start, prompt.lastIndexOf(']') + 1).trim())
+}
+
+// Same for the census prompt, which lists the sample it wants categorized.
+const censusSampleFromPrompt = (prompt) => {
+    const marker = 'BOOKMARKS (in order):'
     const start = prompt.indexOf(marker) + marker.length
     return JSON.parse(prompt.slice(start, prompt.lastIndexOf(']') + 1).trim())
 }
@@ -98,9 +106,23 @@ const schemaFromPrompt = (prompt) => {
  */
 const mockAi = ({ schemaResponses, distort = null, provider = 'openrouter' }) => {
     let schemaCall = 0
+    const categoryIndex = new Map(
+        [...new Set(fixture.map(b => b.expected_category))].map((name, idx) => [name, idx])
+    )
 
     return vi.fn(async (url, options) => {
         const prompt = promptOf(options)
+
+        if (isCensusCall(prompt)) {
+            // The census sees the same sample the schema call will, so answer
+            // from the fixture's expected categories: measured shares match
+            // the collection's real shape.
+            const sample = censusSampleFromPrompt(prompt)
+            return jsonResponse(
+                { assignments: sample.map(({ url: bookmarkUrl }) => categoryIndex.get(expectedByUrl.get(bookmarkUrl).expected_category)) },
+                provider
+            )
+        }
 
         if (isSchemaCall(prompt)) {
             const next = schemaResponses[Math.min(schemaCall, schemaResponses.length - 1)]
@@ -124,7 +146,7 @@ const mockAi = ({ schemaResponses, distort = null, provider = 'openrouter' }) =>
 }
 
 const runOrganizer = async (fetchMock, {
-    subfolderTarget = '5-10',
+    subfolderTarget = '5-8',
     provider = 'openrouter',
     input = bookmarks,
     categories = [...new Set(fixture.map(b => b.expected_category))],
@@ -279,7 +301,7 @@ describe('subcategory pipeline regression', () => {
         // The schema handed to the classifier carries real curated subfolders,
         // never the empty arrays that caused the original collapse.
         const classifySchema = schemaFromPrompt(
-            fetchMock.mock.calls.map(([, o]) => promptOf(o)).find(p => !isSchemaCall(p))
+            fetchMock.mock.calls.map(([, o]) => promptOf(o)).find(p => !isSchemaCall(p) && !isCensusCall(p))
         )
         const finance = classifySchema.categories.find(c => c.name === DOMINANT_CATEGORY)
         expect(finance.sub_categories.length).toBeGreaterThanOrEqual(3)

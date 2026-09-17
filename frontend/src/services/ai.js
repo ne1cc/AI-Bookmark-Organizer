@@ -522,22 +522,169 @@ function sampleForSchema(bookmarks, limit = SCHEMA_SAMPLE_LIMIT) {
     return Array.from({ length: limit }, (_, i) => bookmarks[Math.floor(i * step)]);
 }
 
-// Subcategory counts per category, keyed by the user's granularity setting.
-// `ask` is the range we request from the model, `min` the floor we actually
-// enforce (models routinely undershoot the ask, and rejecting a slightly thin
-// but usable schema would cost a whole extra round-trip), and `max` the ceiling
-// the reconciliation pass enforces after classification.
-export const SUBFOLDER_BOUNDS = {
-    '1-3': { ask: [1, 3], min: 1, max: 3 },
-    '3-6': { ask: [3, 6], min: 2, max: 6 },
-    '6-10': { ask: [6, 10], min: 3, max: 10 },
-    '0-5': { ask: [3, 5], min: 2, max: 5 },
-    '5-10': { ask: [5, 10], min: 3, max: 10 },
-    '10+': { ask: [10, 14], min: 5, max: 16 }
+// Subfolder budgets per tier, keyed by the user's granularity setting.
+// `ask` is the band we request from the model, `min` the floor validation
+// enforces (models routinely undershoot the ask, and rejecting a slightly thin
+// but usable schema would cost a whole extra round-trip), `max` the ceiling
+// reconciliation enforces after classification, and `minCount` the bookmark
+// count below which reconciliation dissolves a folder.
+export const SUBFOLDER_TIERS = {
+    '3-5': { id: '3-5', label: 'Compact', ask: [3, 5], min: 2, max: 5, minCount: 3 },
+    '5-8': { id: '5-8', label: 'Balanced', ask: [5, 8], min: 3, max: 8, minCount: 3 },
+    '8-12': { id: '8-12', label: 'Detailed', ask: [8, 12], min: 3, max: 12, minCount: 2 }
 };
 
+// Granularity ids retired by earlier releases map onto the closest current
+// tier, so a stored preference keeps working without a migration pass.
+const LEGACY_SUBFOLDER_TARGETS = {
+    '0-5': '3-5',
+    '1-3': '3-5',
+    '5-10': '5-8',
+    '3-6': '5-8',
+    '10+': '8-12',
+    '6-10': '8-12'
+};
+
+export function normalizeSubfolderTarget(subfolderTarget) {
+    if (LEGACY_SUBFOLDER_TARGETS[subfolderTarget]) return LEGACY_SUBFOLDER_TARGETS[subfolderTarget];
+    return SUBFOLDER_TIERS[subfolderTarget] ? subfolderTarget : '3-5';
+}
+
 export function subfolderBounds(subfolderTarget) {
-    return SUBFOLDER_BOUNDS[subfolderTarget] || SUBFOLDER_BOUNDS['1-3'];
+    return SUBFOLDER_TIERS[normalizeSubfolderTarget(subfolderTarget)];
+}
+
+// Within a tier the ask is a band, not a quota: the top of the range opens
+// with collection size while the bottom stays at the tier floor, so Compact
+// never asks for fewer than 3 (the tier's identity) but a small collection
+// is not pushed toward 5. Only genuinely tiny collections — where even the
+// floor is unreachable — relax the bottom of the band.
+const ADAPTIVE_FLOOR_COUNT = 150;
+const ADAPTIVE_CEILING_COUNT = 3000;
+
+// Log-scale position of a collection between "small" and "huge", 0 → 1.
+export function collectionSpread(bookmarkCount = 0) {
+    const count = Number.isFinite(bookmarkCount) ? bookmarkCount : 0;
+    if (count <= ADAPTIVE_FLOOR_COUNT) return 0;
+    return Math.min(1,
+        (Math.log10(count) - Math.log10(ADAPTIVE_FLOOR_COUNT)) /
+        (Math.log10(ADAPTIVE_CEILING_COUNT) - Math.log10(ADAPTIVE_FLOOR_COUNT)));
+}
+
+export function adaptiveSubfolderAsk(subfolderTarget, bookmarkCount = 0) {
+    const tier = subfolderBounds(subfolderTarget);
+    const [lo, hi] = tier.ask;
+    const count = Number.isFinite(bookmarkCount) ? bookmarkCount : 0;
+
+    if (count > 0 && count < TINY_COLLECTION_THRESHOLD) {
+        return { ...tier, ask: [1, lo] };
+    }
+
+    const t = collectionSpread(count);
+    const askMax = Math.max(lo, lo + Math.round(t * (hi - lo)));
+    return { ...tier, ask: [lo, askMax] };
+}
+
+// Per-category ask bands that respect how much material each category holds.
+//
+// The shrinkage constraint: a folder is only worth existing when it holds at
+// least `minCount` bookmarks, so a category with n̂ bookmarks supports at
+// most floor(n̂ / minCount) subfolders no matter what the tier asks for.
+// `shares` are measured collection shares per category (the sample census),
+// aligned with the deduped category list; null yields no bands and the
+// caller falls back to the whole-collection band for every category.
+export function buildCategoryBands(shares, bookmarkCount, subfolderTarget) {
+    if (!Array.isArray(shares) || shares.length === 0) return null;
+
+    const tier = subfolderBounds(subfolderTarget);
+    const [lo, hi] = tier.ask;
+    const t = collectionSpread(bookmarkCount);
+
+    return shares.map((share) => {
+        const weight = Number.isFinite(share) && share > 0 ? share : 0;
+        const popMax = Math.floor((weight * bookmarkCount) / tier.minCount);
+        if (popMax < lo) {
+            // Too little material to support even the tier floor: permit
+            // minimal structure rather than inviting padded near-duplicates.
+            return { lower: 1, upper: Math.max(1, popMax) };
+        }
+        const upper = lo + Math.round(t * (Math.min(hi, popMax) - lo));
+        return { lower: lo, upper: Math.max(lo, upper) };
+    });
+}
+
+// The floor validateSchema enforces for a run: the tier minimum, relaxed to
+// one for tiny collections where a single real subcategory per category is a
+// legitimate result rather than a degenerate one.
+export function requiredSubfolderMin(subfolderTarget, bookmarkCount) {
+    const { min } = subfolderBounds(subfolderTarget);
+    return bookmarkCount < TINY_COLLECTION_THRESHOLD ? 1 : min;
+}
+
+// One cheap call that measures how the collection distributes across the
+// selected categories, so the schema ask can shrink with each category's
+// real material instead of assuming they are all equally stocked. Classifies
+// only the existing schema sample (≤ 200 bookmarks) and returns index-only
+// output, so the cost is a few hundred tokens regardless of collection size.
+// Returns { names, shares } with shares summing to 1, or null when the
+// census cannot be trusted — callers then fall back to uniform bands.
+export async function censusShares(sample, categories, apiKey, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+    const seen = new Set();
+    const names = [];
+    for (const raw of Array.isArray(categories) ? categories : []) {
+        if (typeof raw !== 'string' || !raw.trim()) continue;
+        const key = raw.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        names.push(raw.trim());
+    }
+    if (names.length <= 1 || !Array.isArray(sample) || sample.length === 0) return null;
+
+    const prompt = `
+    TASK: CATEGORY CENSUS
+    Assign every bookmark below to exactly one of these categories:
+    ${JSON.stringify(names)}
+
+    RULES
+    1. Judge by the bookmark's likely topic, not keyword matching alone.
+    2. Every bookmark gets exactly one category — when two could hold it, the closest fit wins.
+    3. Refer to categories by their position in the list above (0-based index).
+
+    Return ONLY this JSON, no commentary:
+    { "assignments": [0, 2, 1] }
+
+    BOOKMARKS (in order):
+    ${JSON.stringify(sample.map(b => ({ title: b.title, url: b.url })))}
+    `;
+
+    try {
+        // Best-effort by design: one attempt, because a malformed census has
+        // a safe fallback (uniform shares) and burning retries here would
+        // delay every run for a measurement the run can live without.
+        const parsed = await withRetry(
+            () => callModel(apiKey, model, "You are a precise classification engine. Output only valid JSON.", prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled),
+            1, 0, isCancelled, onRetry
+        );
+
+        const assignments = Array.isArray(parsed?.assignments) ? parsed.assignments : null;
+        if (!assignments || assignments.length !== sample.length) {
+            throw new Error('census response did not cover every sample bookmark');
+        }
+
+        const tally = new Array(names.length).fill(0);
+        for (const raw of assignments) {
+            const idx = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+            if (!Number.isInteger(idx) || idx < 0 || idx >= names.length) {
+                throw new Error('census response contained an invalid category index');
+            }
+            tally[idx]++;
+        }
+
+        return { names, shares: tally.map(n => n / sample.length) };
+    } catch (err) {
+        if (err?.isCancelled) throw err;
+        return null;
+    }
 }
 
 // Categories that exist to absorb outliers. They are allowed to carry no
@@ -621,7 +768,7 @@ const TINY_COLLECTION_THRESHOLD = 40;
 // Validate a model-generated schema and return a cleaned copy alongside any
 // reasons it is unusable. Normalizing here means callers (and the classifier)
 // never see filler subcategories or case-duplicate folder names.
-export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount = Infinity, expectedCategories = null } = {}) {
+export function validateSchema(schema, { subfolderTarget = '3-5', bookmarkCount = Infinity, expectedCategories = null, categoryBands = null } = {}) {
     const issues = [];
     const rawCategories = Array.isArray(schema?.categories) ? schema.categories : null;
 
@@ -629,8 +776,7 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         return { ok: false, issues: ['the response contained no categories'], schema: { categories: [] } };
     }
 
-    const { min } = subfolderBounds(subfolderTarget);
-    const requiredMin = bookmarkCount < TINY_COLLECTION_THRESHOLD ? 1 : min;
+    const requiredMin = requiredSubfolderMin(subfolderTarget, bookmarkCount);
 
     const categories = [];
     const seenCategories = new Set();
@@ -642,6 +788,13 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         const key = name.toLowerCase();
         if (seenCategories.has(key)) continue;
         seenCategories.add(key);
+
+        // A category whose measured material cannot support the tier floor
+        // (its census band starts below it) is held to its own band minimum
+        // instead — demanding tier depth from a near-empty category is what
+        // manufactures padded near-duplicate folders.
+        const band = categoryBands instanceof Map ? categoryBands.get(key) : null;
+        const floorForCategory = band ? Math.min(requiredMin, band.lower) : requiredMin;
 
         const seenSubs = new Set();
         const sub_categories = [];
@@ -657,7 +810,7 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
             sub_categories.push(sub);
         }
 
-        categories.push({ name, sub_categories });
+        categories.push({ name, sub_categories, floorForCategory });
     }
 
     if (categories.length === 0) {
@@ -689,11 +842,11 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
     const real = categories.filter(c => !isCatchAllCategory(c.name));
 
     const thin = real
-        .filter(c => c.sub_categories.length < requiredMin)
+        .filter(c => c.sub_categories.length < c.floorForCategory)
         .map(c => `"${c.name}" has ${c.sub_categories.length}`);
 
     if (thin.length > 0) {
-        issues.push(`every category needs at least ${requiredMin} subcategories, but ${thin.join(', ')}`);
+        issues.push(`every category needs at least its own range minimum, but ${thin.join(', ')}`);
     }
 
     // A schema averaging one subcategory per category is flat in practice even
@@ -705,20 +858,17 @@ export function validateSchema(schema, { subfolderTarget = '1-3', bookmarkCount 
         issues.push(`the structure is flat overall (${totalSubs} subcategories across ${real.length} categories)`);
     }
 
-    return { ok: issues.length === 0, issues, schema: { categories } };
+    return { ok: issues.length === 0, issues, schema: { categories: categories.map(({ floorForCategory: _floor, ...rest }) => rest) } };
 }
 
 const SUBFOLDER_RULES = {
-    '1-3': 'Keep it very compact — create only 1-3 subfolders for the clearest, genuinely distinct groups. Combine related items into broader folders rather than splitting too finely.',
-    '3-6': 'Create a focused structure of 3-6 subfolders for the clearest groups. Combine closely related topics and avoid one-off folders.',
-    '6-10': 'Create a detailed but scannable structure of 6-10 subfolders. Use specific topics only when each folder has a meaningful group of bookmarks.',
-    '0-5': 'Keep it minimal — only create subfolders for truly distinct groups, and err on the side of combining related items into broader folders.',
-    '5-10': 'About 7-8 is the sweet spot: enough to be genuinely useful, few enough to scan at a glance. Scale to the content — a content-heavy category can carry more, a sparse one fewer.',
-    '10+': 'Be generous with specific subfolders for different topics, so each bookmark has a precise home.'
+    '3-5': 'Compact: only genuinely distinct groups earn a folder; when in doubt, merge into the broader topic.',
+    '5-8': 'Balanced: enough subfolders to be genuinely useful, few enough to scan at a glance.',
+    '8-12': 'Detailed: specific topics get precise homes. Never split so fine that a folder would hold only a handful of links.'
 };
 
-function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin, askMax, subfolderTarget, fixedCategories = null, issues = null, sampleLimit = SCHEMA_SAMPLE_LIMIT }) {
-    const subfolderGuidance = SUBFOLDER_RULES[subfolderTarget] || SUBFOLDER_RULES['1-3'];
+function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin, askText, subfolderTarget, fixedCategories = null, issues = null, rangesBlock = '', sampleLimit = SCHEMA_SAMPLE_LIMIT }) {
+    const subfolderGuidance = SUBFOLDER_RULES[normalizeSubfolderTarget(subfolderTarget)];
 
     const schemaSource = fixedCategories ? sampleForSchema(bookmarks, sampleLimit) : bookmarks;
     const sampleNote = schemaSource.length < bookmarkCount
@@ -729,7 +879,7 @@ function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin
             ? `
     CORRECTION REQUIRED — YOUR PREVIOUS ANSWER WAS REJECTED
     Reason: ${issues.join('; ')}.
-    Your previous structure was too flat. Every category MUST contain at least ${askMin} distinct, specific subcategories. Never return an empty "sub_categories" array, and never use "General" or "Other" as a subcategory name. Look harder at the bookmarks below and find the real topical groupings.
+    Your previous structure was too flat. Every category MUST contain at least the minimum of its own range below${rangesBlock ? '' : ` — at least ${askMin} distinct, specific subcategories`}. Never return an empty "sub_categories" array, and never use "General" or "Other" as a subcategory name. Look harder at the bookmarks below and find the real topical groupings.
 `
             : '';
 
@@ -752,13 +902,14 @@ function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin
 
     return `
     You are an expert information architect designing an intuitive bookmark folder structure for a real person's collection of ${bookmarkCount} bookmarks.
-    ${sampleNote}${correction}
+    ${sampleNote}${rangesBlock}${correction}
 
     GOAL
     Design a clean two-level structure: broad top-level CATEGORIES, each holding nested SUB-CATEGORIES. A person should glance at the folders and instantly know where any link lives — like a well-organized bookshelf, not a sprawling database.
 
     THE SUBCATEGORIES ARE THE POINT
-    1. For EVERY category you MUST define ${askMin}-${askMax} concrete, mutually exclusive subcategories. ${subfolderGuidance}
+    1. For EVERY category you MUST define ${rangesBlock ? `subcategories within that category's own range in PER-CATEGORY SUBFOLDER RANGES above` : `${askText} concrete, mutually exclusive subcategories`}. ${subfolderGuidance}
+       The ranges are bands, not quotas: a category at the bottom of its range because its material is thin is a correct answer, and padding it with near-duplicate folders to reach the top is a failure.
     2. A category with an empty "sub_categories" array is INVALID and will be rejected. Categories are just the shelves; the subcategories are what make the collection browsable.
     3. Never use "General", "Other", "Misc" or "Various" as a subcategory name. If you are tempted to, you have not looked hard enough at what the bookmarks actually have in common — find the real grouping instead.
 
@@ -802,12 +953,37 @@ const requestSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry
     onRetry
 );
 
-export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
-    const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
-    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askMax, subfolderTarget, fixedCategories: baseCategories, issues, sampleLimit });
+export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "3-5", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
+    // Measure how the collection actually distributes across the selected
+    // categories before asking for structure. A category holding half the
+    // collection cannot carry the same folder budget as one holding a
+    // hundredth, and one small census call is enough to know which is which.
+    // A census that cannot be trusted falls back to the whole-collection band.
+    const schemaSource = sampleForSchema(bookmarks, sampleLimit);
+    const census = await censusShares(schemaSource, baseCategories, apiKey, model, isCancelled, onRetry);
+    const bands = census ? buildCategoryBands(census.shares, bookmarks.length, subfolderTarget) : null;
+    const bandsByName = bands && census
+        ? new Map(census.names.map((name, i) => [name.toLowerCase(), bands[i]]))
+        : null;
+
+    const formatBand = (band) => band.lower === band.upper ? `exactly ${band.lower}` : `${band.lower}-${band.upper}`;
+    const rangesBlock = bands
+        ? `\n    PER-CATEGORY SUBFOLDER RANGES — measured from how much material each category holds. Stay within each category's own range; never borrow another category's range:\n${census.names.map((name, i) => `    - ${name}: ${formatBand(bands[i])}`).join('\n')}\n`
+        : '';
+
+    const adaptive = adaptiveSubfolderAsk(subfolderTarget, bookmarks.length).ask;
+    const askMin = adaptive[0];
+    const askText = adaptive[0] === adaptive[1] ? `exactly ${adaptive[0]}` : `${adaptive[0]}-${adaptive[1]}`;
+
+    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askText, subfolderTarget, fixedCategories: baseCategories, issues, rangesBlock, sampleLimit });
     const attempt = issues => requestSchema(buildPrompt(issues), apiKey, model, isCancelled, onRetry);
 
-    const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: baseCategories };
+    const options = {
+        subfolderTarget,
+        bookmarkCount: bookmarks.length,
+        expectedCategories: baseCategories,
+        categoryBands: bandsByName
+    };
 
     const first = validateSchema(await attempt(null), options);
     if (first.ok) return buildAuthoritativeSchema(baseCategories, first.schema);
@@ -833,12 +1009,17 @@ export async function generateInferredSchema(
     bookmarks,
     apiKey,
     model = 'google/gemini-3.1-flash-lite',
-    subfolderTarget = '1-3',
+    subfolderTarget = '3-5',
     isCancelled = null,
     onRetry = null
 ) {
-    const { ask: [askMin, askMax] } = subfolderBounds(subfolderTarget);
-    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askMax, subfolderTarget, fixedCategories: null, issues });
+    const adaptive = adaptiveSubfolderAsk(subfolderTarget, bookmarks.length).ask;
+    const askMin = adaptive[0];
+    const askText = adaptive[0] === adaptive[1] ? `exactly ${adaptive[0]}` : `${adaptive[0]}-${adaptive[1]}`;
+    // No fixed category list to census: the model invents the top level, so
+    // the ask stays on the whole-collection band and reconciliation provides
+    // the per-category population enforcement after classification.
+    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, askMin, askText, subfolderTarget, fixedCategories: null, issues });
     const attempt = issues => requestSchema(buildPrompt(issues), apiKey, model, isCancelled, onRetry);
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: null };
 

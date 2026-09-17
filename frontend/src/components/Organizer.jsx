@@ -3,6 +3,7 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { normalizeSubfolderTarget } from '../services/ai'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
@@ -34,14 +35,18 @@ export const SUGGESTED_ADDABLE_CATEGORIES = [
     'Legal, Docs & Admin'
 ];
 
-const SUBFOLDER_TARGET_IDS = ['1-3', '3-6', '6-10'];
-const LEGACY_SUBFOLDER_TARGETS = {
-    '0-5': '1-3',
-    '5-10': '3-6',
-    '10+': '6-10'
+const SUBFOLDER_EXPLAINER_IMAGES = {
+    light: {
+        '3-5': subfolderHierarchyImage,
+        '5-8': subfolderHierarchyBalancedImage,
+        '8-12': subfolderHierarchyDetailedImage
+    },
+    dark: {
+        '3-5': subfolderHierarchyDarkImage,
+        '5-8': subfolderHierarchyBalancedDarkImage,
+        '8-12': subfolderHierarchyDetailedDarkImage
+    }
 };
-const normalizeSubfolderTarget = (target) =>
-    LEGACY_SUBFOLDER_TARGETS[target] || (SUBFOLDER_TARGET_IDS.includes(target) ? target : '1-3');
 
 export const SCHEMA_SORT_OPTIONS = [
     {
@@ -78,18 +83,6 @@ export const SCHEMA_SORT_OPTIONS = [
     }
 ];
 
-const SUBFOLDER_EXPLAINER_IMAGES = {
-    light: {
-        '1-3': subfolderHierarchyImage,
-        '3-6': subfolderHierarchyBalancedImage,
-        '6-10': subfolderHierarchyDetailedImage
-    },
-    dark: {
-        '1-3': subfolderHierarchyDarkImage,
-        '3-6': subfolderHierarchyBalancedDarkImage,
-        '6-10': subfolderHierarchyDetailedDarkImage
-    }
-};
 
 // Synchronous in-process memory reader (0.05ms latency, zero IPC overhead)
 const getStored = (key, fallback) => {
@@ -230,15 +223,15 @@ export default function Organizer({ theme = 'light' }) {
 
     // Subfolder Target Size
     const subfolderTargetOptions = useMemo(() => [
-        { id: '1-3', label: 'Compact (1-3)', description: 'Recommended — only the clearest subgroups' },
-        { id: '3-6', label: 'Balanced (3-6)', description: 'A focused structure for broader collections' },
-        { id: '6-10', label: 'Detailed (6-10)', description: 'More specific grouping for large collections' }
+        { id: '3-5', label: 'Compact (3-5)', description: 'Recommended — 3-5 clear subfolders per category, scaled to your collection size' },
+        { id: '5-8', label: 'Balanced (5-8)', description: 'A focused structure that grows with larger collections' },
+        { id: '8-12', label: 'Detailed (8-12)', description: 'Deep, specific grouping for large topic-rich collections' }
     ], [])
     const [subfolderTarget, setSubfolderTarget] = useState(() => {
         try {
             return normalizeSubfolderTarget(localStorage.getItem('subfolderTarget'))
         } catch {
-            return '1-3'
+            return '3-5'
         }
     })
     const subfolderOptions = subfolderTargetOptions

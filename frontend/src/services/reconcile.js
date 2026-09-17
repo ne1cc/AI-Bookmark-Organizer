@@ -219,15 +219,16 @@ function nearestSibling(group, kept) {
  * @param {Object} options - `subfolderTarget` granularity setting.
  * @returns {{ classified: Array, summary: Object }}
  */
-export function reconcileSubcategories(classified, schema, { subfolderTarget = '1-3' } = {}) {
+export function reconcileSubcategories(classified, schema, { subfolderTarget = '3-5' } = {}) {
     const summary = { proposedKept: 0, proposedFolded: 0, merged: 0, orphansFolded: 0, cappedFolded: 0 };
 
     if (!Array.isArray(classified) || classified.length === 0) {
         return { classified: Array.isArray(classified) ? classified : [], summary };
     }
 
-    const { max } = subfolderBounds(subfolderTarget);
-    const minCount = subfolderTarget === '1-3' || subfolderTarget === '6-10' || subfolderTarget === '10+' ? 2 : 3;
+    const bounds = subfolderBounds(subfolderTarget);
+    const { max } = bounds;
+    const minCount = bounds.minCount;
 
     const schemaSubs = new Map(
         (Array.isArray(schema?.categories) ? schema.categories : [])
@@ -319,7 +320,7 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
         // Overflow past the ceiling is still well-classified content, so it goes
         // to its nearest surviving kin on the same terms as an orphan. Dumping
         // it in "General" put more than half of a healthy category there at the
-        // '0-5' setting.
+        // Compact setting.
         for (const group of capped) {
             summary.cappedFolded++;
             if (group.isProposed) summary.proposedFolded++;

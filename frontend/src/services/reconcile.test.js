@@ -56,7 +56,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'AI Tool', 1, { proposed: true })
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['AI Tools']))
         expect(result.summary.merged).toBe(2)
@@ -69,7 +69,7 @@ describe('reconcileSubcategories', () => {
             ...items('Finance', 'News', 5)
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['News']))
         expect(new Set(subsIn(result, 'Finance'))).toEqual(new Set(['News']))
@@ -82,7 +82,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Web Frameworks', 2, { proposed: true })
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         // "Web Frameworks" shares the token "web", so it joins Web Development
         // rather than being dumped in General.
@@ -97,7 +97,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Knitting Patterns', 1, { proposed: true })
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(1)
         expect(result.summary.orphansFolded).toBe(1)
@@ -110,7 +110,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Web Beta', 1, { proposed: true })
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['Web Development']))
         expect(result.summary.orphansFolded).toBe(2)
@@ -123,13 +123,13 @@ describe('reconcileSubcategories', () => {
         ]
 
         const balanced = reconcileSubcategories(
-            classified.map(b => ({ ...b })), schema, { subfolderTarget: '5-10' }
+            classified.map(b => ({ ...b })), schema, { subfolderTarget: '5-8' }
         )
         const detailed = reconcileSubcategories(
-            classified.map(b => ({ ...b })), schema, { subfolderTarget: '10+' }
+            classified.map(b => ({ ...b })), schema, { subfolderTarget: '8-12' }
         )
 
-        // minCount is 3 at '5-10' so the 2-item folder dissolves, but 2 at '10+'.
+        // minCount is 3 at '5-8' so the 2-item folder dissolves, but 2 at '8-12'.
         expect(new Set(subsIn(balanced, 'Tech'))).not.toContain('Rust Ecosystem')
         expect(new Set(subsIn(detailed, 'Tech'))).toContain('Rust Ecosystem')
     })
@@ -141,16 +141,16 @@ describe('reconcileSubcategories', () => {
             classified.push(...items('Tech', `Topic ${String.fromCharCode(65 + i)}`, 20 - i, { proposed: true }))
         }
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         const distinct = new Set(subsIn(result, 'Tech'))
-        // 10 kept for '5-10'; the 2 that overflowed join a surviving sibling
+        // 8 kept for '5-8'; the 4 that overflowed join a surviving sibling
         // rather than being dumped in General.
-        expect(distinct.size).toBe(10)
+        expect(distinct.size).toBe(8)
         expect(distinct).not.toContain('General')
         expect(distinct).toContain('Topic A')
         expect(distinct).not.toContain('Topic L')
-        expect(result.summary.cappedFolded).toBe(2)
+        expect(result.summary.cappedFolded).toBe(4)
     })
 
     it('sends capped overflow to General only when it shares no token with a survivor', () => {
@@ -160,30 +160,34 @@ describe('reconcileSubcategories', () => {
         }
         classified.push(...items('Tech', 'Knitting Patterns', 4, { proposed: true }))
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
+        // The cap keeps the 8 largest groups. Topic I and Topic J overflow but
+        // share the token "topic" with a survivor, so they fold into it;
+        // Knitting Patterns shares nothing and goes to General.
         expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(4)
-        expect(result.summary.cappedFolded).toBe(1)
+        expect(result.summary.cappedFolded).toBe(3)
     })
 
     it('never dissolves a whole category when no subcategory clears the floor', () => {
-        // 5 categories x 3 subcategories x 2 bookmarks. Nothing reaches
+        // 4 categories x 2 subcategories x 2 bookmarks. Nothing reaches
         // minCount (3), which used to empty `kept` and rename every group to
-        // General — the branch's own bug, one layer down.
+        // General — the branch's own bug, one layer down. All 8 groups clear
+        // the rescue floor of 2 and fit inside the tier ceiling.
         const classified = []
         const wideSchema = { categories: [] }
-        for (let c = 0; c < 5; c++) {
+        for (let c = 0; c < 4; c++) {
             const category = `Category ${c}`
-            const subs = [0, 1, 2].map(s => `Topic ${c}${s}`)
+            const subs = [0, 1].map(s => `Topic ${c}${s}`)
             wideSchema.categories.push({ name: category, sub_categories: subs })
             subs.forEach(sub => classified.push(...items(category, sub, 2)))
         }
 
-        const result = reconcileSubcategories(classified, wideSchema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, wideSchema, { subfolderTarget: '5-8' })
 
-        expect(result.classified).toHaveLength(30)
+        expect(result.classified).toHaveLength(16)
         expect(result.classified.filter(b => b.sub_category === 'General')).toHaveLength(0)
-        expect(new Set(result.classified.map(b => b.sub_category)).size).toBe(15)
+        expect(new Set(result.classified.map(b => b.sub_category)).size).toBe(8)
         expect(result.summary.orphansFolded).toBe(0)
     })
 
@@ -197,7 +201,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Delta', 1)
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(subsIn(result, 'Tech')).toEqual(['General', 'General', 'General', 'General'])
         expect(result.summary.orphansFolded).toBe(4)
@@ -212,7 +216,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Data Pipelines', 1, { proposed: true })
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['Web Development', 'Data Science']))
         expect(result.summary.orphansFolded).toBe(3)
@@ -225,7 +229,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Web Development', 5)
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(4)
         expect(subsIn(result, 'Archive')).toEqual(['Broken Links'])
@@ -238,7 +242,7 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Web Development', 5)
         ]
 
-        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-10' })
+        const result = reconcileSubcategories(classified, schema, { subfolderTarget: '5-8' })
 
         expect(result.classified.every(b => !('proposed' in b))).toBe(true)
     })
@@ -250,8 +254,8 @@ describe('reconcileSubcategories', () => {
             ...items('Tech', 'Web Development', 4)
         ]
 
-        const forward = reconcileSubcategories(build(), schema, { subfolderTarget: '5-10' })
-        const reversed = reconcileSubcategories(build().reverse(), schema, { subfolderTarget: '5-10' })
+        const forward = reconcileSubcategories(build(), schema, { subfolderTarget: '5-8' })
+        const reversed = reconcileSubcategories(build().reverse(), schema, { subfolderTarget: '5-8' })
 
         expect(new Set(subsIn(forward, 'Tech'))).toEqual(new Set(subsIn(reversed, 'Tech')))
         expect(forward.summary).toEqual(reversed.summary)
