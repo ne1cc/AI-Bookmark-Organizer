@@ -752,6 +752,45 @@ describe('OrganizerService detail enrichment integration', () => {
         expect(logs.some(event => event.message === 'Rate limit reached (429). Pausing for 8s before retrying detail chunk tech/frontend #1...')).toBe(true)
     })
 
+    it('runs detail classification chunks concurrently across groups', async () => {
+        const concurrentLinks = Array.from({ length: 12 }, (_, index) => ({
+            title: `Concurrent ${index}`,
+            url: `https://concurrent.test/${index}`
+        }))
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [{ name: 'Tech', sub_categories: ['Frontend', 'Backend'] }]
+        })
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(concurrentLinks.map((bookmark, index) => ({
+            ...bookmark,
+            category: 'Tech',
+            sub_category: index < 6 ? 'Frontend' : 'Backend'
+        })))
+        vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([
+            ['tech\u0000frontend', ['React', 'Vue']],
+            ['tech\u0000backend', ['APIs', 'Servers']]
+        ]))
+        let inFlight = 0
+        let maxInFlight = 0
+        vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async records => {
+            inFlight++
+            maxInFlight = Math.max(maxInFlight, inFlight)
+            await new Promise(resolve => setTimeout(resolve, 10))
+            inFlight--
+            const names = records[0].sub_category === 'Backend' ? ['APIs', 'Servers'] : ['React', 'Vue']
+            return records.map((bookmark, index) => ({
+                ...bookmark,
+                detail_category: names[index % 2]
+            }))
+        })
+
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const results = await service.start(concurrentLinks)
+
+        expect(maxInFlight).toBeGreaterThanOrEqual(2)
+        const approved = { Frontend: ['React', 'Vue'], Backend: ['APIs', 'Servers'] }
+        expect(results.every(item => approved[item.sub_category].includes(item.detail_category))).toBe(true)
+    })
+
     it('skips detail model calls when no group is eligible and bypasses them in flat mode', async () => {
         const detailSchemas = vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map())
         const detailClassifier = vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue([])
@@ -1912,7 +1951,7 @@ describe('OrganizerService inferred category runs', () => {
         expect(classify.mock.calls[0][2]).toEqual(inferred)
     })
 
-    it('reports full-collection analysis instead of sampled analysis in inference mode', async () => {
+    it('designs the inferred structure from a representative sample in inference mode', async () => {
         vi.clearAllMocks()
         const inferred = {
             categories: [{ name: 'Generated Topic', sub_categories: ['Generated Detail'] }]
@@ -1936,8 +1975,8 @@ describe('OrganizerService inferred category runs', () => {
 
         await service.start(bookmarks)
 
-        expect(messages).toContain('Large collection: analyzing all 205 bookmarks to infer the folder structure. All bookmarks will then be classified.')
-        expect(messages.some(message => message?.includes('sample of 200'))).toBe(false)
+        expect(messages).toContain('Large collection: designing the folder structure from a sample of 200 of 205 bookmarks. All bookmarks will still be classified.')
+        expect(messages.some(message => message?.includes('analyzing all'))).toBe(false)
     })
 
     it('classifies against the run-scoped inferred schema instead of replacing it with Other', async () => {

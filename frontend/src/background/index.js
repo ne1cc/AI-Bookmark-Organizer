@@ -117,10 +117,11 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
 
 // Broadcast job events to connected ports and handle background notifications
 jobRunner.subscribe((event, payload) => {
-    // 1. Broadcast to any open side panel ports
+    // 1. Broadcast to any open side panel ports. Log lines arrive inside the
+    // coalesced STATUS_UPDATE payloads (jobRunner.emitState).
     for (const port of connectedPorts) {
         try {
-            if (event === 'status' || event === 'log') {
+            if (event === 'status') {
                 port.postMessage({ type: 'STATUS_UPDATE', payload: jobRunner.getState() });
             } else if (event === 'complete') {
                 port.postMessage({ type: 'JOB_COMPLETE', payload });

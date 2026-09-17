@@ -270,6 +270,37 @@ describe('BackgroundJobRunner', () => {
         expect(runner.keepAliveTimer).toBeNull();
     });
 
+    it('coalesces rapid progress updates into one delayed session write', async () => {
+        const setCallsBefore = () => globalThis.chrome.storage.session.set.mock.calls.length;
+
+        const jobPromise = runner.startJob({
+            apiKey: 'AIzaSyFakeKey',
+            categories: ['Tech'],
+            inferCategories: false,
+            flatDateSort: false
+        }, null);
+        const baseline = setCallsBefore();
+
+        for (let i = 0; i < 5; i++) {
+            runner.organizer.onProgress({
+                status: 'progress',
+                percent: 10 * (i + 1),
+                message: `Batch ${i + 1}...`
+            });
+        }
+
+        // In-memory state stays synchronous; only persistence is coalesced.
+        expect(runner.getState().progress).toBe(50);
+        expect(runner.getState().logs.some(l => l.message.includes('Batch 5'))).toBe(true);
+        expect(setCallsBefore()).toBe(baseline);
+
+        vi.advanceTimersByTime(250);
+        expect(setCallsBefore()).toBe(baseline + 1);
+
+        await jobPromise;
+        expect(runner.getState().status).toBe('complete');
+    });
+
     it('cancels an active job cleanly', async () => {
         const cancelSpy = vi.fn();
         runner.organizer = { cancel: cancelSpy };
