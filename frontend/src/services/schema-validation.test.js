@@ -710,7 +710,7 @@ describe('generateInferredSchema', () => {
     })
 
     it('designs from an evenly spaced sample and permits model-generated top-level categories', async () => {
-        const bookmarks = Array.from({ length: 205 }, (_, index) => ({
+        const bookmarks = Array.from({ length: 405 }, (_, index) => ({
             title: `Bookmark ${index + 1}`,
             url: `https://example.com/${index + 1}`
         }))
@@ -729,13 +729,13 @@ describe('generateInferredSchema', () => {
         const schema = await generateInferredSchema(bookmarks, 'sk-or-test-key')
         const prompt = body.messages[1].content
 
-        // A 200-bookmark evenly spaced sample: includes the head of the
+        // A 400-bookmark evenly spaced sample: includes the head of the
         // collection but never the unsampled tail, and tells the model it is
         // designing for the entire collection.
         expect(prompt).toContain('Bookmark 1')
-        expect(prompt).not.toContain('Bookmark 205')
-        expect(prompt).toContain('representative sample of 200 bookmarks drawn evenly')
-        expect(prompt).toContain('ENTIRE collection of 205')
+        expect(prompt).not.toContain('Bookmark 405')
+        expect(prompt).toContain('representative sample of 400 bookmarks drawn evenly')
+        expect(prompt).toContain('ENTIRE collection of 405')
         expect(prompt).not.toContain('FIXED TOP-LEVEL CATEGORIES')
         expect(schema.categories.map(category => category.name)).toEqual(['Engineering', 'Research', 'Personal'])
     })
