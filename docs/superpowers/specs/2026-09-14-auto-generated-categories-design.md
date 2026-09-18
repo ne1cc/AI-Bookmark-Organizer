@@ -19,7 +19,7 @@ The repository already contains the earlier schema-generation machinery: bookmar
 
 Add an explicit inferred-schema path that:
 
-1. Receives the full normalized bookmark collection as the category-inference input; it must not use the fixed-category sample limit for this mode.
+1. Receives the full normalized bookmark collection as the category-inference input; it must not use the fixed-category sample limit for this mode. **Superseded 2026-09-17 (PR #76):** the full collection made schema prompts for large libraries reach ~500K tokens (slow, costly, over most model context windows). Inferred mode now designs from the same evenly spaced sample as manual mode — see `2026-09-17-backend-performance-architecture-design.md`. The intent of this clause (do not lose the collection's topical variety) is preserved by even spacing plus classification's proposed-subcategory rule.
 2. Asks the model to return usable top-level categories and subcategories, honoring the selected subfolder granularity.
 3. Reuses existing validation, retry, cancellation, and schema normalization where compatible, but does not enforce a fixed top-level category list.
 4. Carries the generated schema through classification and folder creation without rebuilding it against an empty authoritative category list.
