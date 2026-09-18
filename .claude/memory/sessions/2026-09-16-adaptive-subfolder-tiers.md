@@ -65,4 +65,16 @@ adaptive within each tier, and made it population-aware per category (census-mea
   dominant category gets "5-8", near-empty ones "exactly 1".
 - Possible future: cross-check census shares against realized classification counts and
   surface divergence in the run log; surfacing per-category final folder counts in UI.
+
+## Ship
+- Rebased onto origin/main mid-flight (upstream had added `buildSchemaPrompt` extraction,
+  `generateInferredSchema`, and the detail-folders third level). Merged resolution: kept
+  upstream's prompt-builder architecture, threaded census/bands through it as
+  `rangesBlock`/`askText` params; inferred path intentionally runs without census
+  (no fixed category list to measure) and relies on reconciliation for per-category
+  enforcement after classification.
+- Post-rebase verification: 439 tests passed (upstream added ~94), lint 0 errors,
+  build:all green.
+- Shipped: https://github.com/ne1cc/AI-Bookmark-Organizer/pull/77
+  (branch `t3code/audit-subcategory-designation`, commit `27f87ba`).
 - Stored prefs migrate transparently: old ids normalize on load (UI + engine).

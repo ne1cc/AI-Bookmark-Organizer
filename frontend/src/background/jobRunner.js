@@ -162,7 +162,7 @@ export class BackgroundJobRunner {
         } else {
             this.addLog('Starting AI Organization in Background...');
             this.addLog(`Using Model: Google Gemini ${selectedModel || 'Default'}`);
-            this.addLog(`Subfolder Organization: ${subfolderTarget || '3-5'}`);
+            this.addLog(`Subfolder Organization: ${subfolderTarget || 'medium'}`);
             this.addLog(`Folder Content Sorting: ${schemaSortOrder || 'Alphabetical (A–Z)'}`);
             this.addLog(`Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`);
             this.addLog(`Clean Bookmark Titles: ${cleanTitles ? 'On' : 'Off'}`);

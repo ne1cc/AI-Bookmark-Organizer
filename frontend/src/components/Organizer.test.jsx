@@ -227,10 +227,10 @@ describe('Organizer Component UI Tests', () => {
         const image = screen.getByRole('img', { name: /category and nested subfolder hierarchy/i })
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy.png')
 
-        fireEvent.click(screen.getByRole('button', { name: 'Balanced (5-8)' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Medium' }))
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy-balanced.png')
 
-        fireEvent.click(screen.getByRole('button', { name: 'Detailed (8-12)' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Detailed' }))
         expect(image.getAttribute('src')).toContain('subfolder-hierarchy-detailed.png')
     })
 

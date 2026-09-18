@@ -146,7 +146,7 @@ const mockAi = ({ schemaResponses, distort = null, provider = 'openrouter' }) =>
 }
 
 const runOrganizer = async (fetchMock, {
-    subfolderTarget = '5-8',
+    subfolderTarget = 'medium',
     provider = 'openrouter',
     input = bookmarks,
     categories = [...new Set(fixture.map(b => b.expected_category))],

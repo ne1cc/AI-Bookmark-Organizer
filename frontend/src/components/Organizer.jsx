@@ -37,14 +37,14 @@ export const SUGGESTED_ADDABLE_CATEGORIES = [
 
 const SUBFOLDER_EXPLAINER_IMAGES = {
     light: {
-        '3-5': subfolderHierarchyImage,
-        '5-8': subfolderHierarchyBalancedImage,
-        '8-12': subfolderHierarchyDetailedImage
+        compact: subfolderHierarchyImage,
+        medium: subfolderHierarchyBalancedImage,
+        detailed: subfolderHierarchyDetailedImage
     },
     dark: {
-        '3-5': subfolderHierarchyDarkImage,
-        '5-8': subfolderHierarchyBalancedDarkImage,
-        '8-12': subfolderHierarchyDetailedDarkImage
+        compact: subfolderHierarchyDarkImage,
+        medium: subfolderHierarchyBalancedDarkImage,
+        detailed: subfolderHierarchyDetailedDarkImage
     }
 };
 
@@ -221,17 +221,20 @@ export default function Organizer({ theme = 'light' }) {
         }
     })
 
-    // Subfolder Target Size
+    // Subfolder Target Size — the three choices are relative pressure levels,
+    // not folder-count promises: the AI measures each category's material per
+    // run and derives the depth from it. The diagrams illustrate the
+    // separation between the levels.
     const subfolderTargetOptions = useMemo(() => [
-        { id: '3-5', label: 'Compact (3-5)', description: 'Recommended — 3-5 clear subfolders per category, scaled to your collection size' },
-        { id: '5-8', label: 'Balanced (5-8)', description: 'A focused structure that grows with larger collections' },
-        { id: '8-12', label: 'Detailed (8-12)', description: 'Deep, specific grouping for large topic-rich collections' }
+        { id: 'compact', label: 'Compact', description: 'Recommended — fewer, broader subfolders; only the clearest groups' },
+        { id: 'medium', label: 'Medium', description: 'Balanced depth that grows with each category\'s material' },
+        { id: 'detailed', label: 'Detailed', description: 'Many specific subfolders so every bookmark has a precise home' }
     ], [])
     const [subfolderTarget, setSubfolderTarget] = useState(() => {
         try {
             return normalizeSubfolderTarget(localStorage.getItem('subfolderTarget'))
         } catch {
-            return '3-5'
+            return 'compact'
         }
     })
     const subfolderOptions = subfolderTargetOptions
