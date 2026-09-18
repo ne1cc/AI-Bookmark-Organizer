@@ -1,4 +1,4 @@
-import { subfolderBounds, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
+import { subfolderTier, naturalGroupCount, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
 import { SINK_NAMES } from './subcategoryPredicates';
 import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
@@ -219,15 +219,15 @@ function nearestSibling(group, kept) {
  * @param {Object} options - `subfolderTarget` granularity setting.
  * @returns {{ classified: Array, summary: Object }}
  */
-export function reconcileSubcategories(classified, schema, { subfolderTarget = '1-3' } = {}) {
+export function reconcileSubcategories(classified, schema, { subfolderTarget = 'medium' } = {}) {
     const summary = { proposedKept: 0, proposedFolded: 0, merged: 0, orphansFolded: 0, cappedFolded: 0 };
 
     if (!Array.isArray(classified) || classified.length === 0) {
         return { classified: Array.isArray(classified) ? classified : [], summary };
     }
 
-    const { max } = subfolderBounds(subfolderTarget);
-    const minCount = subfolderTarget === '1-3' || subfolderTarget === '6-10' || subfolderTarget === '10+' ? 2 : 3;
+    const tier = subfolderTier(subfolderTarget);
+    const minCount = tier.minCount;
 
     const schemaSubs = new Map(
         (Array.isArray(schema?.categories) ? schema.categories : [])
@@ -242,10 +242,14 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
 
     // category -> canonical key -> { spellings: Map<name, count>, items: [] }
     const byCategory = new Map();
+    // Real per-category population, sink subcategories included: the dynamic
+    // folder ceiling below is derived from it, not from a tier constant.
+    const categoryTotals = new Map();
 
     for (const item of classified) {
         const category = typeof item?.category === 'string' ? item.category : '';
         if (!category || EXEMPT_CATEGORIES.has(category.trim().toLowerCase())) continue;
+        categoryTotals.set(category, (categoryTotals.get(category) || 0) + 1);
         if (isSink(item.sub_category)) continue;
 
         const key = canonicalKey(item.sub_category);
@@ -266,6 +270,11 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
 
     for (const [category, groups] of byCategory) {
         const approved = schemaSubs.get(category.trim().toLowerCase()) || new Map();
+
+        // The same damped natural-scale curve the schema ask used, now on real
+        // counts: a category keeps at most twice its data-derived target, so
+        // runaway batch proposals fold into kin while honest structure survives.
+        const dynamicCap = Math.max(3, 2 * naturalGroupCount(categoryTotals.get(category) || 0, tier.weight));
 
         const resolved = [];
         for (const [key, group] of groups) {
@@ -302,7 +311,7 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
             const rescued = resolved
                 .filter(g => g.count >= 2)
                 .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-                .slice(0, max);
+                .slice(0, dynamicCap);
             if (rescued.length > 0) {
                 const rescuedSet = new Set(rescued);
                 survivors = rescued;
@@ -310,16 +319,16 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
             }
         }
 
-        // Rank survivors by size, then name, and enforce the per-category
-        // ceiling for this granularity setting.
+        // Rank survivors by size, then name, and enforce the data-derived
+        // per-category ceiling.
         survivors.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-        const kept = survivors.slice(0, max);
-        const capped = survivors.slice(max);
+        const kept = survivors.slice(0, dynamicCap);
+        const capped = survivors.slice(dynamicCap);
 
         // Overflow past the ceiling is still well-classified content, so it goes
         // to its nearest surviving kin on the same terms as an orphan. Dumping
         // it in "General" put more than half of a healthy category there at the
-        // '0-5' setting.
+        // Compact setting.
         for (const group of capped) {
             summary.cappedFolded++;
             if (group.isProposed) summary.proposedFolded++;

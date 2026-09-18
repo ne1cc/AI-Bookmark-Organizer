@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import {
     validateSchema,
-    subfolderBounds,
+    subfolderTier,
     salvagePartialJson,
     generateSchema,
     generateInferredSchema,
@@ -27,8 +27,8 @@ const orResponse = (content, finishReason = 'stop') => ({
 })
 
 // Five subcategories per category so the same fixture satisfies every
-// granularity floor, including the strictest ('10+' requires 5); three
-// categories so it also clears the breadth floor a narrowed (e.g. salvaged)
+// granularity floor, including the strictest (the Detailed tier requires 3);
+// three categories so it also clears the breadth floor a narrowed (e.g. salvaged)
 // response fails.
 const healthySchema = {
     categories: [
@@ -57,22 +57,30 @@ const manyBookmarks = Array.from({ length: 50 }, (_, i) => ({
     url: `https://example.com/${i}`
 }))
 
-describe('subfolderBounds', () => {
-    it('supports restrained realistic folder ranges', () => {
-        expect(subfolderBounds('1-3')).toEqual({ ask: [1, 3], min: 1, max: 3 })
-        expect(subfolderBounds('3-6')).toEqual({ ask: [3, 6], min: 2, max: 6 })
-        expect(subfolderBounds('6-10')).toEqual({ ask: [6, 10], min: 3, max: 10 })
+// Answers the census pre-call that precedes schema generation for multi-category
+// runs: every sample bookmark lands in category 0, which reproduces a single
+// dominant category (and therefore the full tier band for it).
+const censusAllInFirst = () => orResponse(JSON.stringify({ assignments: Array(manyBookmarks.length).fill(0) }))
+
+describe('subfolderTier', () => {
+    it('defines three relative-pressure tiers, not count contracts', () => {
+        expect(subfolderTier('compact')).toEqual({ id: 'compact', label: 'Compact', weight: 0.5, minCount: 3 })
+        expect(subfolderTier('medium')).toEqual({ id: 'medium', label: 'Medium', weight: 0.7, minCount: 3 })
+        expect(subfolderTier('detailed')).toEqual({ id: 'detailed', label: 'Detailed', weight: 1, minCount: 2 })
     })
 
-    it('maps each granularity setting to its ask range, floor and ceiling', () => {
-        expect(subfolderBounds('0-5')).toEqual({ ask: [3, 5], min: 2, max: 5 })
-        expect(subfolderBounds('5-10')).toEqual({ ask: [5, 10], min: 3, max: 10 })
-        expect(subfolderBounds('10+')).toEqual({ ask: [10, 14], min: 5, max: 16 })
+    it('maps retired granularity ids onto the closest current tier', () => {
+        expect(subfolderTier('1-3')).toEqual(subfolderTier('compact'))
+        expect(subfolderTier('0-5')).toEqual(subfolderTier('compact'))
+        expect(subfolderTier('3-6')).toEqual(subfolderTier('medium'))
+        expect(subfolderTier('5-10')).toEqual(subfolderTier('medium'))
+        expect(subfolderTier('6-10')).toEqual(subfolderTier('detailed'))
+        expect(subfolderTier('10+')).toEqual(subfolderTier('detailed'))
     })
 
-    it('falls back to the compact default for unknown or missing values', () => {
-        expect(subfolderBounds(undefined)).toEqual(subfolderBounds('1-3'))
-        expect(subfolderBounds('nonsense')).toEqual(subfolderBounds('1-3'))
+    it('falls back to the compact tier for unknown or missing values', () => {
+        expect(subfolderTier(undefined)).toEqual(subfolderTier('compact'))
+        expect(subfolderTier('nonsense')).toEqual(subfolderTier('compact'))
     })
 })
 
@@ -80,7 +88,7 @@ describe('validateSchema', () => {
     it.each([1, 2])('accepts %i selected categories for large collections while enforcing depth', (count) => {
         const categories = healthySchema.categories.slice(0, count)
         const expectedCategories = categories.map(c => c.name)
-        for (const subfolderTarget of ['0-5', '5-10', '10+']) {
+        for (const subfolderTarget of ['compact', 'medium', 'detailed']) {
             const options = { expectedCategories, subfolderTarget, bookmarkCount: 40 }
             expect(validateSchema({ categories }, options).issues).toEqual([])
             const thin = { categories: categories.map(c => ({ ...c, sub_categories: ['General', 'One Topic'] })) }
@@ -94,15 +102,17 @@ describe('validateSchema', () => {
     it('counts spacing and plural variants as one subcategory when validating depth', () => {
         const result = validateSchema({ categories: [{
             name: 'Tech', sub_categories: ['Developer Tools', 'Developer Tool', 'Developer  Tools']
-        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40, subfolderTarget: '5-10' })
+        }] }, { expectedCategories: ['Tech'], bookmarkCount: 40, subfolderTarget: 'medium' })
 
         expect(result.schema.categories[0].sub_categories).toEqual(['Developer Tools'])
         expect(result.ok).toBe(false)
-        expect(result.issues.join(' ')).toContain('"Tech" has 1')
+        // Rejection now comes from flatness (one subcategory for the category),
+        // not from a per-tier depth floor.
+        expect(result.issues.join(' ')).toMatch(/flat overall/)
     })
 
     it('accepts a schema meeting the granularity floor', () => {
-        const result = validateSchema(healthySchema, { subfolderTarget: '5-10', bookmarkCount: 500 })
+        const result = validateSchema(healthySchema, { subfolderTarget: 'medium', bookmarkCount: 500 })
 
         expect(result.ok).toBe(true)
         expect(result.issues).toEqual([])
@@ -116,7 +126,7 @@ describe('validateSchema', () => {
         const narrow = { categories: healthySchema.categories.slice(0, 2) }
         const expectedCategories = ['Finance & Crypto', 'Tech & Development', 'Work & Career', 'Design & Media', 'Travel & Lifestyle', 'Shopping & Tools']
 
-        const result = validateSchema(narrow, { subfolderTarget: '5-10', bookmarkCount: 4000, expectedCategories })
+        const result = validateSchema(narrow, { subfolderTarget: 'medium', bookmarkCount: 4000, expectedCategories })
 
         expect(result.ok).toBe(false)
         expect(result.issues.join(' ')).toMatch(/covered only 2 categories; at least 3 are needed/)
@@ -126,7 +136,7 @@ describe('validateSchema', () => {
         const narrow = { categories: healthySchema.categories }
         const tenCategories = Array.from({ length: 10 }, (_, i) => `Category ${i}`)
 
-        const result = validateSchema(narrow, { subfolderTarget: '5-10', bookmarkCount: 4000, expectedCategories: tenCategories })
+        const result = validateSchema(narrow, { subfolderTarget: 'medium', bookmarkCount: 4000, expectedCategories: tenCategories })
 
         expect(result.ok).toBe(false)
         expect(result.issues.join(' ')).toMatch(/at least 5 are needed/)
@@ -135,8 +145,8 @@ describe('validateSchema', () => {
     it('exempts a tiny collection from the breadth floor', () => {
         const oneCategory = { categories: [healthySchema.categories[0]] }
 
-        expect(validateSchema(oneCategory, { subfolderTarget: '5-10', bookmarkCount: 12 }).ok).toBe(true)
-        expect(validateSchema(oneCategory, { subfolderTarget: '5-10', bookmarkCount: 4000 }).ok).toBe(false)
+        expect(validateSchema(oneCategory, { subfolderTarget: 'medium', bookmarkCount: 12 }).ok).toBe(true)
+        expect(validateSchema(oneCategory, { subfolderTarget: 'medium', bookmarkCount: 4000 }).ok).toBe(false)
     })
 
     it('rejects a response with no categories at all', () => {
@@ -154,10 +164,11 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(flat, { subfolderTarget: '5-10', bookmarkCount: 3000 })
+        const result = validateSchema(flat, { subfolderTarget: 'medium', bookmarkCount: 3000 })
 
         expect(result.ok).toBe(false)
-        expect(result.issues.join(' ')).toMatch(/at least 3 subcategories/)
+        expect(result.issues.join(' ')).toMatch(/every category needs at least one distinct, specific subcategory/)
+        expect(result.issues.join(' ')).toMatch(/"Work & Career" has 0/)
     })
 
     it('treats a schema of nothing but filler names as flat', () => {
@@ -168,14 +179,14 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(filler, { subfolderTarget: '5-10', bookmarkCount: 3000 })
+        const result = validateSchema(filler, { subfolderTarget: 'medium', bookmarkCount: 3000 })
 
         expect(result.ok).toBe(false)
         // Filler names are stripped, so both categories read as empty.
         expect(result.schema.categories.every(c => c.sub_categories.length === 0)).toBe(true)
     })
 
-    it('enforces a different floor per granularity setting', () => {
+    it('accepts a thin-but-alive schema at every tier — the ask is pressure, not a gate', () => {
         const twoSubs = {
             categories: [
                 { name: 'Tech', sub_categories: ['Web Dev', 'AI'] },
@@ -184,16 +195,16 @@ describe('validateSchema', () => {
             ]
         }
 
-        expect(validateSchema(twoSubs, { subfolderTarget: '0-5', bookmarkCount: 3000 }).ok).toBe(true)
-        expect(validateSchema(twoSubs, { subfolderTarget: '5-10', bookmarkCount: 3000 }).ok).toBe(false)
-        expect(validateSchema(twoSubs, { subfolderTarget: '10+', bookmarkCount: 3000 }).ok).toBe(false)
+        expect(validateSchema(twoSubs, { subfolderTarget: 'compact', bookmarkCount: 3000 }).ok).toBe(true)
+        expect(validateSchema(twoSubs, { subfolderTarget: 'medium', bookmarkCount: 3000 }).ok).toBe(true)
+        expect(validateSchema(twoSubs, { subfolderTarget: 'detailed', bookmarkCount: 3000 }).ok).toBe(true)
     })
 
     it('relaxes the floor and the flatness check for tiny collections', () => {
         const oneSub = { categories: [{ name: 'Tech', sub_categories: ['Coding'] }] }
 
-        expect(validateSchema(oneSub, { subfolderTarget: '10+', bookmarkCount: 12 }).ok).toBe(true)
-        expect(validateSchema(oneSub, { subfolderTarget: '10+', bookmarkCount: 3000 }).ok).toBe(false)
+        expect(validateSchema(oneSub, { subfolderTarget: 'detailed', bookmarkCount: 12 }).ok).toBe(true)
+        expect(validateSchema(oneSub, { subfolderTarget: 'detailed', bookmarkCount: 3000 }).ok).toBe(false)
     })
 
     it('exempts catch-all categories from the subcategory floor', () => {
@@ -206,7 +217,7 @@ describe('validateSchema', () => {
         }
 
         const result = validateSchema(withCatchAll, {
-            subfolderTarget: '5-10',
+            subfolderTarget: 'medium',
             bookmarkCount: 3000,
             expectedCategories: withCatchAll.categories.map(category => category.name)
         })
@@ -233,7 +244,7 @@ describe('validateSchema', () => {
                     { name: 'Archive', sub_categories: [] }
                 ]
             },
-            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+            { subfolderTarget: 'medium', bookmarkCount: 3000, expectedCategories: null }
         )
 
         expect(result.ok).toBe(false)
@@ -272,7 +283,7 @@ describe('validateSchema', () => {
                     }
                 ]
             },
-            { subfolderTarget: '5-10', bookmarkCount: 3000, expectedCategories: null }
+            { subfolderTarget: 'medium', bookmarkCount: 3000, expectedCategories: null }
         )
 
         expect(result.ok).toBe(false)
@@ -296,7 +307,7 @@ describe('validateSchema', () => {
         }
 
         const result = validateSchema(manualSchema, {
-            subfolderTarget: '5-10',
+            subfolderTarget: 'medium',
             bookmarkCount: 3000,
             expectedCategories: manualSchema.categories.map(category => category.name)
         })
@@ -332,10 +343,24 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(spread, { subfolderTarget: '0-5', bookmarkCount: 3000 })
+        const result = validateSchema(spread, { subfolderTarget: 'compact', bookmarkCount: 3000 })
 
         expect(result.ok).toBe(false)
         expect(result.issues.join(' ')).toMatch(/flat overall/)
+    })
+
+    it('accepts an under-ask schema without rejection — the ask is not a gate', () => {
+        // A sparse category returning one subcategory where richer ones return
+        // five is a legitimate answer; demanding tier depth from it is exactly
+        // what manufactures padded near-duplicate folders.
+        const sparse = {
+            categories: [
+                ...healthySchema.categories,
+                { name: 'Health', sub_categories: ['Fitness'] }
+            ]
+        }
+
+        expect(validateSchema(sparse, { subfolderTarget: 'medium', bookmarkCount: 3000 }).ok).toBe(true)
     })
 
     it('normalizes names, drops duplicates and drops a subcategory echoing its parent', () => {
@@ -350,7 +375,7 @@ describe('validateSchema', () => {
             ]
         }
 
-        const result = validateSchema(messy, { subfolderTarget: '0-5', bookmarkCount: 3000 })
+        const result = validateSchema(messy, { subfolderTarget: 'compact', bookmarkCount: 3000 })
 
         expect(result.schema.categories).toHaveLength(1)
         expect(result.schema.categories[0].name).toBe('Tech & Development')
@@ -415,20 +440,27 @@ describe('generateSchema validation and corrective retry', () => {
 
     it.each([1, 2])('accepts a healthy %i-category selected schema without corrective retries', async (count) => {
         const candidate = { categories: healthySchema.categories.slice(0, count) }
-        global.fetch = vi.fn(async () => orResponse(JSON.stringify(candidate)))
+        // Multi-category runs start with a census call; single-category runs skip it.
+        global.fetch = count > 1
+            ? vi.fn()
+                .mockImplementationOnce(async () => censusAllInFirst())
+                .mockImplementationOnce(async () => orResponse(JSON.stringify(candidate)))
+            : vi.fn(async () => orResponse(JSON.stringify(candidate)))
 
         const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', candidate.categories.map(c => c.name))
 
         expect(schema).toEqual(candidate)
-        expect(global.fetch).toHaveBeenCalledTimes(1)
+        expect(global.fetch).toHaveBeenCalledTimes(count > 1 ? 2 : 1)
     })
 
     it('returns the schema unchanged when the first response is already valid', async () => {
-        global.fetch = vi.fn(async () => orResponse(JSON.stringify(healthySchema)))
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async () => censusAllInFirst())
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, 'medium')
 
-        expect(global.fetch).toHaveBeenCalledTimes(1)
+        expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(schema.categories).toHaveLength(3)
         expect(schema.categories[0].sub_categories).toContain('Trading & Markets')
     })
@@ -443,7 +475,7 @@ describe('generateSchema validation and corrective retry', () => {
             ]
         })))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', selected, undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', selected, undefined, 'medium')
 
         expect(schema.categories.map(c => c.name)).toEqual(selected)
         expect(schema.categories[0].sub_categories).toEqual(['Trading & Markets', 'Crypto & Blockchain', 'Investing & Wealth'])
@@ -453,17 +485,19 @@ describe('generateSchema validation and corrective retry', () => {
     it('re-prompts once when the model returns a flat schema, and accepts the correction', async () => {
         const flat = { categories: [{ name: 'Tech', sub_categories: [] }, { name: 'Finance', sub_categories: [] }] }
         global.fetch = vi.fn()
+            .mockImplementationOnce(async () => censusAllInFirst())
             .mockImplementationOnce(async () => orResponse(JSON.stringify(flat)))
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', healthySchema.categories.map(c => c.name), undefined, 'medium')
 
-        expect(global.fetch).toHaveBeenCalledTimes(2)
+        expect(global.fetch).toHaveBeenCalledTimes(3)
         expect(schema.categories).toHaveLength(3)
 
-        const correctionPrompt = JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content
+        const correctionPrompt = JSON.parse(global.fetch.mock.calls[2][1].body).messages[1].content
         expect(correctionPrompt).toContain('CORRECTION REQUIRED')
-        expect(correctionPrompt).toMatch(/at least 5 distinct, specific subcategories/)
+        expect(correctionPrompt).toContain('PER-CATEGORY SUBFOLDER RANGES')
+        expect(correctionPrompt).toMatch(/at least the minimum of its own range/)
     })
 
     it('reports the correction attempt through onRetry', async () => {
@@ -473,7 +507,7 @@ describe('generateSchema validation and corrective retry', () => {
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
         const events = []
-        await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10', null, (e) => events.push(e))
+        await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, 'medium', null, (e) => events.push(e))
 
         expect(events).toHaveLength(1)
         expect(events[0].isSchemaCorrection).toBe(true)
@@ -485,7 +519,7 @@ describe('generateSchema validation and corrective retry', () => {
         global.fetch = vi.fn(async () => orResponse(JSON.stringify(flat)))
 
         await expect(
-            generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+            generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, 'medium')
         ).rejects.toMatchObject({
             schemaInvalid: true,
             partialSchema: { categories: [{ name: 'Tech', sub_categories: [] }, { name: 'Finance', sub_categories: [] }] }
@@ -494,22 +528,69 @@ describe('generateSchema validation and corrective retry', () => {
         expect(global.fetch).toHaveBeenCalledTimes(2)
     })
 
-    it('asks for the granularity-appropriate subcategory range and forbids filler names', async () => {
+    it('names a per-category range even without a census (uniform shares)', async () => {
+        // Single-category runs skip the census; the plan then treats the whole
+        // collection as one category's population on the damped natural-scale
+        // curve: at N=50 → compact k=3 [1,5], medium k=4 [2,6], detailed k=5
+        // [3,7]; at N=4000 → compact k=9 [7,11].
         const cases = [
-            ['0-5', 'MUST define 3-5 concrete'],
-            ['5-10', 'MUST define 5-10 concrete'],
-            ['10+', 'MUST define 10-14 concrete']
+            ['compact', 50, 'Tech: 1-5'],
+            ['medium', 50, 'Tech: 2-6'],
+            ['detailed', 50, 'Tech: 3-7'],
+            ['compact', 4000, 'Tech: 7-11']
         ]
 
-        for (const [target, expected] of cases) {
+        for (const [target, count, expected] of cases) {
+            const bookmarks = Array.from({ length: count }, (_, i) => ({
+                title: `Bookmark ${i}`,
+                url: `https://example.com/${i}`
+            }))
             global.fetch = vi.fn(async () => orResponse(JSON.stringify(healthySchema)))
-            await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, target)
+            await generateSchema(bookmarks, 'sk-or-test-key', ['Tech'], undefined, target)
 
             const prompt = JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content
+            expect(prompt).toContain('PER-CATEGORY SUBFOLDER RANGES')
             expect(prompt).toContain(expected)
+            expect(prompt).toContain("within that category's own range")
+            expect(prompt).toContain('bands, not quotas')
             expect(prompt).toContain('is INVALID and will be rejected')
             expect(prompt).toMatch(/Never use "General", "Other", "Misc" or "Various" as a subcategory name/)
         }
+    })
+
+    it('shapes the per-category ask from measured census shares when the collection is lopsided', async () => {
+        // 3990 of 4000 bookmarks in Finance; Health and Travel hold 5 each.
+        // The dominant category earns the full band, the near-empty ones are
+        // asked for minimal structure instead of padded near-duplicates.
+        const hugeBookmarks = Array.from({ length: 4000 }, (_, i) => ({
+            title: `Bookmark ${i}`,
+            url: `https://example.com/${i}`
+        }))
+        const names = ['Finance & Crypto', 'Health & Fitness', 'Travel']
+
+        global.fetch = vi.fn()
+            .mockImplementationOnce(async (url, options) => {
+                const prompt = JSON.parse(options.body).messages[1].content
+                const marker = 'BOOKMARKS (in order):'
+                const sample = JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length, prompt.lastIndexOf(']') + 1).trim())
+                const assignments = sample.map(({ url: bookmarkUrl }) => {
+                    const i = Number(bookmarkUrl.split('/').pop())
+                    return i < 3990 ? 0 : i % 2 === 0 ? 1 : 2
+                })
+                return orResponse(JSON.stringify({ assignments }))
+            })
+            .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
+
+        await generateSchema(hugeBookmarks, 'sk-or-test-key', names, undefined, 'medium')
+
+        const prompt = JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content
+        expect(prompt).toContain('PER-CATEGORY SUBFOLDER RANGES')
+        // Damped natural scale: medium target 12, band ±2.
+        expect(prompt).toContain('Finance & Crypto: 10-14')
+        // Zero sample presence → zero material → minimal structure.
+        expect(prompt).toContain('Health & Fitness: exactly 1')
+        expect(prompt).toContain('Travel: exactly 1')
+        expect(prompt).toContain("within that category's own range")
     })
 
     it('requests the raised schema token ceiling', async () => {
@@ -734,7 +815,7 @@ describe('generateInferredSchema', () => {
         const flat = { categories: [{ name: 'Links', sub_categories: [] }] }
         global.fetch = vi.fn(async () => orResponse(JSON.stringify(flat)))
 
-        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, '5-10'))
+        await expect(generateInferredSchema(manyBookmarks, 'sk-or-test-key', undefined, 'medium'))
             .rejects.toMatchObject({ schemaInvalid: true })
         expect(global.fetch).toHaveBeenCalledTimes(2)
     })
@@ -750,7 +831,7 @@ describe('generateInferredSchema', () => {
             manyBookmarks,
             'sk-or-test-key',
             undefined,
-            '5-10',
+            'medium',
             null,
             (event) => events.push(event)
         )
@@ -956,7 +1037,7 @@ describe('truncation handling differs between schema design and classification',
             + '{"name":"Heal'
         global.fetch = vi.fn(async () => orResponse(truncated, 'length'))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Finance'], undefined, '0-5')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Finance'], undefined, 'compact')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
         expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
@@ -970,13 +1051,14 @@ describe('truncation handling differs between schema design and classification',
         const sixCategories = ['Finance', 'Tech', 'Travel', 'Health', 'Design', 'Shopping']
 
         global.fetch = vi.fn()
+            .mockImplementationOnce(async () => censusAllInFirst())
             .mockImplementationOnce(async () => orResponse(truncated, 'length'))
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', sixCategories, undefined, '0-5')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', sixCategories, undefined, 'compact')
 
-        expect(global.fetch).toHaveBeenCalledTimes(2)
-        expect(JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content)
+        expect(global.fetch).toHaveBeenCalledTimes(3)
+        expect(JSON.parse(global.fetch.mock.calls[2][1].body).messages[1].content)
             .toMatch(/covered only 2 categories; at least 3 are needed/)
         expect(schema.categories.map(c => c.name)).toEqual(sixCategories)
     })
@@ -986,7 +1068,7 @@ describe('truncation handling differs between schema design and classification',
             .mockImplementationOnce(async () => orResponse('totally unparseable', 'length'))
             .mockImplementationOnce(async () => orResponse(JSON.stringify(healthySchema)))
 
-        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, 'sk-or-test-key', ['Tech'], undefined, 'medium')
 
         expect(global.fetch).toHaveBeenCalledTimes(2)
         expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
@@ -1046,7 +1128,7 @@ describe('native Gemini response path', () => {
             + '{"name":"Heal'
         global.fetch = vi.fn(async () => geminiResponse([truncated], 'MAX_TOKENS'))
 
-        const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Finance'], undefined, '0-5')
+        const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Finance'], undefined, 'compact')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
         expect(schema.categories.map(c => c.name)).toEqual(['Finance'])
@@ -1057,7 +1139,7 @@ describe('native Gemini response path', () => {
         const parts = [whole.slice(0, 40), whole.slice(40, 200), whole.slice(200)]
         global.fetch = vi.fn(async () => geminiResponse(parts))
 
-        const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, '5-10')
+        const schema = await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, 'medium')
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
         expect(schema.categories.map(c => c.name)).toEqual(['Tech'])
@@ -1071,7 +1153,7 @@ describe('native Gemini response path', () => {
         }))
 
         await expect(
-            generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, '5-10')
+            generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], undefined, 'medium')
         ).rejects.toThrow(/Gemini blocked the request \(SAFETY\)/)
 
         expect(global.fetch).toHaveBeenCalledTimes(1)
@@ -1080,7 +1162,7 @@ describe('native Gemini response path', () => {
     it('sends the bare model id and a JSON generationConfig', async () => {
         global.fetch = vi.fn(async () => geminiResponse([JSON.stringify(healthySchema)]))
 
-        await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], 'google/gemini-3.1-flash-lite', '5-10')
+        await generateSchema(manyBookmarks, GEMINI_KEY, ['Tech'], 'google/gemini-3.1-flash-lite', 'medium')
 
         const [url, options] = global.fetch.mock.calls[0]
         expect(url).toContain('/v1beta/models/gemini-3.1-flash-lite:generateContent')

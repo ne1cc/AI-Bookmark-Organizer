@@ -273,6 +273,9 @@ body {
 
 .header-title-block {
   text-align: center;
+  /* Breathing room between the toolbar row and the title — the 0.75rem
+     toolbar margin alone read as cramped in the side panel. */
+  padding-top: clamp(0.5rem, 2cqi, 1rem);
 }
 
 .header-title {
