@@ -77,4 +77,24 @@ adaptive within each tier, and made it population-aware per category (census-mea
   build:all green.
 - Shipped: https://github.com/ne1cc/AI-Bookmark-Organizer/pull/77
   (branch `t3code/audit-subcategory-designation`, commit `27f87ba`).
+- Styling pass (commit 59d9884): `.header-title-block` padding-top
+  clamp(0.5rem, 2cqi, 1rem) — toolbar→title gap 12px → 24px, verified via Playwright.
+
+## Session 3 — strict cutoffs removed (commit c95e231)
+- Tiers are now relative pressure weights: compact 0.5, medium 0.7, detailed 1.0
+  (minCount folder-size floors stay: 3/3/2). Ids are `compact`/`medium`/`detailed`;
+  ALL retired numeric ids map in LEGACY_SUBFOLDER_TARGETS.
+- `categorySubfolderPlan(shares, N, target)`: k = round(w × √n̂), band = ±2 clamped to
+  [1, ⌊n̂/minCount⌋]. Removed adaptiveSubfolderAsk/collectionSpread/requiredSubfolderMin/
+  buildCategoryBands — no log curve, no tier min/max constants anywhere.
+- validateSchema: per-tier depth floors deleted; rejects only degenerate schemas
+  (0 real subs, flat-overall, narrow breadth). subfolderTarget no longer a param.
+- reconcile: fixed tier ceiling replaced by dynamicCap = max(3, 2×round(w×√n_c)) from
+  real per-category counts (categoryTotals includes sink items).
+- Census fallback: uniform shares (1/K) when census fails/skipped; K=0 → qualitative
+  ask (no numbers) — also used by generateInferredSchema.
+- UI: buttons show Compact / Medium / Detailed with no numbers; diagrams unchanged.
+- Gotcha for future sweeps: perl pattern '10+' matches bookmark id '10' (regex +);
+  escape metacharacters when sweeping ids vs tier ids.
+- Verification: 433 tests, lint 0 errors, build:all green, UI verified via Playwright.
 - Stored prefs migrate transparently: old ids normalize on load (UI + engine).

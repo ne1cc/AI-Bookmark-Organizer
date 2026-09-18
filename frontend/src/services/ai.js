@@ -570,13 +570,30 @@ export function dedupeCategoryNames(categories) {
     return names;
 }
 
+// The natural grouping curve. √population is the right shape for typical
+// categories (folder size grows as the collection grows) but grows far too
+// fast once a category reaches the thousands — a 40k-bookmark collection
+// would ask for ~50 subfolders per category, hundreds of folders overall.
+// Damping the √ with a logarithm keeps the curve rising forever (no ceiling,
+// Detailed stays open-ended) while taming the top end. A = 8 holds the fuzzy
+// tier zones over the population ranges users actually have: Compact asks
+// ~1-5 for categories up to a few hundred bookmarks, Medium ~4-8 from ~70 to
+// ~650, Detailed 8+ above ~190.
+const NATURAL_SCALE_DAMPING = 8;
+
+export function naturalGroupCount(population, weight) {
+    if (!Number.isFinite(population) || population <= 0) return 1;
+    const sqrt = Math.sqrt(population);
+    return Math.max(1, Math.round(weight * NATURAL_SCALE_DAMPING * Math.log(1 + sqrt / NATURAL_SCALE_DAMPING)));
+}
+
 // Per-category subfolder ask, computed fresh for every run from measured data.
 //
 // n̂_c = share_c × N is the category's estimated population (the census
-// measures the shares). The natural number of groups in n̂ items scales with
-// √n̂ — folder size then grows sublinearly as a collection grows — and the
-// tier weight turns that natural scale into relative pressure: Compact asks
-// for about half of it, Detailed for all of it.
+// measures the shares). The natural number of groups in n̂ items follows the
+// damped curve above, and the tier weight turns that natural scale into
+// relative pressure: Compact asks for about half of it, Detailed for all of
+// it.
 //
 // The only bounds are arithmetic, not tier constants: a category can never be
 // asked for more folders than its population can fill (⌊n̂ / minCount⌋), and
@@ -592,7 +609,7 @@ export function categorySubfolderPlan(shares, bookmarkCount, subfolderTarget) {
         const weight = Number.isFinite(share) && share > 0 ? share : 0;
         const nHat = weight * bookmarkCount;
         const popMax = Math.floor(nHat / tier.minCount);
-        const k = Math.max(1, Math.min(popMax || 1, Math.round(tier.weight * Math.sqrt(nHat))));
+        const k = Math.max(1, Math.min(popMax || 1, naturalGroupCount(nHat, tier.weight)));
         const lower = Math.max(1, k - 2);
         const upper = Math.max(k, Math.min(k + 2, popMax));
         return { lower, upper };

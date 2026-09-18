@@ -1,4 +1,4 @@
-import { subfolderTier, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
+import { subfolderTier, naturalGroupCount, DETAIL_MIN_BOOKMARKS, DETAIL_MIN_FOLDER_SIZE } from './ai';
 import { SINK_NAMES } from './subcategoryPredicates';
 import { canonicalKey, shouldCreateDetailFolder } from './subcategoryIdentity';
 
@@ -271,13 +271,10 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
     for (const [category, groups] of byCategory) {
         const approved = schemaSubs.get(category.trim().toLowerCase()) || new Map();
 
-        // The same relative formula the schema ask used, now on real counts:
-        // a category keeps at most twice its data-derived target, so runaway
-        // batch proposals fold into kin while honest structure survives.
-        const dynamicCap = Math.max(
-            3,
-            2 * Math.round(tier.weight * Math.sqrt(categoryTotals.get(category) || 0))
-        );
+        // The same damped natural-scale curve the schema ask used, now on real
+        // counts: a category keeps at most twice its data-derived target, so
+        // runaway batch proposals fold into kin while honest structure survives.
+        const dynamicCap = Math.max(3, 2 * naturalGroupCount(categoryTotals.get(category) || 0, tier.weight));
 
         const resolved = [];
         for (const [key, group] of groups) {

@@ -4,6 +4,7 @@ import {
     categorySubfolderPlan,
     censusShares,
     dedupeCategoryNames,
+    naturalGroupCount,
     normalizeSubfolderTarget,
     subfolderTier
 } from './ai'
@@ -50,25 +51,36 @@ describe('dedupeCategoryNames', () => {
     })
 })
 
-describe('categorySubfolderPlan', () => {
-    it('derives the ask from the category population, tier-weighted', () => {
-        // sqrt(4000) ≈ 63.2: medium asks for ~44 folders on a category that
-        // dominates a 4000-bookmark collection, compact for ~32.
-        expect(categorySubfolderPlan([1], 4000, 'medium')[0]).toEqual({ lower: 42, upper: 46 })
-        expect(categorySubfolderPlan([1], 4000, 'compact')[0]).toEqual({ lower: 30, upper: 34 })
-        expect(categorySubfolderPlan([1], 4000, 'detailed')[0]).toEqual({ lower: 61, upper: 65 })
+describe('naturalGroupCount', () => {
+    it('follows the damped natural-scale curve, open-ended but slow at the top', () => {
+        // √-like growth in the typical range…
+        expect(naturalGroupCount(25, 1)).toBe(4)
+        expect(naturalGroupCount(100, 1)).toBe(6)
+        // …logarithmic damping where √ would explode (a 40k-bookmark
+        // dominant category must not ask for ~50 folders per category).
+        expect(naturalGroupCount(4000, 1)).toBe(17)
+        expect(naturalGroupCount(40000, 1)).toBe(26)
+        expect(naturalGroupCount(0, 1)).toBe(1)
     })
 
-    it('lands typical categories in the fuzzy tier spirit (~1-5 / ~4-8 / ~8+)', () => {
-        const mid = (n, tier) => {
-            const { lower, upper } = categorySubfolderPlan([1], n, tier)[0]
-            return (lower + upper) / 2
-        }
-        // n=64: sqrt = 8 — the tier weights put the target near 4 / 6 / 8.
-        expect(mid(64, 'compact')).toBeLessThanOrEqual(5)
-        expect(mid(64, 'medium')).toBeGreaterThanOrEqual(4)
-        expect(mid(64, 'medium')).toBeLessThanOrEqual(8)
-        expect(mid(64, 'detailed')).toBeGreaterThanOrEqual(8)
+    it('holds the fuzzy tier zones over realistic population ranges', () => {
+        // Medium ~4-8 from ~70 to ~650 bookmarks.
+        expect(naturalGroupCount(70, 0.7)).toBe(4)
+        expect(naturalGroupCount(100, 0.7)).toBe(5)
+        expect(naturalGroupCount(400, 0.7)).toBe(7)
+        expect(naturalGroupCount(650, 0.7)).toBe(8)
+        // Detailed 8+ above ~190, Compact ~1-5 up to a few hundred.
+        expect(naturalGroupCount(200, 1)).toBe(8)
+        expect(naturalGroupCount(400, 0.5)).toBe(5)
+        expect(naturalGroupCount(100, 0.5)).toBe(3)
+    })
+})
+
+describe('categorySubfolderPlan', () => {
+    it('derives the ask from the category population, tier-weighted', () => {
+        expect(categorySubfolderPlan([1], 4000, 'medium')[0]).toEqual({ lower: 10, upper: 14 })
+        expect(categorySubfolderPlan([1], 4000, 'compact')[0]).toEqual({ lower: 7, upper: 11 })
+        expect(categorySubfolderPlan([1], 4000, 'detailed')[0]).toEqual({ lower: 15, upper: 19 })
     })
 
     it('scales monotonically with population and tier weight', () => {

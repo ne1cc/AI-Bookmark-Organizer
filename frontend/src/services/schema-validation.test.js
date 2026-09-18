@@ -530,14 +530,14 @@ describe('generateSchema validation and corrective retry', () => {
 
     it('names a per-category range even without a census (uniform shares)', async () => {
         // Single-category runs skip the census; the plan then treats the whole
-        // collection as one category's population and scales with sqrt(N).
-        // sqrt(50) ≈ 7.07 → compact k=4 [2,6], medium k=5 [3,7], detailed k=7 [5,9];
-        // sqrt(4000) ≈ 63.2 → compact k=32 [30,34].
+        // collection as one category's population on the damped natural-scale
+        // curve: at N=50 → compact k=3 [1,5], medium k=4 [2,6], detailed k=5
+        // [3,7]; at N=4000 → compact k=9 [7,11].
         const cases = [
-            ['compact', 50, 'Tech: 2-6'],
-            ['medium', 50, 'Tech: 3-7'],
-            ['detailed', 50, 'Tech: 5-9'],
-            ['compact', 4000, 'Tech: 30-34']
+            ['compact', 50, 'Tech: 1-5'],
+            ['medium', 50, 'Tech: 2-6'],
+            ['detailed', 50, 'Tech: 3-7'],
+            ['compact', 4000, 'Tech: 7-11']
         ]
 
         for (const [target, count, expected] of cases) {
@@ -585,8 +585,8 @@ describe('generateSchema validation and corrective retry', () => {
 
         const prompt = JSON.parse(global.fetch.mock.calls[1][1].body).messages[1].content
         expect(prompt).toContain('PER-CATEGORY SUBFOLDER RANGES')
-        // sqrt(4000) ≈ 63.2, medium weight 0.7 → target 44, band ±2.
-        expect(prompt).toContain('Finance & Crypto: 42-46')
+        // Damped natural scale: medium target 12, band ±2.
+        expect(prompt).toContain('Finance & Crypto: 10-14')
         // Zero sample presence → zero material → minimal structure.
         expect(prompt).toContain('Health & Fitness: exactly 1')
         expect(prompt).toContain('Travel: exactly 1')

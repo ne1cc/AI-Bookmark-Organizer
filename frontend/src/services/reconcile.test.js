@@ -137,7 +137,7 @@ describe('reconcileSubcategories', () => {
     it('caps subcategories per category, folding the overflow into its nearest kin', () => {
         const classified = []
         // 26 distinct viable subcategories of 4 bookmarks each: population 104
-        // → dynamic cap = 2 × round(0.7 × √104) = 14 for 'medium'.
+        // → dynamic cap = 2 × naturalGroupCount(104) = 10 for 'medium'.
         for (let i = 0; i < 26; i++) {
             classified.push(...items('Tech', `Topic ${String.fromCharCode(65 + i)}`, 4, { proposed: true }))
         }
@@ -145,18 +145,18 @@ describe('reconcileSubcategories', () => {
         const result = reconcileSubcategories(classified, schema, { subfolderTarget: 'medium' })
 
         const distinct = new Set(subsIn(result, 'Tech'))
-        expect(distinct.size).toBe(14)
+        expect(distinct.size).toBe(10)
         expect(distinct).not.toContain('General')
         expect(distinct).toContain('Topic A')
         expect(distinct).not.toContain('Topic Z')
-        expect(result.summary.cappedFolded).toBe(12)
+        expect(result.summary.cappedFolded).toBe(16)
     })
 
     it('sends capped overflow to General only when it shares no token with a survivor', () => {
         const classified = []
         // 20 topics of 4 bookmarks each plus Knitting Patterns (3): population
-        // 83 → dynamic cap = 2 × round(0.7 × √83) = 12 for 'medium'. The cap
-        // keeps the 12 largest groups; topics M–Z overflow but share the token
+        // 83 → dynamic cap = 2 × naturalGroupCount(83) = 8 for 'medium'. The cap
+        // keeps the 8 largest groups; topics I–T overflow but share the token
         // "topic" with a survivor, so they fold into it; Knitting Patterns
         // shares nothing and goes to General.
         for (let i = 0; i < 20; i++) {
@@ -167,7 +167,7 @@ describe('reconcileSubcategories', () => {
         const result = reconcileSubcategories(classified, schema, { subfolderTarget: 'medium' })
 
         expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(3)
-        expect(result.summary.cappedFolded).toBe(9)
+        expect(result.summary.cappedFolded).toBe(13)
     })
 
     it('never dissolves a whole category when no subcategory clears the floor', () => {
