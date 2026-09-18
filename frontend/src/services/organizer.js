@@ -5,6 +5,11 @@ import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailC
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
+// Detail-classification chunks are small, uniform requests, so they run
+// through a worker pool with the same concurrency as the main classification
+// pass instead of one group (and one chunk) at a time.
+const DETAIL_CLASSIFICATION_CONCURRENCY = 4;
+
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
 export async function checkUrlReachable(url, timeoutMs = 2500) {
@@ -345,13 +350,21 @@ export class OrganizerService {
     }
 
     async removeDoomedDuplicates() {
-        for (const node of this.doomedDuplicates || []) {
+        // Chunked like moveItems: parallel removes within a chunk, sequential
+        // chunks, so hundreds of duplicates do not delete one round-trip at a
+        // time.
+        const WRITE_CHUNK_SIZE = 15;
+        const doomed = this.doomedDuplicates || [];
+        for (let i = 0; i < doomed.length; i += WRITE_CHUNK_SIZE) {
             if (this.isCancelled) break;
-            try {
-                await removeBookmark(String(node.id));
-            } catch (err) {
-                this.failedMoves.push({ title: node.title, reason: `duplicate remove failed: ${err?.message || err}` });
-            }
+            const chunk = doomed.slice(i, i + WRITE_CHUNK_SIZE);
+            await Promise.all(chunk.map(async (node) => {
+                try {
+                    await removeBookmark(String(node.id));
+                } catch (err) {
+                    this.failedMoves.push({ title: node.title, reason: `duplicate remove failed: ${err?.message || err}` });
+                }
+            }));
         }
     }
 
@@ -859,9 +872,7 @@ export class OrganizerService {
             if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
                 this.onProgress({
                     status: 'info',
-                    message: inferenceMode
-                        ? `Large collection: analyzing all ${activeLinks.length.toLocaleString()} bookmarks to infer the folder structure. All bookmarks will then be classified.`
-                        : `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
+                    message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
                 });
             }
 
@@ -1120,38 +1131,63 @@ export class OrganizerService {
                             message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
                         });
                     }
-                    const detailed = [];
+                    // Flat task list of (group, chunk) pairs so a worker pool
+                    // can overlap them: group order and within-group chunk
+                    // order are preserved by task index, but groups no longer
+                    // wait for each other's round-trips.
+                    const detailTasks = [];
                     for (const [key, names] of canonicalDetailSchemas) {
-                        if (this.isCancelled) break;
                         const records = eligibleGroups.get(key) || [];
-                        try {
-                            for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
-                                const chunk = records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE);
-                                const detailChunkLabel = `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`;
-                                detailed.push(...retainDetailRunOrdinals(
+                        for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
+                            detailTasks.push({
+                                key,
+                                names,
+                                chunk: records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE),
+                                label: `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`
+                            });
+                        }
+                    }
+
+                    const detailed = new Array(detailTasks.length);
+                    let detailTaskIdx = 0;
+                    const detailWorker = async () => {
+                        while (detailTaskIdx < detailTasks.length && !this.isCancelled) {
+                            const taskIdx = detailTaskIdx++;
+                            const { key, names, chunk, label } = detailTasks[taskIdx];
+                            try {
+                                detailed[taskIdx] = retainDetailRunOrdinals(
                                     await classifyDetailBatch(chunk, this.apiKey, names, this.model,
                                         () => this.isCancelled,
                                         ({ delayMs, isRateLimit }) => this.onProgress({
                                             status: 'warning',
                                             message: isRateLimit
-                                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${detailChunkLabel}...`
-                                                : `Network issue on detail chunk ${detailChunkLabel}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
+                                                : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
                                         })
                                     ),
                                     chunk
-                                ));
+                                );
+                            } catch (err) {
+                                if (this.isCancelled || err?.isCancelled) throw err;
+                                detailClassificationFailures++;
+                                this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
                             }
-                        } catch (err) {
-                            if (this.isCancelled || err?.isCancelled) throw err;
-                            detailClassificationFailures++;
-                            this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
                         }
+                    };
+
+                    const detailWorkers = [];
+                    for (let w = 0; w < Math.min(DETAIL_CLASSIFICATION_CONCURRENCY, detailTasks.length); w++) {
+                        detailWorkers.push(detailWorker());
                     }
+                    await Promise.all(detailWorkers);
                     if (this.isCancelled) {
                         this.onProgress({ status: 'warning', message: 'Process cancelled.' });
                         return null;
                     }
-                    const detailAssignments = new Map(detailed.map(item => [detailAssignmentKey(item), item.detail_category]));
+                    // Each task wrote an array; flatten (holes from failed
+                    // tasks drop out) back into the assignment map the way the
+                    // previous per-group push(...items) spread did.
+                    const detailAssignments = new Map(detailed.flat().filter(Boolean).map(item => [detailAssignmentKey(item), item.detail_category]));
                     classifiedActive = classifiedActive.map(item => ({
                         ...item,
                         detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
