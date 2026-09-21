@@ -69,8 +69,8 @@ Requires Chrome 114 or newer.
 ### Build from Source
 
 ```bash
-git clone https://github.com/ne1cc/Bookmark-Organizer-Chrome-Extension.git
-cd Bookmark-Organizer-Chrome-Extension/frontend
+git clone https://github.com/ne1cc/AI-Bookmark-Organizer.git
+cd AI-Bookmark-Organizer/frontend
 npm install
 
 # Build both browsers:
@@ -114,6 +114,13 @@ Your data stays private:
 ### v1.4.1
 
 - Category Hierarchy Guidance: Clarified that chosen categories are the root-level folders and that subfolders are always generated automatically inside each root folder.
+
+### v1.4.0
+
+- Auto-Generated Category Inference: Automatically infers broad root categories from your bookmark collection when manual categories are not selected.
+- Adaptive Three-Level Organization: Automatically groups large subcategories (6+ bookmarks) into focused third-level detail folders with robust two-level fallback.
+- Background Reconnect & Recovery: Full state resynchronization and download recovery if the side panel or sidebar is closed and reopened during organization.
+- Default Dark Mode: New extension installations default to dark theme for enhanced visual comfort.
 
 ### v1.3.0
 
