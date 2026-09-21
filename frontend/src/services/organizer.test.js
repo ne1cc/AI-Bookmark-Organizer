@@ -82,7 +82,7 @@ describe('FakeBookmarkStore', () => {
         await store.move('10', { parentId: 'f1' })
         expect(store.node('10').parentId).toBe('f1')
         expect(store.node('10').dateAdded).toBe(1500000000000)
-        expect(store.childrenOf('1')).resolves.toHaveLength(0)
+        await expect(store.childrenOf('1')).resolves.toHaveLength(0)
     })
 })
 

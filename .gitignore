@@ -7,7 +7,6 @@ node_modules/
 # Workflow and Superpowers artifacts
 .github/workflows/
 .superpowers/
-/.superpowers/sdd/
 docs/superpowers/
 
 # Generated Data
@@ -25,14 +24,10 @@ dist/
 CHANGELOG.md
 DEBUGGING_GUIDE.md
 IMPLEMENTATION_PLAN.md
-TESTING.md
 STORE_LISTING.md
 DEPLOYMENT_PLAN.md
 DEPLOYMENT_GUIDE.md
 HOSTING_GUIDE.md
 PRIVACY_FORM.md
 debug_output/
-
-
-
 session-report*.html
