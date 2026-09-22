@@ -497,12 +497,10 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
 }
 
 // Schema design — inferred or fixed-category — only needs a representative
-// spread of the collection, not every bookmark. A sample of 400 bookmarks
-// maximizes topical coverage while keeping the prompt (~15K tokens) safely
-// inside even the smallest OpenRouter model context windows; themes the
+// spread of the collection, not every bookmark. A sample of 1,000 bookmarks maximizes topical coverage while keeping the prompt (~32K tokens) safely inside Gemini API free-tier rate limits (1M TPM for Flash models, 30s timeout) and OpenRouter context windows; themes the
 // sample misses are still placed by classification's proposed-subcategory
 // rule and reconciliation.
-export const SCHEMA_SAMPLE_LIMIT = 400;
+export const SCHEMA_SAMPLE_LIMIT = 1000;
 
 // The schema JSON is small (8-10 categories x up to ~14 subcategories), but the
 // old 8000 ceiling left no headroom: a run that overshot it was flagged
@@ -1004,12 +1002,13 @@ export async function generateInferredSchema(
     model = 'google/gemini-3.1-flash-lite',
     subfolderTarget = 'medium',
     isCancelled = null,
-    onRetry = null
+    onRetry = null,
+    sampleLimit = SCHEMA_SAMPLE_LIMIT
 ) {
     // No fixed category list to census: the model invents the top level, so
     // the ask stays qualitative and reconciliation provides the per-category
     // population enforcement after classification.
-    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, subfolderTarget, fixedCategories: null, issues });
+    const buildPrompt = issues => buildSchemaPrompt({ bookmarks, subfolderTarget, fixedCategories: null, issues, sampleLimit });
     const attempt = issues => requestSchema(buildPrompt(issues), apiKey, model, isCancelled, onRetry);
     const options = { subfolderTarget, bookmarkCount: bookmarks.length, expectedCategories: null };
 

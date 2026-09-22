@@ -575,7 +575,7 @@ describe('generateSchema validation and corrective retry', () => {
                 const sample = JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length, prompt.lastIndexOf(']') + 1).trim())
                 const assignments = sample.map(({ url: bookmarkUrl }) => {
                     const i = Number(bookmarkUrl.split('/').pop())
-                    return i < 3991 ? 0 : i % 2 === 0 ? 1 : 2
+                    return i < 3997 ? 0 : i % 2 === 0 ? 1 : 2
                 })
                 return orResponse(JSON.stringify({ assignments }))
             })
@@ -588,7 +588,7 @@ describe('generateSchema validation and corrective retry', () => {
         // Damped natural scale: medium target 12, band ±2.
         expect(prompt).toContain('Finance & Crypto: 10-14')
         // Zero sample presence → zero material → minimal structure.
-        expect(prompt).toContain('Health & Fitness: exactly 1')
+        expect(prompt).toContain("Health & Fitness: exactly 1")
         expect(prompt).toContain('Travel: exactly 1')
         expect(prompt).toContain("within that category's own range")
     })
@@ -791,7 +791,7 @@ describe('generateInferredSchema', () => {
     })
 
     it('designs from an evenly spaced sample and permits model-generated top-level categories', async () => {
-        const bookmarks = Array.from({ length: 405 }, (_, index) => ({
+        const bookmarks = Array.from({ length: 1005 }, (_, index) => ({
             title: `Bookmark ${index + 1}`,
             url: `https://example.com/${index + 1}`
         }))
@@ -814,9 +814,9 @@ describe('generateInferredSchema', () => {
         // collection but never the unsampled tail, and tells the model it is
         // designing for the entire collection.
         expect(prompt).toContain('Bookmark 1')
-        expect(prompt).not.toContain('Bookmark 405')
-        expect(prompt).toContain('representative sample of 400 bookmarks drawn evenly')
-        expect(prompt).toContain('ENTIRE collection of 405')
+        expect(prompt).not.toContain('Bookmark 1005')
+        expect(prompt).toContain('representative sample of 1000 bookmarks drawn evenly')
+        expect(prompt).toContain('ENTIRE collection of 1005')
         expect(prompt).not.toContain('FIXED TOP-LEVEL CATEGORIES')
         expect(schema.categories.map(category => category.name)).toEqual(['Engineering', 'Research', 'Personal'])
     })
