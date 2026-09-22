@@ -760,7 +760,12 @@ export class OrganizerService {
                         if (timeA !== timeB) {
                             return isDesc ? timeB - timeA : timeA - timeB;
                         }
-                        return (a.title || '').localeCompare(b.title || '');
+                        // Same timestamp (common with second-precision Netscape
+                        // add_date on batch-imported bookmarks): fall back to
+                        // original bookmark order, a closer proxy for true add
+                        // order than title.
+                        const origDiff = (a._origIndex ?? 0) - (b._origIndex ?? 0);
+                        return isDesc ? -origDiff : origDiff;
                     } else if (timeA > 0) {
                         return -1; // Valid timestamp comes before missing timestamp
                     } else if (timeB > 0) {

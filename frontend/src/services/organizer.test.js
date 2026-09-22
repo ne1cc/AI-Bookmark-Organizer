@@ -1817,7 +1817,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(results)
     })
 
-    it('breaks timestamp ties alphabetically by title', async () => {
+    it('breaks timestamp ties by original bookmark order, newest-added first when desc', async () => {
         const bookmarks = [
             { title: 'Zebra', url: 'https://zebra.com', add_date: '1600000000' },
             { title: 'Apple', url: 'https://apple.com', add_date: '1600000000' },
@@ -1838,7 +1838,31 @@ describe('OrganizerService flat chronological date sorting', () => {
         )
 
         const results = await service.start(bookmarks)
-        expect(results.map(b => b.title)).toEqual(['Apple', 'Mango', 'Zebra'])
+        expect(results.map(b => b.title)).toEqual(['Mango', 'Apple', 'Zebra'])
+    })
+
+    it('breaks timestamp ties by original bookmark order, oldest-added first when asc', async () => {
+        const bookmarks = [
+            { title: 'Zebra', url: 'https://zebra.com', add_date: '1600000000' },
+            { title: 'Apple', url: 'https://apple.com', add_date: '1600000000' },
+            { title: 'Mango', url: 'https://mango.com', add_date: '1600000000' }
+        ]
+
+        const service = createOrganizerService(
+            'test-key',
+            ['Tech'],
+            () => {},
+            'google/gemini-3.1-flash-lite',
+            'medium',
+            true,
+            true,
+            false,
+            true,
+            'asc'
+        )
+
+        const results = await service.start(bookmarks)
+        expect(results.map(b => b.title)).toEqual(['Zebra', 'Apple', 'Mango'])
     })
 
     it('removes duplicate URLs before chronological sorting when removeDuplicates is enabled', async () => {
