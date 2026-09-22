@@ -332,7 +332,7 @@ describe('Organizer Component UI Tests', () => {
     it('allows toggling flat date sort (0 AI tokens) which makes API key optional', () => {
         render(<Organizer />)
 
-        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
+        const flatToggle = screen.getByRole('switch', { name: /Sort without AI - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
         act(() => {
@@ -340,17 +340,17 @@ describe('Organizer Component UI Tests', () => {
         })
         expect(flatToggle.getAttribute('aria-checked')).toBe('true')
 
-        expect(screen.getByText(/Optional for flat date sorting/i)).toBeDefined()
+        expect(screen.getByText(/Optional for flat sorting/i)).toBeDefined()
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
     })
 
     it('toggles flat date sort when the card title is clicked', () => {
         render(<Organizer />)
 
-        const flatToggle = screen.getByRole('switch', { name: /Sort by date added - Flat list/i })
+        const flatToggle = screen.getByRole('switch', { name: /Sort without AI - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
-        const titleButton = screen.getByRole('button', { name: 'Toggle Sort by date added - Flat list' })
+        const titleButton = screen.getByRole('button', { name: 'Toggle Sort without AI - Flat list' })
         act(() => {
             fireEvent.click(titleButton)
         })
@@ -366,7 +366,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         act(() => {
-            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+            fireEvent.click(screen.getByRole('switch', { name: /Sort without AI - Flat list/i }))
         })
 
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
@@ -376,7 +376,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         act(() => {
-            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+            fireEvent.click(screen.getByRole('switch', { name: /Sort without AI - Flat list/i }))
         })
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
 
@@ -398,7 +398,7 @@ describe('Organizer Component UI Tests', () => {
 
         // Enable flat sort
         act(() => {
-            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+            fireEvent.click(screen.getByRole('switch', { name: /Sort without AI - Flat list/i }))
         })
 
         // Default criterion is Date Added, default action button is "Sort My Bookmarks by Date"

@@ -64,7 +64,7 @@ npm run lint
   - **Browser Mode**: Without uploading a file, click **Organize My Bookmarks**. Verify that it scans your browser bookmarks, shows real-time batch progression in the terminal, and creates an `AI Organized Bookmarks-[Date]` folder under *Other Bookmarks*.
   - **File Mode**: Drag and drop a bookmarks HTML file (or browse to select one), and click **Organize File & Download**. Verify that an organized bookmarks file download is initiated with all links preserved.
   - **Cached Input Card**: After uploading, verify the card displays Download, Re-organize, and Remove actions.
-  - **Flat Chronological Date Sort (0 AI Tokens)**: Click the "Sort by date added - Flat list" header or direction readout. Verify that the API key requirement is removed, direction flips when clicked, and bookmarks are organized into chronological year/month subfolders without AI tokens.
+  - **Flat Chronological Date Sort (0 AI Tokens)**: Click the "Sort without AI - Flat list" header or direction readout. Verify that the API key requirement is removed, direction flips when clicked, and bookmarks are organized into chronological year/month subfolders without AI tokens.
   - **Duplicate Removal (Free)**: With no file uploaded, click **Delete duplicates**. Confirm the deletion prompt and verify that duplicate URLs are removed while retaining the oldest saved copy.
 - **Network Resilience & Progress**:
   - If rate limits (429) occur, a warning banner informs you of the cooldown pause before retrying.

@@ -1232,7 +1232,7 @@ export default function Organizer({ theme = 'light' }) {
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
                     API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
                     <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat date sorting' : 'Google AI Studio or OpenRouter'}
+                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google AI Studio or OpenRouter'}
                     </span>
                 </label>
                 <input
@@ -1354,7 +1354,7 @@ export default function Organizer({ theme = 'light' }) {
                 </div>
             )}
 
-            {/* Sort by date added - Flat list — Conditionally Active Flat Pipeline */}
+            {/* Sort without AI - Flat list — Conditionally Active Flat Pipeline */}
             {status === 'idle' && (
                 <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -1380,7 +1380,7 @@ export default function Organizer({ theme = 'light' }) {
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        aria-label="Toggle Sort by date added - Flat list"
+                                        aria-label="Toggle Sort without AI - Flat list"
                                         onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                                         style={{
                                             display: 'block',
@@ -1395,7 +1395,7 @@ export default function Organizer({ theme = 'light' }) {
                                             textAlign: 'left'
                                         }}
                                     >
-                                        Sort by date added - Flat list
+                                        Sort without AI - Flat list
                                     </button>
                                     <span style={{
                                         fontSize: '0.68rem',
@@ -1412,15 +1412,13 @@ export default function Organizer({ theme = 'light' }) {
                                     </span>
                                 </div>
                                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', lineHeight: '1.35' }}>
-                                    {flatSortType === 'alpha'
-                                        ? 'Orders all bookmarks alphabetically into a single list without folders.'
-                                        : 'Orders all bookmarks chronologically into a single list without folders.'}
+                                    Orders bookmarks by date added or alphabetically into a single list without folders.
                                 </div>
                             </div>
                         </div>
                         <button
                             role="switch"
-                            aria-label="Sort by date added - Flat list"
+                            aria-label="Sort without AI - Flat list"
                             aria-checked={flatDateSort}
                             onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                             style={{
@@ -1879,7 +1877,7 @@ export default function Organizer({ theme = 'light' }) {
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.4' }}>
                                 {flatDateSort
-                                    ? 'Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving chronological date order. Consumes AI tokens and requires an API key.'
+                                    ? `Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving ${flatSortType === 'alpha' ? 'alphabetical' : 'chronological date'} order. Consumes AI tokens and requires an API key.`
                                     : 'Uses AI to rewrite messy, truncated, or raw-URL titles into human-readable names. Consumes AI tokens.'}
                             </div>
                         </div>
