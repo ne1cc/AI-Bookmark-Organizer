@@ -1963,7 +1963,7 @@ describe('OrganizerService inferred category runs', () => {
             sub_category: 'Generated Detail'
         })))
         const messages = []
-        const bookmarks = Array.from({ length: 405 }, (_, index) => ({
+        const bookmarks = Array.from({ length: 1005 }, (_, index) => ({
             title: `Bookmark ${index + 1}`,
             url: `https://example.com/${index + 1}`
         }))
@@ -1975,7 +1975,7 @@ describe('OrganizerService inferred category runs', () => {
 
         await service.start(bookmarks)
 
-        expect(messages).toContain('Large collection: designing the folder structure from a sample of 400 of 405 bookmarks. All bookmarks will still be classified.')
+        expect(messages).toContain('Large collection: designing the folder structure from a sample of 1,000 of 1,005 bookmarks. All bookmarks will still be classified.')
         expect(messages.some(message => message?.includes('analyzing all'))).toBe(false)
     })
 
