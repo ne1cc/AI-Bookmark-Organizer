@@ -3,6 +3,14 @@ import { downloadBookmarks } from '../services/bookmarks_export';
 import { calculateDateSpan } from '../utils/dates';
 import { createStorageSnapshotProvider } from './snapshotProvider';
 
+// Progress and log events fire many times per second while classification
+// workers run. Persisting the whole job state (and broadcasting it to every
+// connected port) on each event floods session storage and the message
+// channel, so non-terminal updates coalesce into one flush per interval.
+// Terminal states always flush immediately.
+const STATE_FLUSH_DELAY_MS = 250;
+const TERMINAL_STATUSES = new Set(['complete', 'error', 'idle']);
+
 export class BackgroundJobRunner {
     constructor() {
         this.currentJob = {
@@ -22,6 +30,7 @@ export class BackgroundJobRunner {
         this.subscribers = new Set();
         this.cachedResults = null;
         this.persistJobState = true;
+        this.stateFlushTimer = null;
     }
 
     getState() {
@@ -48,6 +57,33 @@ export class BackgroundJobRunner {
                 console.warn('[JobRunner] Listener error:', err);
             }
         }
+    }
+
+    // Coalesce non-terminal state updates (progress ticks, log lines) into one
+    // snapshot write + broadcast per flush interval. The in-memory state stays
+    // synchronous; only persistence and port fan-out are throttled.
+    emitState() {
+        if (TERMINAL_STATUSES.has(this.currentJob.status)) {
+            this.flushState();
+            return;
+        }
+        if (this.stateFlushTimer) return;
+        this.stateFlushTimer = setTimeout(() => {
+            this.stateFlushTimer = null;
+            this.persistSessionSnapshot();
+            this.notify('status', this.getState());
+        }, STATE_FLUSH_DELAY_MS);
+    }
+
+    // Immediate persist + broadcast, cancelling any pending coalesced flush so
+    // a terminal state can never be followed by a stale duplicate.
+    flushState() {
+        if (this.stateFlushTimer) {
+            clearTimeout(this.stateFlushTimer);
+            this.stateFlushTimer = null;
+        }
+        this.persistSessionSnapshot();
+        this.notify('status', this.getState());
     }
 
     startKeepAlive() {
@@ -104,7 +140,7 @@ export class BackgroundJobRunner {
         if (this.currentJob.logs.length > 150) {
             this.currentJob.logs = this.currentJob.logs.slice(-100);
         }
-        this.notify('log', entry);
+        this.emitState();
     }
 
     async startJob(config, parsedBookmarks = null) {
@@ -145,8 +181,7 @@ export class BackgroundJobRunner {
         };
 
         this.startKeepAlive();
-        this.persistSessionSnapshot();
-        this.notify('status', this.getState());
+        this.flushState();
 
         if (parsedBookmarks) {
             this.addLog(`Auto-Import File to Other Bookmarks: ${autoImport ? 'On (top of list)' : 'Off'}`);
@@ -216,8 +251,7 @@ export class BackgroundJobRunner {
                     this.currentJob.progress = 100;
                 }
 
-                this.persistSessionSnapshot();
-                this.notify('status', this.getState());
+                this.emitState();
             },
             selectedModel,
             subfolderTarget,
@@ -242,8 +276,7 @@ export class BackgroundJobRunner {
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
                 this.stopKeepAlive();
-                this.persistSessionSnapshot();
-                this.notify('status', this.getState());
+                this.flushState();
                 this.notify('cancelled', {});
                 return null;
             }
@@ -285,8 +318,7 @@ export class BackgroundJobRunner {
                 }
 
                 if (!parsedBookmarks) this.stopKeepAlive();
-                this.persistSessionSnapshot();
-                this.notify('status', this.getState());
+                this.flushState();
                 this.notify('complete', { results, meta, stats: enrichedStats });
                 if (parsedBookmarks) {
                     setTimeout(() => {
@@ -309,8 +341,7 @@ export class BackgroundJobRunner {
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
                 this.stopKeepAlive();
-                this.persistSessionSnapshot();
-                this.notify('status', this.getState());
+                this.flushState();
                 this.notify('cancelled', {});
                 return null;
             }
@@ -318,8 +349,7 @@ export class BackgroundJobRunner {
             this.currentJob.status = 'error';
             this.currentJob.errorMsg = err?.message || 'Failed to complete organization.';
             this.stopKeepAlive();
-            this.persistSessionSnapshot();
-            this.notify('status', this.getState());
+            this.flushState();
             this.notify('error', { message: this.currentJob.errorMsg });
             throw err;
         }
@@ -334,8 +364,7 @@ export class BackgroundJobRunner {
         this.currentJob.backgroundNotice = '';
         this.addLog('Cancellation requested — process cancelled.');
         this.stopKeepAlive();
-        this.persistSessionSnapshot();
-        this.notify('status', this.getState());
+        this.flushState();
         this.notify('cancelled', {});
     }
 
@@ -368,7 +397,7 @@ export class BackgroundJobRunner {
                 // Ignore removal error
             }
         }
-        this.notify('status', this.getState());
+        this.flushState();
     }
 }
 

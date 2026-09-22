@@ -496,10 +496,13 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
     }
 }
 
-// Schema design only needs a representative spread of the collection, not every
-// bookmark. A sample of 200 bookmarks provides rich topical variance while keeping
-// prompt serialization and inference instantaneous (< 1-2s).
-export const SCHEMA_SAMPLE_LIMIT = 200;
+// Schema design — inferred or fixed-category — only needs a representative
+// spread of the collection, not every bookmark. A sample of 400 bookmarks
+// maximizes topical coverage while keeping the prompt (~15K tokens) safely
+// inside even the smallest OpenRouter model context windows; themes the
+// sample misses are still placed by classification's proposed-subcategory
+// rule and reconciliation.
+export const SCHEMA_SAMPLE_LIMIT = 400;
 
 // The schema JSON is small (8-10 categories x up to ~14 subcategories), but the
 // old 8000 ceiling left no headroom: a run that overshot it was flagged
@@ -720,7 +723,11 @@ const SUBFOLDER_RULES = {
 function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, askMin, askMax, subfolderTarget, fixedCategories = null, issues = null, sampleLimit = SCHEMA_SAMPLE_LIMIT }) {
     const subfolderGuidance = SUBFOLDER_RULES[subfolderTarget] || SUBFOLDER_RULES['1-3'];
 
-    const schemaSource = fixedCategories ? sampleForSchema(bookmarks, sampleLimit) : bookmarks;
+    // Both modes sample: inferred-category design previously serialized the
+    // ENTIRE collection into the prompt, which for large libraries produced a
+    // multi-hundred-thousand-token request that was slow, expensive, and over
+    // the context window of most OpenRouter models.
+    const schemaSource = sampleForSchema(bookmarks, sampleLimit);
     const sampleNote = schemaSource.length < bookmarkCount
         ? `\n    NOTE: The list below is a representative sample of ${schemaSource.length} bookmarks drawn evenly from the full collection. Design the structure for the ENTIRE collection of ${bookmarkCount}.\n`
         : '';
@@ -1063,6 +1070,12 @@ const requestDetailSchema = (prompt, apiKey, model, isCancelled, onRetry) => wit
     onRetry
 );
 
+// Detail-schema batches carry up to DETAIL_SCHEMA_GROUP_LIMIT groups of
+// DETAIL_SCHEMA_SAMPLE_LIMIT bookmarks each, so they are heavy requests.
+// A small pool keeps large runs from serializing dozens of round-trips while
+// leaving headroom under provider rate limits.
+export const DETAIL_SCHEMA_CONCURRENCY = 3;
+
 function isDetailCancelled(isCancelled) {
     return typeof isCancelled === 'function' ? isCancelled() : Boolean(isCancelled);
 }
@@ -1076,6 +1089,8 @@ function detailCancellationError() {
 /**
  * Infer detail schemas in independent, bounded batches. A failed batch is
  * allowed to remain at two levels while valid sibling batches are retained.
+ * Batches run through a small worker pool; per-batch correction and failure
+ * semantics match the previous sequential behavior.
  */
 export async function generateDetailSchemas(
     groups,
@@ -1089,9 +1104,13 @@ export async function generateDetailSchemas(
     const entries = detailGroupEntries(groups);
     const schemas = new Map();
 
+    const batches = [];
     for (let start = 0; start < entries.length; start += DETAIL_SCHEMA_GROUP_LIMIT) {
-        if (isDetailCancelled(isCancelled)) throw detailCancellationError();
-        const batch = entries.slice(start, start + DETAIL_SCHEMA_GROUP_LIMIT);
+        batches.push(entries.slice(start, start + DETAIL_SCHEMA_GROUP_LIMIT));
+    }
+    if (batches.length === 0) return schemas;
+
+    const runBatch = async (batch) => {
         let first;
         try {
             first = validateDetailSchema(
@@ -1100,7 +1119,7 @@ export async function generateDetailSchemas(
             );
         } catch (error) {
             if (error?.isCancelled) throw error;
-            continue;
+            return;
         }
 
         let result = first;
@@ -1121,12 +1140,28 @@ export async function generateDetailSchemas(
                 );
             } catch (error) {
                 if (error?.isCancelled) throw error;
-                continue;
+                return;
             }
         }
 
         for (const [key, names] of result.schemas) schemas.set(key, names);
+    };
+
+    let batchIdx = 0;
+    const worker = async () => {
+        while (batchIdx < batches.length && !isDetailCancelled(isCancelled)) {
+            const batch = batches[batchIdx++];
+            await runBatch(batch);
+        }
+    };
+
+    const workers = [];
+    for (let i = 0; i < Math.min(DETAIL_SCHEMA_CONCURRENCY, batches.length); i++) {
+        workers.push(worker());
     }
+    await Promise.all(workers);
+
+    if (isDetailCancelled(isCancelled)) throw detailCancellationError();
 
     return schemas;
 }
