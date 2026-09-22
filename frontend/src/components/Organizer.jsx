@@ -830,7 +830,9 @@ export default function Organizer({ theme = 'light' }) {
                     chrome.storage.local.set({ organizedMeta: updatedMeta });
                 }
             }
-            downloadBookmarks(data);
+            const filename = lastOrganized?.filename || data.filename;
+            if (filename) downloadBookmarks(data, filename);
+            else downloadBookmarks(data);
         };
 
         if (organizedResultsRef.current) {
@@ -1185,7 +1187,8 @@ export default function Organizer({ theme = 'light' }) {
                     count: results.length,
                     savedAt: Date.now(),
                     stats: enrichedStats,
-                    ...(finalSpan ? { dateSpan: finalSpan } : {})
+                    ...(finalSpan ? { dateSpan: finalSpan } : {}),
+                    ...(results.filename ? { filename: results.filename } : {})
                 };
                 if (finalSpan) {
                     setActiveDateSpan(finalSpan);

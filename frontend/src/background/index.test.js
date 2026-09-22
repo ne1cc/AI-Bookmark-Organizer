@@ -200,6 +200,33 @@ describe('Background Service Worker Entry Point', () => {
         expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
     });
 
+    it('GET_RESULTS carries the run\'s labeled export filename in meta', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const results = Object.assign(
+            [{ title: 'Result', url: 'https://example.com/r', category: 'Tech', sub_category: 'Web' }],
+            { filename: 'bookmarks_chronological_newest_2026-09-22.html' }
+        );
+        vi.spyOn(freshRunner, 'getResults').mockReturnValue(results);
+        vi.spyOn(freshRunner, 'getState').mockReturnValue({ id: 'job_1', status: 'complete', count: 1, completedAt: 1757890000000, stats: null });
+
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        port.postMessage.mockClear();
+        port.onMessage.addListener.mock.calls[0][0]({ type: 'GET_RESULTS' });
+
+        expect(port.postMessage.mock.calls[0][0].payload.meta.filename).toBe('bookmarks_chronological_newest_2026-09-22.html');
+    });
+
     it('reports that transient results are unavailable after worker memory is lost', async () => {
         vi.resetModules();
         let onConnectHandler = null;

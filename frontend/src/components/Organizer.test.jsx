@@ -915,6 +915,35 @@ describe('In-process and completion date range display', () => {
             expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf')
         })
 
+        it('re-downloads worker results under the run\'s labeled filename, not the generic default', async () => {
+            const listeners = []
+            const generatedResults = [{ title: 'Result', url: 'https://example.com/r', category: 'Tech', sub_category: 'Web' }]
+            const meta = { count: 1, savedAt: 1757890000000, stats: { categoriesCount: 1 }, filename: 'bookmarks_ai_alpha_2026-09-22.html' }
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn(listener => listeners.push(listener)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+            act(() => {
+                listeners.forEach(listener => listener({ type: 'JOB_COMPLETE', payload: { results: generatedResults, meta } }))
+            })
+
+            fireEvent.click(await screen.findByRole('button', { name: /Download Organized Bookmarks/i }))
+            await waitFor(() => {
+                expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(generatedResults, 'bookmarks_ai_alpha_2026-09-22.html')
+            })
+        })
+
         it('keeps completed worker results available after the automatic menu return and a reconnect', async () => {
             vi.useFakeTimers()
             const listeners = []

@@ -86,6 +86,31 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getResults()).toBeNull();
     });
 
+    it('carries the labeled export filename in the run metadata', async () => {
+        OrganizerService.mockImplementationOnce(function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.start = vi.fn(async () => Object.assign(
+                [{ title: 'Example 1', url: 'https://example.com/1', category: 'Tech', sub_category: 'Web' }],
+                { filename: 'bookmarks_ai_alpha_2026-09-22.html' }
+            ));
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = null;
+        });
+        const notifications = [];
+        runner.subscribe((event, payload) => notifications.push({ event, payload }));
+
+        await runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: false }, null);
+
+        const complete = notifications.find(n => n.event === 'complete');
+        expect(complete.payload.meta.filename).toBe('bookmarks_ai_alpha_2026-09-22.html');
+        expect(globalThis.chrome.storage.local.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                organizedMeta: expect.objectContaining({ filename: 'bookmarks_ai_alpha_2026-09-22.html' })
+            })
+        );
+    });
+
     it('starts a job and updates progress, logs, and storage', async () => {
         const notifications = [];
         runner.subscribe((event, payload) => notifications.push({ event, payload }));

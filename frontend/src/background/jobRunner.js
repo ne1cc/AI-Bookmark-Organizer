@@ -294,11 +294,14 @@ export class BackgroundJobRunner {
                     ...(stats || {}),
                     ...(finalSpan ? { dateSpan: finalSpan } : {})
                 };
+                // results.filename is an array property, which does not survive
+                // the port or chrome.storage — carry it in meta instead.
                 const meta = {
                     count: results.length,
                     savedAt: completedAt,
                     stats: enrichedStats,
-                    ...(finalSpan ? { dateSpan: finalSpan } : {})
+                    ...(finalSpan ? { dateSpan: finalSpan } : {}),
+                    ...(results.filename ? { filename: results.filename } : {})
                 };
 
                 this.currentJob.status = 'complete';

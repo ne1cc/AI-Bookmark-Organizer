@@ -69,7 +69,8 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
                             count: state.count ?? results.length,
                             savedAt: state.completedAt ?? Date.now(),
                             stats: state.stats || results.stats || null,
-                            ...(state.activeDateSpan ? { dateSpan: state.activeDateSpan } : {})
+                            ...(state.activeDateSpan ? { dateSpan: state.activeDateSpan } : {}),
+                            ...(results.filename ? { filename: results.filename } : {})
                         };
                         port.postMessage({ type: 'JOB_RESULTS', payload: { results, meta } });
                     } catch {}
