@@ -47,11 +47,11 @@ describe('App Component Layout', () => {
         expect(closeBtn).toBeDefined()
     })
 
-    it('defaults to dark mode when no theme preference is saved', () => {
+    it('defaults to light mode when no theme preference is saved', () => {
         render(<App />)
 
-        expect(screen.getByRole('radio', { name: 'Dark' }).getAttribute('aria-checked')).toBe('true')
-        expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+        expect(screen.getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe('true')
+        expect(document.documentElement.getAttribute('data-theme')).toBe('light')
     })
 
     it('shows a gentle close reminder without closing the app', () => {
