@@ -516,7 +516,7 @@ export default function Organizer({ theme = 'light' }) {
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
             chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
                 if (!result) return
-                if (result.apiKey && result.apiKey !== apiKey) setApiKey(result.apiKey)
+                if (result.apiKey) setApiKey(prev => (prev !== result.apiKey ? result.apiKey : prev))
                 if (Array.isArray(result.categories)) {
                     setCategories(result.categories)
                     try { localStorage.setItem('categories', JSON.stringify(result.categories)) } catch {}
