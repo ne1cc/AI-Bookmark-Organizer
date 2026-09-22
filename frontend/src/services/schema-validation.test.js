@@ -575,7 +575,7 @@ describe('generateSchema validation and corrective retry', () => {
                 const sample = JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length, prompt.lastIndexOf(']') + 1).trim())
                 const assignments = sample.map(({ url: bookmarkUrl }) => {
                     const i = Number(bookmarkUrl.split('/').pop())
-                    return i < 3990 ? 0 : i % 2 === 0 ? 1 : 2
+                    return i < 3991 ? 0 : i % 2 === 0 ? 1 : 2
                 })
                 return orResponse(JSON.stringify({ assignments }))
             })
