@@ -126,7 +126,7 @@ Your data stays private:
 - Dark Mode Hierarchy Diagrams: Added dedicated dark theme visual diagrams for Subfolder Hierarchy compactness modes (Compact, Balanced, Detailed).
 - In-Flight Exit & Close Confirmation: Added confirmation modal before closing the extension panel, navigating away, or wiping runs while organization is in progress.
 - Port Disconnect & Loading Lag Fix: Fixed loading stalls and latency when background service worker ports disconnect, providing seamless instant in-panel fallback.
-- Clickable Sort Controls: Directly click the "Sort by date added - Flat list" header or direction readout to toggle flat chronological sorting and reverse sort order.
+- Clickable Sort Controls: Directly click the "Sort without AI - Flat list" header or direction readout to toggle flat chronological sorting and reverse sort order.
 - MECE Month & Year Organization: Chronological bookmark sorting groups items into mutually exclusive and collectively exhaustive month-year subfolders without consuming AI tokens.
 - Standardized Root Folder & Export Names: Consistent naming conventions across browser bookmark roots and exported Netscape HTML bookmark files.
 - Resilient Background Organization: Enhanced background worker persistence, instantaneous cancellation response, and automatic recovery.

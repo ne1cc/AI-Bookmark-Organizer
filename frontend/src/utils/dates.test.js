@@ -301,6 +301,46 @@ describe('getStandardizedOutputLabel', () => {
         expect(label.displayLabel).toBe('Chronological (Oldest First)')
     })
 
+    it('generates standardized labels for alphabetical A-Z flat sort', () => {
+        const label = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'alpha-asc',
+            date: fixedDate
+        })
+        expect(label.rootFolderTitle).toBe('[Alphabetical - A–Z] Bookmarks-2026-09-14')
+        expect(label.downloadFilename).toBe('bookmarks_alphabetical_a-z_2026-09-14.html')
+        expect(label.displayLabel).toBe('Alphabetical (A–Z)')
+        expect(label.tierLabel).toBe('Alphabetical')
+        expect(label.badge).toBe('A–Z')
+
+        const labelShort = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'a-z',
+            date: fixedDate
+        })
+        expect(labelShort.downloadFilename).toBe('bookmarks_alphabetical_a-z_2026-09-14.html')
+    })
+
+    it('generates standardized labels for alphabetical Z-A flat sort', () => {
+        const label = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'alpha-desc',
+            date: fixedDate
+        })
+        expect(label.rootFolderTitle).toBe('[Alphabetical - Z–A] Bookmarks-2026-09-14')
+        expect(label.downloadFilename).toBe('bookmarks_alphabetical_z-a_2026-09-14.html')
+        expect(label.displayLabel).toBe('Alphabetical (Z–A)')
+        expect(label.tierLabel).toBe('Alphabetical')
+        expect(label.badge).toBe('Z–A')
+
+        const labelShort = getStandardizedOutputLabel({
+            flatDateSort: true,
+            dateSortOrder: 'z-a',
+            date: fixedDate
+        })
+        expect(labelShort.downloadFilename).toBe('bookmarks_alphabetical_z-a_2026-09-14.html')
+    })
+
     it('generates standardized labels for AI categorized modes', () => {
         const labelAlpha = getStandardizedOutputLabel({
             flatDateSort: false,

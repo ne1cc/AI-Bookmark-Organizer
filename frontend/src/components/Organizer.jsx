@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
+import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
@@ -218,6 +218,22 @@ export default function Organizer({ theme = 'light' }) {
             return o === 'asc' || o === 'desc' ? o : 'desc'
         } catch {
             return 'desc'
+        }
+    })
+    const [flatSortType, setFlatSortType] = useState(() => {
+        try {
+            const t = localStorage.getItem('flatSortType')
+            return t === 'alpha' || t === 'date' ? t : 'date'
+        } catch {
+            return 'date'
+        }
+    })
+    const [alphaSortOrder, setAlphaSortOrder] = useState(() => {
+        try {
+            const o = localStorage.getItem('alphaSortOrder')
+            return o === 'desc' || o === 'asc' ? o : 'asc'
+        } catch {
+            return 'asc'
         }
     })
 
@@ -659,6 +675,16 @@ export default function Organizer({ theme = 'light' }) {
         updateSetting('dateSortOrder', order)
     }, [updateSetting])
 
+    const handleFlatSortTypeChange = useCallback((type) => {
+        setFlatSortType(type)
+        updateSetting('flatSortType', type)
+    }, [updateSetting])
+
+    const handleAlphaSortOrderChange = useCallback((order) => {
+        setAlphaSortOrder(order)
+        updateSetting('alphaSortOrder', order)
+    }, [updateSetting])
+
     const handleAddCategory = useCallback((catName) => {
         const trimmed = (catName || '').trim();
         if (!trimmed) return;
@@ -927,10 +953,18 @@ export default function Organizer({ theme = 'light' }) {
 
         try {
             setStatus('processing');
+            const effectiveDateSortOrder = flatDateSort && flatSortType === 'alpha'
+                ? (alphaSortOrder === 'desc' ? 'alpha-desc' : 'alpha-asc')
+                : dateSortOrder;
+
             if (flatDateSort) {
-                const orderLabel = dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First';
+                const isAlpha = flatSortType === 'alpha' || dateSortOrder === 'alpha-asc' || dateSortOrder === 'alpha-desc' || dateSortOrder === 'a-z' || dateSortOrder === 'z-a' || dateSortOrder === 'alpha';
+                const isAlphaDesc = flatSortType === 'alpha' ? alphaSortOrder === 'desc' : (dateSortOrder === 'alpha-desc' || dateSortOrder === 'z-a');
+                const orderLabel = isAlpha
+                    ? (isAlphaDesc ? 'Alphabetical (Z–A)' : 'Alphabetical (A–Z)')
+                    : (dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First');
                 setLogs([
-                    { message: 'Starting Chronological Date Sort...', timestamp: new Date() },
+                    { message: isAlpha ? 'Starting Alphabetical Sort...' : 'Starting Chronological Date Sort...', timestamp: new Date() },
                     { message: 'Mode: Flat List (No Folders / Schema-free)', timestamp: new Date() },
                     { message: `Sort Direction: ${orderLabel}`, timestamp: new Date() },
                     { message: `Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`, timestamp: new Date() },
@@ -1021,7 +1055,7 @@ export default function Organizer({ theme = 'light' }) {
                                     removeDuplicates,
                                     cleanTitles,
                                     flatDateSort,
-                                    dateSortOrder,
+                                    dateSortOrder: effectiveDateSortOrder,
                                     schemaSortOrder
                                 },
                                 parsedBookmarks
@@ -1125,7 +1159,7 @@ export default function Organizer({ theme = 'light' }) {
                 removeDuplicates,
                 cleanTitles,
                 flatDateSort,
-                dateSortOrder,
+                effectiveDateSortOrder,
                 schemaSortOrder,
                 parsedBookmarks ? deferFileDownload : inferCategories
             );
@@ -1182,7 +1216,7 @@ export default function Organizer({ theme = 'light' }) {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -1198,7 +1232,7 @@ export default function Organizer({ theme = 'light' }) {
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
                     API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
                     <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat date sorting' : 'Google AI Studio or OpenRouter'}
+                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google AI Studio or OpenRouter'}
                     </span>
                 </label>
                 <input
@@ -1320,7 +1354,7 @@ export default function Organizer({ theme = 'light' }) {
                 </div>
             )}
 
-            {/* Sort by date added - Flat list — Conditionally Active Flat Pipeline */}
+            {/* Sort without AI - Flat list — Conditionally Active Flat Pipeline */}
             {status === 'idle' && (
                 <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
@@ -1340,13 +1374,13 @@ export default function Organizer({ theme = 'light' }) {
                                 transition: 'all 0.2s ease',
                                 marginTop: '2px'
                             }}>
-                                <Clock size={18} />
+                                {flatSortType === 'alpha' ? <ArrowDownAZ size={18} /> : <Clock size={18} />}
                             </div>
                             <div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <button
                                         type="button"
-                                        aria-label="Toggle Sort by date added - Flat list"
+                                        aria-label="Toggle Sort without AI - Flat list"
                                         onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                                         style={{
                                             display: 'block',
@@ -1361,7 +1395,7 @@ export default function Organizer({ theme = 'light' }) {
                                             textAlign: 'left'
                                         }}
                                     >
-                                        Sort by date added - Flat list
+                                        Sort without AI - Flat list
                                     </button>
                                     <span style={{
                                         fontSize: '0.68rem',
@@ -1378,13 +1412,13 @@ export default function Organizer({ theme = 'light' }) {
                                     </span>
                                 </div>
                                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', lineHeight: '1.35' }}>
-                                    Orders all bookmarks chronologically into a single list without folders.
+                                    Orders bookmarks by date added or alphabetically into a single list without folders.
                                 </div>
                             </div>
                         </div>
                         <button
                             role="switch"
-                            aria-label="Sort by date added - Flat list"
+                            aria-label="Sort without AI - Flat list"
                             aria-checked={flatDateSort}
                             onClick={() => handleFlatDateSortToggle(!flatDateSort)}
                             style={{
@@ -1417,78 +1451,218 @@ export default function Organizer({ theme = 'light' }) {
 
                     {flatDateSort && (
                         <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
-                                    Chronological Direction
+                            {/* Sort Criterion: Date Added vs Alphabetical */}
+                            <div style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
+                                    Sort Criterion
                                 </label>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
-                                    title="Click to reverse direction"
-                                    style={{
-                                        fontSize: '0.72rem',
-                                        color: 'var(--text-muted)',
-                                        background: 'transparent',
-                                        border: 'none',
-                                        padding: 0,
-                                        cursor: 'pointer',
-                                        fontFamily: 'inherit',
-                                        textDecoration: 'underline'
-                                    }}
-                                >
-                                    {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
-                                </button>
+                                <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleFlatSortTypeChange('date')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '0.5rem 0.75rem',
+                                            borderRadius: '6px',
+                                            border: 'none',
+                                            background: flatSortType === 'date' ? 'var(--accent-gradient)' : 'transparent',
+                                            color: flatSortType === 'date' ? '#ffffff' : 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            fontSize: '0.82rem',
+                                            fontWeight: flatSortType === 'date' ? '600' : '500',
+                                            transition: 'all 0.2s ease',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.4rem',
+                                            boxShadow: flatSortType === 'date' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                        }}
+                                    >
+                                        <Clock size={14} />
+                                        <span>Date Added</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleFlatSortTypeChange('alpha')}
+                                        style={{
+                                            flex: 1,
+                                            padding: '0.5rem 0.75rem',
+                                            borderRadius: '6px',
+                                            border: 'none',
+                                            background: flatSortType === 'alpha' ? 'var(--accent-gradient)' : 'transparent',
+                                            color: flatSortType === 'alpha' ? '#ffffff' : 'var(--text-secondary)',
+                                            cursor: 'pointer',
+                                            fontSize: '0.82rem',
+                                            fontWeight: flatSortType === 'alpha' ? '600' : '500',
+                                            transition: 'all 0.2s ease',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.4rem',
+                                            boxShadow: flatSortType === 'alpha' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                        }}
+                                    >
+                                        <ArrowDownAZ size={14} />
+                                        <span>Alphabetical</span>
+                                    </button>
+                                </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDateSortOrderChange('desc')}
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        borderRadius: '6px',
-                                        border: 'none',
-                                        background: dateSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
-                                        color: dateSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.82rem',
-                                        fontWeight: dateSortOrder === 'desc' ? '600' : '500',
-                                        transition: 'all 0.2s ease',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.4rem',
-                                        boxShadow: dateSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                    }}
-                                >
-                                    <ArrowDown size={14} />
-                                    <span>Newest First</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => handleDateSortOrderChange('asc')}
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.5rem 0.75rem',
-                                        borderRadius: '6px',
-                                        border: 'none',
-                                        background: dateSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
-                                        color: dateSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.82rem',
-                                        fontWeight: dateSortOrder === 'asc' ? '600' : '500',
-                                        transition: 'all 0.2s ease',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        gap: '0.4rem',
-                                        boxShadow: dateSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                    }}
-                                >
-                                    <ArrowUp size={14} />
-                                    <span>Oldest First</span>
-                                </button>
-                            </div>
+
+                            {/* Chronological Direction Controls */}
+                            {flatSortType === 'date' && (
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                        <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
+                                            Chronological Direction
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
+                                            title="Click to reverse direction"
+                                            style={{
+                                                fontSize: '0.72rem',
+                                                color: 'var(--text-muted)',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                padding: 0,
+                                                cursor: 'pointer',
+                                                fontFamily: 'inherit',
+                                                textDecoration: 'underline'
+                                            }}
+                                        >
+                                            {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDateSortOrderChange('desc')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.5rem 0.75rem',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: dateSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
+                                                color: dateSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
+                                                cursor: 'pointer',
+                                                fontSize: '0.82rem',
+                                                fontWeight: dateSortOrder === 'desc' ? '600' : '500',
+                                                transition: 'all 0.2s ease',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.4rem',
+                                                boxShadow: dateSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                            }}
+                                        >
+                                            <ArrowDown size={14} />
+                                            <span>Newest First</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDateSortOrderChange('asc')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.5rem 0.75rem',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: dateSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
+                                                color: dateSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
+                                                cursor: 'pointer',
+                                                fontSize: '0.82rem',
+                                                fontWeight: dateSortOrder === 'asc' ? '600' : '500',
+                                                transition: 'all 0.2s ease',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.4rem',
+                                                boxShadow: dateSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                            }}
+                                        >
+                                            <ArrowUp size={14} />
+                                            <span>Oldest First</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Alphabetical Direction Controls */}
+                            {flatSortType === 'alpha' && (
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                                        <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
+                                            Alphabetical Direction
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAlphaSortOrderChange(alphaSortOrder === 'desc' ? 'asc' : 'desc')}
+                                            title="Click to reverse direction"
+                                            style={{
+                                                fontSize: '0.72rem',
+                                                color: 'var(--text-muted)',
+                                                background: 'transparent',
+                                                border: 'none',
+                                                padding: 0,
+                                                cursor: 'pointer',
+                                                fontFamily: 'inherit',
+                                                textDecoration: 'underline'
+                                            }}
+                                        >
+                                            {alphaSortOrder === 'desc' ? 'Z to A bookmarks at the top' : 'A to Z bookmarks at the top'}
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAlphaSortOrderChange('asc')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.5rem 0.75rem',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: alphaSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
+                                                color: alphaSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
+                                                cursor: 'pointer',
+                                                fontSize: '0.82rem',
+                                                fontWeight: alphaSortOrder === 'asc' ? '600' : '500',
+                                                transition: 'all 0.2s ease',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.4rem',
+                                                boxShadow: alphaSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                            }}
+                                        >
+                                            <ArrowDownAZ size={14} />
+                                            <span>A to Z</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleAlphaSortOrderChange('desc')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.5rem 0.75rem',
+                                                borderRadius: '6px',
+                                                border: 'none',
+                                                background: alphaSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
+                                                color: alphaSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
+                                                cursor: 'pointer',
+                                                fontSize: '0.82rem',
+                                                fontWeight: alphaSortOrder === 'desc' ? '600' : '500',
+                                                transition: 'all 0.2s ease',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.4rem',
+                                                boxShadow: alphaSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
+                                            }}
+                                        >
+                                            <ArrowUpZA size={14} />
+                                            <span>Z to A</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
@@ -1703,7 +1877,7 @@ export default function Organizer({ theme = 'light' }) {
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.4' }}>
                                 {flatDateSort
-                                    ? 'Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving chronological date order. Consumes AI tokens and requires an API key.'
+                                    ? `Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving ${flatSortType === 'alpha' ? 'alphabetical' : 'chronological date'} order. Consumes AI tokens and requires an API key.`
                                     : 'Uses AI to rewrite messy, truncated, or raw-URL titles into human-readable names. Consumes AI tokens.'}
                             </div>
                         </div>
@@ -2342,7 +2516,7 @@ export default function Organizer({ theme = 'light' }) {
                                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
                                 >
                                     <Download size={18} />
-                                    {lastOrganized.stats?.isFlat ? 'Download Chronological Bookmarks' : 'Download Organized Bookmarks'}
+                                    {lastOrganized.stats?.isFlat ? (lastOrganized.stats?.tierLabel === 'Alphabetical' || lastOrganized.stats?.folderTitle?.includes('Alphabetical') || (lastOrganized.stats?.dateSortOrder && String(lastOrganized.stats.dateSortOrder).startsWith('alpha')) ? 'Download Alphabetical Bookmarks' : 'Download Chronological Bookmarks') : 'Download Organized Bookmarks'}
                                 </button>
                                 {lastOrganized.stats?.dateSpan && (
                                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -2442,10 +2616,17 @@ export default function Organizer({ theme = 'light' }) {
                         }}
                     >
                         {flatDateSort ? (
-                            <>
-                                <Clock size={20} />
-                                {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
-                            </>
+                            flatSortType === 'alpha' ? (
+                                <>
+                                    <ArrowDownAZ size={20} />
+                                    {uploadedFile ? 'Sort File Alphabetically & Download' : 'Sort My Bookmarks Alphabetically'}
+                                </>
+                            ) : (
+                                <>
+                                    <Clock size={20} />
+                                    {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
+                                </>
+                            )
                         ) : (
                             <>
                                 {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}

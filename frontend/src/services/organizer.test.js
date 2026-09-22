@@ -1674,6 +1674,117 @@ describe('OrganizerService flat chronological date sorting', () => {
         expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(results)
     })
 
+    it('sorts bookmarks alphabetically A to Z without consuming AI tokens', async () => {
+        const schemaSpy = vi.spyOn(ai, 'generateSchema')
+        const inferredSchemaSpy = vi.spyOn(ai, 'generateInferredSchema')
+        const classifySpy = vi.spyOn(ai, 'classifyBatch')
+        schemaSpy.mockClear()
+        inferredSchemaSpy.mockClear()
+        classifySpy.mockClear()
+
+        const bookmarks = [
+            { title: 'Zebra Tech', url: 'https://zebra.com', add_date: '1700000000' },
+            { title: 'Apple Insider', url: 'https://apple.com', add_date: '1500000000' },
+            { title: 'GitHub Docs', url: 'https://github.com', add_date: '1600000000' }
+        ]
+
+        const progressMessages = []
+        const onProgress = (evt) => {
+            if (evt.message) progressMessages.push(evt.message)
+        }
+
+        const service = createOrganizerService(
+            'test-key',
+            ['Tech'],
+            onProgress,
+            'google/gemini-3.1-flash-lite',
+            'medium',
+            true, // sortAlphabetically
+            true, // removeDuplicates
+            false, // cleanTitles
+            true, // flatDateSort
+            'alpha-asc' // dateSortOrder (A-Z)
+        )
+
+        const results = await service.start(bookmarks)
+
+        expect(schemaSpy).not.toHaveBeenCalled()
+        expect(inferredSchemaSpy).not.toHaveBeenCalled()
+        expect(classifySpy).not.toHaveBeenCalled()
+
+        expect(results.map(b => b.title)).toEqual(['Apple Insider', 'GitHub Docs', 'Zebra Tech'])
+        expect(results.isFlat).toBe(true)
+        expect(service.stats.isFlat).toBe(true)
+        expect(service.stats.tierLabel).toBe('Alphabetical')
+        expect(service.stats.folderTitle).toMatch(/^\[Alphabetical - A–Z\] Bookmarks-\d{4}-\d{2}-\d{2}$/)
+        expect(results.filename).toMatch(/^bookmarks_alphabetical_a-z_\d{4}-\d{2}-\d{2}\.html$/)
+        expect(progressMessages.some(m => m.includes('Sorting 3 bookmarks alphabetically (A–Z)'))).toBe(true)
+        expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(results)
+    })
+
+    it('sorts bookmarks alphabetically Z to A without consuming AI tokens', async () => {
+        const bookmarks = [
+            { title: 'Apple Insider', url: 'https://apple.com', add_date: '1500000000' },
+            { title: 'GitHub Docs', url: 'https://github.com', add_date: '1600000000' },
+            { title: 'Zebra Tech', url: 'https://zebra.com', add_date: '1700000000' }
+        ]
+
+        const progressMessages = []
+        const onProgress = (evt) => {
+            if (evt.message) progressMessages.push(evt.message)
+        }
+
+        const service = createOrganizerService(
+            'test-key',
+            ['Tech'],
+            onProgress,
+            'google/gemini-3.1-flash-lite',
+            'medium',
+            true,
+            true,
+            false,
+            true, // flatDateSort
+            'alpha-desc' // dateSortOrder (Z-A)
+        )
+
+        const results = await service.start(bookmarks)
+
+        expect(results.map(b => b.title)).toEqual(['Zebra Tech', 'GitHub Docs', 'Apple Insider'])
+        expect(service.stats.folderTitle).toMatch(/^\[Alphabetical - Z–A\] Bookmarks-\d{4}-\d{2}-\d{2}$/)
+        expect(results.filename).toMatch(/^bookmarks_alphabetical_z-a_\d{4}-\d{2}-\d{2}\.html$/)
+        expect(progressMessages.some(m => m.includes('Sorting 3 bookmarks alphabetically (Z–A)'))).toBe(true)
+        expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(results)
+    })
+
+    it('organizes browser bookmarks alphabetically in flat mode without creating subfolders', async () => {
+        const store = new FakeBookmarkStore()
+        store.addFolder('2', 'alpha-root-123', '[Alphabetical - A–Z] Bookmarks-2025-01-01')
+        store.addUrl('1', '10', 'https://zebra.com', 'Zebra Link', 1500000000000)
+        store.addUrl('1', '11', 'https://apple.com', 'Apple Link', 1700000000000)
+        store.addUrl('1', '12', 'https://mango.com', 'Mango Link', 1600000000000)
+
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'alpha-root-123', title: '[Alphabetical - A–Z] Bookmarks-2025-01-01' })
+        wireStore(store)
+
+        const service = createOrganizerService(
+            'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
+            'medium', true, false, false,
+            true,  // flatDateSort
+            'alpha-asc'
+        )
+        service.snapshotProvider = async () => {}
+        const reorderSpy = vi.spyOn(service, 'reorderFolder').mockResolvedValue()
+
+        const results = await service.start(null)
+
+        expect(results.map(b => b.title)).toEqual(['Apple Link', 'Mango Link', 'Zebra Link'])
+        expect(store.node('10').parentId).toBe('alpha-root-123')
+        expect(store.node('11').parentId).toBe('alpha-root-123')
+        expect(store.node('12').parentId).toBe('alpha-root-123')
+        expect(reorderSpy).toHaveBeenCalledWith('alpha-root-123', ['11', '12', '10'])
+    })
+
     it('cleans titles in flat mode when cleanTitles is enabled', async () => {
         vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => {
             return batch.map(b => ({
