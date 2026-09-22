@@ -393,6 +393,45 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.queryByText('Oldest bookmarks at the top')).toBeNull()
     })
 
+    it('allows switching sort criterion to Alphabetical and toggling A to Z / Z to A', () => {
+        render(<Organizer />)
+
+        // Enable flat sort
+        act(() => {
+            fireEvent.click(screen.getByRole('switch', { name: /Sort by date added - Flat list/i }))
+        })
+
+        // Default criterion is Date Added, default action button is "Sort My Bookmarks by Date"
+        expect(screen.getByText('Sort My Bookmarks by Date')).toBeDefined()
+        expect(screen.getByText('Date Added')).toBeDefined()
+        expect(screen.getByText('Alphabetical')).toBeDefined()
+        expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
+
+        // Switch criterion to Alphabetical
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: /Alphabetical/i }))
+        })
+
+        // Action button updates to Alphabetical
+        expect(screen.getByText('Sort My Bookmarks Alphabetically')).toBeDefined()
+        expect(screen.getByText('A to Z bookmarks at the top')).toBeDefined()
+        expect(screen.getByText('A to Z')).toBeDefined()
+        expect(screen.getByText('Z to A')).toBeDefined()
+
+        // Flip direction by clicking readout button
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'A to Z bookmarks at the top' }))
+        })
+        expect(screen.getByText('Z to A bookmarks at the top')).toBeDefined()
+        expect(screen.queryByText('A to Z bookmarks at the top')).toBeNull()
+
+        // Flip direction by clicking A to Z button
+        act(() => {
+            fireEvent.click(screen.getByRole('button', { name: 'A to Z' }))
+        })
+        expect(screen.getByText('A to Z bookmarks at the top')).toBeDefined()
+    })
+
     it('provides cancel button during processing that invokes organizer.cancel()', async () => {
         localStorage.setItem('apiKey', 'sk-or-test-12345')
 

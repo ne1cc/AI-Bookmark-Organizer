@@ -147,6 +147,21 @@ export function getStandardizedOutputLabel(options = {}) {
     const isoDate = (date instanceof Date ? date : new Date(date)).toISOString().slice(0, 10);
 
     if (flatDateSort) {
+        const isAlpha = dateSortOrder === 'alpha-asc' || dateSortOrder === 'alpha-desc' || dateSortOrder === 'a-z' || dateSortOrder === 'z-a' || dateSortOrder === 'alpha';
+        if (isAlpha) {
+            const isDesc = dateSortOrder === 'alpha-desc' || dateSortOrder === 'z-a';
+            const dirLabel = isDesc ? 'Z–A' : 'A–Z';
+            const fileKey = isDesc ? 'z-a' : 'a-z';
+            return {
+                rootFolderTitle: `[Alphabetical - ${dirLabel}] Bookmarks-${isoDate}`,
+                legacyFolderTitle: `Alphabetical Bookmarks-${isoDate}`,
+                downloadFilename: `bookmarks_alphabetical_${fileKey}_${isoDate}.html`,
+                displayLabel: `Alphabetical (${dirLabel})`,
+                tierLabel: 'Alphabetical',
+                badge: dirLabel
+            };
+        }
+
         const isDesc = dateSortOrder !== 'asc';
         const dirLabel = isDesc ? 'Newest First' : 'Oldest First';
         const fileKey = isDesc ? 'newest' : 'oldest';

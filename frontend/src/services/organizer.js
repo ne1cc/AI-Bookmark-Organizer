@@ -724,29 +724,51 @@ export class OrganizerService {
                 sub_category: null
             }));
 
-            // Chronological sort
-            const isDesc = this.dateSortOrder !== 'asc'; // default 'desc' (newest first)
-            this.onProgress({
-                status: 'processing',
-                message: `Sorting ${finalResults.length} bookmarks chronologically (${isDesc ? 'Newest First' : 'Oldest First'})...`,
-                percent: 30
-            });
+            // Alphabetical vs Chronological sort
+            const isAlpha = this.dateSortOrder === 'alpha-asc' || this.dateSortOrder === 'alpha-desc' || this.dateSortOrder === 'a-z' || this.dateSortOrder === 'z-a' || this.dateSortOrder === 'alpha';
+            const isAlphaDesc = this.dateSortOrder === 'alpha-desc' || this.dateSortOrder === 'z-a';
 
-            finalResults.sort((a, b) => {
-                const timeA = getBookmarkTimestamp(a);
-                const timeB = getBookmarkTimestamp(b);
-                if (timeA > 0 && timeB > 0) {
-                    if (timeA !== timeB) {
-                        return isDesc ? timeB - timeA : timeA - timeB;
+            if (isAlpha) {
+                this.onProgress({
+                    status: 'processing',
+                    message: `Sorting ${finalResults.length} bookmarks alphabetically (${isAlphaDesc ? 'Z–A' : 'A–Z'})...`,
+                    percent: 30
+                });
+
+                finalResults.sort((a, b) => {
+                    const titleA = (a.title || a.url || '').trim();
+                    const titleB = (b.title || b.url || '').trim();
+                    const diff = titleA.localeCompare(titleB, undefined, { sensitivity: 'base', numeric: true });
+                    if (diff !== 0) {
+                        return isAlphaDesc ? -diff : diff;
                     }
-                    return (a.title || '').localeCompare(b.title || '');
-                } else if (timeA > 0) {
-                    return -1; // Valid timestamp comes before missing timestamp
-                } else if (timeB > 0) {
-                    return 1;  // Missing timestamp goes to bottom
-                }
-                return (a._origIndex ?? 0) - (b._origIndex ?? 0);
-            });
+                    return (a._origIndex ?? 0) - (b._origIndex ?? 0);
+                });
+            } else {
+                // Chronological sort
+                const isDesc = this.dateSortOrder !== 'asc'; // default 'desc' (newest first)
+                this.onProgress({
+                    status: 'processing',
+                    message: `Sorting ${finalResults.length} bookmarks chronologically (${isDesc ? 'Newest First' : 'Oldest First'})...`,
+                    percent: 30
+                });
+
+                finalResults.sort((a, b) => {
+                    const timeA = getBookmarkTimestamp(a);
+                    const timeB = getBookmarkTimestamp(b);
+                    if (timeA > 0 && timeB > 0) {
+                        if (timeA !== timeB) {
+                            return isDesc ? timeB - timeA : timeA - timeB;
+                        }
+                        return (a.title || '').localeCompare(b.title || '');
+                    } else if (timeA > 0) {
+                        return -1; // Valid timestamp comes before missing timestamp
+                    } else if (timeB > 0) {
+                        return 1;  // Missing timestamp goes to bottom
+                    }
+                    return (a._origIndex ?? 0) - (b._origIndex ?? 0);
+                });
+            }
 
             finalResults.isFlat = true;
 
@@ -773,16 +795,69 @@ export class OrganizerService {
                     dateSortOrder: this.dateSortOrder,
                     dateSpan,
                     failedMoves: this.failedMoves,
-                    folderTitle: labels.rootFolderTitle
-                    ,detailFoldersCount: 0, detailedSubcategories: 0
+                    folderTitle: labels.rootFolderTitle,
+                    tierLabel: labels.tierLabel,
+                    detailFoldersCount: 0,
+                    detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
 
-                this.onProgress({ status: 'processing', message: `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`, percent: 95, dateSpan });
+                const fileMsg = isAlpha
+                    ? `Generating alphabetical file (${labels.badge})...`
+                    : `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`;
+                this.onProgress({ status: 'processing', message: fileMsg, percent: 95, dateSpan });
                 (this.fileDownload || downloadBookmarks)(finalResults);
+            } else if (isAlpha) {
+                // Browser mode (no file uploaded): flat alphabetical order directly into root folder
+                this.stats = {
+                    total: finalResults.length,
+                    duplicatesRemoved,
+                    deadLinksArchived: 0,
+                    categoriesCount: 0,
+                    categoryBreakdown: {},
+                    isFlat: true,
+                    dateSortOrder: this.dateSortOrder,
+                    dateSpan,
+                    failedMoves: this.failedMoves,
+                    folderTitle: labels.rootFolderTitle,
+                    tierLabel: labels.tierLabel,
+                    detailFoldersCount: 0,
+                    detailedSubcategories: 0
+                };
+                finalResults.stats = this.stats;
+                finalResults.filename = labels.downloadFilename;
+
+                this.onProgress({
+                    status: 'processing',
+                    message: `Saving ${finalResults.length.toLocaleString()} alphabetical bookmarks (${labels.badge}) to browser...`,
+                    percent: 35,
+                    dateSpan
+                });
+                if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
+                const rootId = await getOtherBookmarksRootId();
+                let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
+                if (!rootFolder && labels.legacyFolderTitle) {
+                    rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
+                }
+                clearFolderCache();
+
+                const movePlan = finalResults.map(item => ({ item, parentId: rootFolder.id }));
+
+                if (!this.isCancelled) {
+                    await this.moveItems(movePlan, 35, 95);
+                }
+                if (!this.isCancelled) {
+                    this.onProgress({ status: 'processing', message: 'Finalizing alphabetical order...', percent: 96 });
+                    await this.removeDoomedDuplicates();
+                }
+
+                if (!this.isCancelled) {
+                    await this.reorderFolder(rootFolder.id, finalResults.map(item => item.id));
+                }
             } else {
                 // Browser mode (no file uploaded): bucket into MECE Month & Year tiers
+                const isDesc = this.dateSortOrder !== 'asc';
                 const bucketMap = new Map();
                 for (const item of finalResults) {
                     const bucket = getMonthYearBucket(item);
@@ -806,8 +881,10 @@ export class OrganizerService {
                     dateSortOrder: this.dateSortOrder,
                     dateSpan,
                     failedMoves: this.failedMoves,
-                    folderTitle: labels.rootFolderTitle
-                    ,detailFoldersCount: 0, detailedSubcategories: 0
+                    folderTitle: labels.rootFolderTitle,
+                    tierLabel: labels.tierLabel,
+                    detailFoldersCount: 0,
+                    detailedSubcategories: 0
                 };
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
@@ -816,9 +893,9 @@ export class OrganizerService {
                 if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
                 const rootId = await getOtherBookmarksRootId();
                 let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
-            if (!rootFolder && labels.legacyFolderTitle) {
-                rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
-            }
+                if (!rootFolder && labels.legacyFolderTitle) {
+                    rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
+                }
                 clearFolderCache();
 
                 // Sort month-year buckets chronologically

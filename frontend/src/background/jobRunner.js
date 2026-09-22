@@ -188,8 +188,12 @@ export class BackgroundJobRunner {
         }
 
         if (flatDateSort) {
-            const orderLabel = dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First';
-            this.addLog('Starting Chronological Date Sort...');
+            const isAlpha = dateSortOrder === 'alpha-asc' || dateSortOrder === 'alpha-desc' || dateSortOrder === 'a-z' || dateSortOrder === 'z-a' || dateSortOrder === 'alpha';
+            const isAlphaDesc = dateSortOrder === 'alpha-desc' || dateSortOrder === 'z-a';
+            const orderLabel = isAlpha
+                ? (isAlphaDesc ? 'Alphabetical (Z–A)' : 'Alphabetical (A–Z)')
+                : (dateSortOrder === 'asc' ? 'Oldest First' : 'Newest First');
+            this.addLog(isAlpha ? 'Starting Alphabetical Sort...' : 'Starting Chronological Date Sort...');
             this.addLog('Mode: Flat List (No Folders / Schema-free)');
             this.addLog(`Sort Direction: ${orderLabel}`);
             this.addLog(`Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`);
