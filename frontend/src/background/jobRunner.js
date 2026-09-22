@@ -217,10 +217,10 @@ export class BackgroundJobRunner {
                     this.addLog(data.message);
                 } else if (data.status === 'processing') {
                     if (data.message) this.addLog(data.message);
-                    if (typeof data.percent === 'number') this.currentJob.progress = data.percent;
+                    if (typeof data.percent === 'number') this.currentJob.progress = Math.min(99, Math.max(0, Math.round(data.percent)));
                 } else if (data.status === 'progress') {
                     if (data.message) this.addLog(data.message);
-                    this.currentJob.progress = data.percent;
+                    this.currentJob.progress = Math.min(99, Math.max(0, Math.round(data.percent)));
                     if (data.clearNotice) {
                         this.currentJob.backgroundNotice = '';
                     }

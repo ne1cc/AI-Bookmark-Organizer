@@ -6,9 +6,9 @@ import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
 // Detail-classification chunks are small, uniform requests, so they run
-// through a worker pool with the same concurrency as the main classification
-// pass instead of one group (and one chunk) at a time.
-const DETAIL_CLASSIFICATION_CONCURRENCY = 4;
+// through a worker pool with bounded concurrency (2) to avoid exhausting
+// free-tier rate limits (15 RPM) and triggering cascading 60s backoffs.
+const DETAIL_CLASSIFICATION_CONCURRENCY = 2;
 
 // Fast reachability probe for URLs using no-cors and an aggressive timeout.
 // Resolves true for reachable or indeterminate hosts; returns false only on DNS/network failure or timeout.
@@ -275,7 +275,15 @@ export class OrganizerService {
     constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "medium", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
         this.apiKey = apiKey;
         this.categories = categories;
-        this.onProgress = onProgress || (() => { });
+        const rawOnProgress = onProgress || (() => { });
+        this.onProgress = (data) => {
+            if (!data) return;
+            const payload = { ...data };
+            if (typeof payload.percent === 'number' && payload.status !== 'done') {
+                payload.percent = Math.min(99, Math.max(0, Math.round(payload.percent)));
+            }
+            rawOnProgress(payload);
+        };
         this.model = model;
         this.subfolderTarget = subfolderTarget;
         this.removeDuplicates = removeDuplicates;
@@ -326,12 +334,21 @@ export class OrganizerService {
         return Boolean(this.inferCategories);
     }
 
-    async moveItems(pairs) {
+    async moveItems(pairs, basePercent = 90, maxPercent = 97) {
         const WRITE_CHUNK_SIZE = 15;
         for (let i = 0; i < pairs.length; i += WRITE_CHUNK_SIZE) {
             if (this.isCancelled) break;
             const chunk = pairs.slice(i, i + WRITE_CHUNK_SIZE);
             await Promise.all(chunk.map(({ item, parentId }) => this.safeMove(item, parentId)));
+            const moved = Math.min(pairs.length, i + chunk.length);
+            if (pairs.length > 0) {
+                const movePct = Math.min(maxPercent, Math.round(basePercent + (moved / pairs.length) * (maxPercent - basePercent)));
+                this.onProgress({
+                    status: 'processing',
+                    message: `Moving bookmarks in browser (${moved}/${pairs.length})...`,
+                    percent: movePct
+                });
+            }
         }
     }
 
@@ -688,7 +705,7 @@ export class OrganizerService {
                     this.onProgress({
                         status: 'processing',
                         message: `Cleaning titles (batch ${i + 1}/${batches.length})...`,
-                        percent: Math.round((i / batches.length) * 100)
+                        percent: Math.round(5 + (i / batches.length) * 20)
                     });
                     cleanedBatches[i] = await this.classifyWithSubdivision(batches[i].batchData, dummySchema, `${i + 1}`);
                 }
@@ -710,8 +727,9 @@ export class OrganizerService {
             // Chronological sort
             const isDesc = this.dateSortOrder !== 'asc'; // default 'desc' (newest first)
             this.onProgress({
-                status: 'info',
-                message: `Sorting ${finalResults.length} bookmarks chronologically (${isDesc ? 'Newest First' : 'Oldest First'})...`
+                status: 'processing',
+                message: `Sorting ${finalResults.length} bookmarks chronologically (${isDesc ? 'Newest First' : 'Oldest First'})...`,
+                percent: 30
             });
 
             finalResults.sort((a, b) => {
@@ -761,7 +779,7 @@ export class OrganizerService {
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
 
-                this.onProgress({ status: 'info', message: `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
+                this.onProgress({ status: 'processing', message: `Generating chronological file${dateSpan ? ` (${dateSpan})` : ''}...`, percent: 95, dateSpan });
                 (this.fileDownload || downloadBookmarks)(finalResults);
             } else {
                 // Browser mode (no file uploaded): bucket into MECE Month & Year tiers
@@ -794,7 +812,7 @@ export class OrganizerService {
                 finalResults.stats = this.stats;
                 finalResults.filename = labels.downloadFilename;
 
-                this.onProgress({ status: 'info', message: `Saving ${finalResults.length.toLocaleString()} chronological bookmarks${dateSpan ? ` (${dateSpan})` : ''} to browser...`, dateSpan });
+                this.onProgress({ status: 'processing', message: `Saving ${finalResults.length.toLocaleString()} chronological bookmarks${dateSpan ? ` (${dateSpan})` : ''} to browser...`, percent: 35, dateSpan });
                 if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
                 const rootId = await getOtherBookmarksRootId();
                 let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
@@ -819,9 +837,10 @@ export class OrganizerService {
                 }
 
                 if (!this.isCancelled) {
-                    await this.moveItems(movePlan);
+                    await this.moveItems(movePlan, 35, 95);
                 }
                 if (!this.isCancelled) {
+                    this.onProgress({ status: 'processing', message: 'Finalizing chronological order...', percent: 96 });
                     await this.removeDoomedDuplicates();
                 }
 
@@ -865,9 +884,9 @@ export class OrganizerService {
             // --- Phase 1: Generate Schema ---
             const inferenceMode = this.isInferenceMode();
             if (!inferenceMode && this.categories && this.categories.length > 0) {
-                this.onProgress({ status: 'info', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...` });
+                this.onProgress({ status: 'processing', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...`, percent: 5 });
             } else {
-                this.onProgress({ status: 'info', message: 'Analyzing bookmarks to generate categories automatically...' });
+                this.onProgress({ status: 'processing', message: 'Analyzing bookmarks to generate categories automatically...', percent: 5 });
             }
             if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
                 this.onProgress({
@@ -915,7 +934,7 @@ export class OrganizerService {
                         this.onProgress({ status: 'info', message: `  • ${cat.name}${subCats}` });
                     });
                 }
-                this.onProgress({ status: 'info', message: this.describeSchema(schema) });
+                this.onProgress({ status: 'info', message: this.describeSchema(schema), percent: 14 });
             } catch (err) {
                 if (this.isCancelled || err?.isCancelled) {
                     this.onProgress({ status: 'warning', message: 'Process cancelled.' });
@@ -1004,10 +1023,11 @@ export class OrganizerService {
                 const currentIdx = batchIdx++;
                 const { index, batchData } = batches[currentIdx];
 
+                const currentPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
                 this.onProgress({
                     status: 'processing',
                     message: `Classifying batch ${currentIdx + 1}/${batches.length}...`,
-                    percent: Math.round((processed / total) * 100)
+                    percent: currentPercent
                 });
 
                 try {
@@ -1033,7 +1053,8 @@ export class OrganizerService {
                     // Accumulate results
                     results[index] = retainDetailRunOrdinals(classified, batchData);
                     processed += batchData.length;
-                    this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
+                    const batchPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
+                    this.onProgress({ status: 'progress', percent: batchPercent, clearNotice: true });
 
                 } catch (err) {
                     if (this.isCancelled || err?.isCancelled) return;
@@ -1063,14 +1084,16 @@ export class OrganizerService {
             for (const { index, batchData, label } of failedBatches) {
                 if (this.isCancelled) break;
 
-                this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...` });
+                const currentPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
+                this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...`, percent: currentPercent });
                 results[index] = retainDetailRunOrdinals(
                     await this.classifyWithSubdivision(batchData, schema, label),
                     batchData
                 );
                 if (this.isCancelled) break;
                 processed += batchData.length;
-                this.onProgress({ status: 'progress', percent: Math.min(100, Math.round((processed / total) * 100)), clearNotice: true });
+                const retryPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
+                this.onProgress({ status: 'progress', percent: retryPercent, clearNotice: true });
             }
 
             if (this.isCancelled) {
@@ -1105,8 +1128,9 @@ export class OrganizerService {
             const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
             const eligibleGroupCount = eligibleGroups.size;
             this.onProgress({
-                status: 'info',
-                message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`
+                status: 'processing',
+                message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`,
+                percent: 71
             });
             let detailSchemaFailures = 0;
             let detailClassificationFailures = 0;
@@ -1131,6 +1155,11 @@ export class OrganizerService {
                             message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
                         });
                     }
+                    this.onProgress({
+                        status: 'processing',
+                        message: `Enriching subfolders across ${canonicalDetailSchemas.size} group${canonicalDetailSchemas.size === 1 ? '' : 's'}...`,
+                        percent: 74
+                    });
                     // Flat task list of (group, chunk) pairs so a worker pool
                     // can overlap them: group order and within-group chunk
                     // order are preserved by task index, but groups no longer
@@ -1150,6 +1179,7 @@ export class OrganizerService {
 
                     const detailed = new Array(detailTasks.length);
                     let detailTaskIdx = 0;
+                    let completedDetailTasks = 0;
                     const detailWorker = async () => {
                         while (detailTaskIdx < detailTasks.length && !this.isCancelled) {
                             const taskIdx = detailTaskIdx++;
@@ -1171,6 +1201,14 @@ export class OrganizerService {
                                 if (this.isCancelled || err?.isCancelled) throw err;
                                 detailClassificationFailures++;
                                 this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
+                            } finally {
+                                completedDetailTasks++;
+                                const detailPercent = Math.min(88, Math.round(74 + (completedDetailTasks / Math.max(1, detailTasks.length)) * 14));
+                                this.onProgress({
+                                    status: 'progress',
+                                    percent: detailPercent,
+                                    clearNotice: true
+                                });
                             }
                         }
                     };
@@ -1201,6 +1239,8 @@ export class OrganizerService {
                     detailSchemaFailures = eligibleGroupCount;
                     this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
                 }
+            } else {
+                this.onProgress({ status: 'progress', percent: 88, clearNotice: true });
             }
 
             const detailGroupsKeptAtTwoLevels = eligibleGroupCount - (this.stats.detailedSubcategories || 0);
@@ -1237,8 +1277,9 @@ export class OrganizerService {
             };
             const sortLabel = sortLabels[this.schemaSortOrder] || this.schemaSortOrder;
             this.onProgress({
-                status: 'info',
-                message: `Sorting folder contents (${sortLabel})...`
+                status: 'processing',
+                message: `Sorting folder contents (${sortLabel})...`,
+                percent: 89
             });
         }
 
@@ -1308,7 +1349,7 @@ export class OrganizerService {
         });
 
         if (fileBookmarks) {
-            this.onProgress({ status: 'info', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, dateSpan });
+            this.onProgress({ status: 'processing', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, percent: 95, dateSpan });
             try {
                 (this.fileDownload || downloadBookmarks)(finalResults);
             } catch (dlErr) {
@@ -1320,7 +1361,7 @@ export class OrganizerService {
                 return null;
             }
             // Browser mode: relocate existing bookmarks (spec §6)
-            this.onProgress({ status: 'info', message: `Reorganizing ${finalResults.length.toLocaleString()} bookmarks${dateSpan ? ` (${dateSpan})` : ''} in the browser...`, dateSpan });
+            this.onProgress({ status: 'processing', message: `Reorganizing ${finalResults.length.toLocaleString()} bookmarks${dateSpan ? ` (${dateSpan})` : ''} in the browser...`, percent: 90, dateSpan });
             if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
             if (this.isCancelled) {
                 this.onProgress({ status: 'warning', message: 'Cancelled — halting operations.' });
@@ -1390,12 +1431,13 @@ export class OrganizerService {
                 return null;
             }
 
-            await this.moveItems(itemsWithParents);
+            await this.moveItems(itemsWithParents, 90, 97);
             if (this.isCancelled) {
                 this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
                 return null;
             }
 
+            this.onProgress({ status: 'processing', message: 'Finalizing folder structure...', percent: 98 });
             await this.removeDoomedDuplicates();
             if (this.isCancelled) {
                 this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
