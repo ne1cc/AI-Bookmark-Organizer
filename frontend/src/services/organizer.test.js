@@ -2848,3 +2848,59 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         expect(store.ops).toEqual([]) // zero mutations
     })
 })
+
+describe('Progress reporting guarantees', () => {
+    it('clamps non-done progress reports to at most 99% and preserves 100% only for done status', async () => {
+        const events = []
+        const onProgress = (e) => events.push(e)
+        const service = createOrganizerService('test-key', ['Tech'], onProgress)
+
+        service.onProgress({ status: 'processing', message: 'Almost done...', percent: 100 })
+        service.onProgress({ status: 'progress', percent: 120 })
+        service.onProgress({ status: 'progress', percent: -5 })
+        service.onProgress({ status: 'done', message: 'Finished!', percent: 100 })
+
+        expect(events[0]).toEqual({ status: 'processing', message: 'Almost done...', percent: 99 })
+        expect(events[1]).toEqual({ status: 'progress', percent: 99 })
+        expect(events[2]).toEqual({ status: 'progress', percent: 0 })
+        expect(events[3]).toEqual({ status: 'done', message: 'Finished!', percent: 100 })
+    })
+
+    it('emits progressive percentage updates through schema, main classification, and browser move stages without reaching 100% before done', async () => {
+        const store = new FakeBookmarkStore()
+        store.addFolder('2', 'chron-root-123', 'AI Organized Bookmarks')
+        for (let i = 0; i < 5; i++) {
+            store.addUrl('1', String(100 + i), `https://site-${i}.com`, `Site ${i}`, 1500000000000 + i * 1000)
+        }
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
+        vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Tech' })
+        vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+            categories: [{ name: 'Tech', sub_categories: [] }]
+        })
+        vi.spyOn(ai, 'classifyBatch').mockResolvedValue(
+            Array.from({ length: 5 }, (_, i) => ({
+                id: String(100 + i),
+                title: `Site ${i}`,
+                url: `https://site-${i}.com`,
+                category: 'Tech',
+                sub_category: 'General'
+            }))
+        )
+        wireStore(store)
+
+        const events = []
+        const service = createOrganizerService('test-key', ['Tech'], (e) => events.push(e), 'google/gemini-3.1-flash-lite', 'medium', false, false, false, false, 'desc')
+        service.snapshotProvider = async () => {}
+
+        const results = await service.start(null)
+        expect(results).not.toBeNull()
+
+        const percentEvents = events.filter(e => typeof e.percent === 'number')
+        expect(percentEvents.length).toBeGreaterThan(0)
+        const nonDonePercents = events.filter(e => e.status !== 'done' && typeof e.percent === 'number')
+        for (const evt of nonDonePercents) {
+            expect(evt.percent).toBeLessThanOrEqual(99)
+            expect(evt.percent).toBeGreaterThanOrEqual(0)
+        }
+    })
+})

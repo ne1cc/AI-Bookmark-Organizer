@@ -292,7 +292,7 @@ export default function Organizer({ theme = 'light' }) {
                 if (state.status === 'processing') {
                     resultsRequestPendingRef.current = false
                     setStatus('processing');
-                    if (typeof state.progress === 'number') setProgress(state.progress);
+                    if (typeof state.progress === 'number') setProgress(Math.min(99, Math.max(0, state.progress)));
                     if (state.activeDateSpan) setActiveDateSpan(state.activeDateSpan);
                     if (state.backgroundNotice !== undefined) setBackgroundNotice(state.backgroundNotice);
                     if (Array.isArray(state.logs) && state.logs.length > 0) {
@@ -429,7 +429,7 @@ export default function Organizer({ theme = 'light' }) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
                             setStatus('processing');
-                            if (typeof aj.progress === 'number') setProgress(aj.progress);
+                            if (typeof aj.progress === 'number') setProgress(Math.min(99, Math.max(0, aj.progress)));
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             if (aj.backgroundNotice !== undefined) setBackgroundNotice(aj.backgroundNotice);
                             if (Array.isArray(aj.logs) && aj.logs.length > 0) {
@@ -1084,10 +1084,10 @@ export default function Organizer({ theme = 'light' }) {
                         addLog(data.message);
                     } else if (data.status === 'processing') {
                         if (data.message) addLog(data.message);
-                        if (typeof data.percent === 'number') setProgress(data.percent);
+                        if (typeof data.percent === 'number') setProgress(Math.min(99, Math.max(0, Math.round(data.percent))));
                     } else if (data.status === 'progress') {
                         if (data.message) addLog(data.message);
-                        setProgress(data.percent);
+                        setProgress(Math.min(99, Math.max(0, Math.round(data.percent))));
                         if (data.clearNotice) {
                             setBackgroundNotice('');
                         }
@@ -2400,7 +2400,7 @@ export default function Organizer({ theme = 'light' }) {
                                 }}
                             >
                                 <Loader2 size={18} className="spin-icon" />
-                                <span>In Progress... {progress}%</span>
+                                <span>In Progress... {Math.min(99, Math.max(0, progress))}%</span>
                             </button>
                             <button
                                 type="button"
