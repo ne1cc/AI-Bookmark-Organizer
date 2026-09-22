@@ -272,7 +272,7 @@ export function isNonSubdividableError(err) {
 }
 
 export class OrganizerService {
-    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "1-3", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
+    constructor(apiKey, categories, onProgress, model = "google/gemini-3.1-flash-lite", subfolderTarget = "medium", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
         this.apiKey = apiKey;
         this.categories = categories;
         this.onProgress = onProgress || (() => { });
@@ -491,7 +491,7 @@ export class OrganizerService {
 
     // Second chance at a usable schema before giving up and using built-in
     // defaults. Halving the sample relieves the token pressure that truncates
-    // large structures, and the balanced granularity asks for less than '10+'.
+    // large structures, and the balanced tier asks for less than Detailed.
     async retrySchemaOnSmallerSample(activeLinks) {
         if (this.isCancelled) return null;
         // Halve the sample limit rather than slicing the head off the list:
@@ -511,7 +511,7 @@ export class OrganizerService {
                 this.apiKey,
                 this.categories,
                 this.model,
-                '5-10',
+                'medium',
                 () => this.isCancelled,
                 ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
                     if (isSchemaCorrection) {
