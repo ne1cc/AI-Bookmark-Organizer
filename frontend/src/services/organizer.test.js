@@ -2315,6 +2315,56 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
         expect(service.stats.schemaSortOrder).toBe('date-asc')
     })
 
+    it('breaks same-folder timestamp ties by original bookmark order, newest-added first when schemaSortOrder is date-desc', async () => {
+        const bookmarks = [
+            { title: 'Zebra Tech', url: 'https://tech.com/zebra', add_date: '1600000000' },
+            { title: 'Apple Tech', url: 'https://tech.com/apple', add_date: '1600000000' },
+            { title: 'Mango Tech', url: 'https://tech.com/mango', add_date: '1600000000' }
+        ]
+
+        const service = createOrganizerService(
+            'test-key',
+            ['Tech'],
+            () => {},
+            'google/gemini-3.1-flash-lite',
+            'medium',
+            false,
+            true,
+            false,
+            false,
+            'desc',
+            'date-desc'
+        )
+
+        const results = await service.start(bookmarks)
+        expect(results.map(b => b.title)).toEqual(['Mango Tech', 'Apple Tech', 'Zebra Tech'])
+    })
+
+    it('breaks same-folder timestamp ties by original bookmark order, oldest-added first when schemaSortOrder is date-asc', async () => {
+        const bookmarks = [
+            { title: 'Zebra Tech', url: 'https://tech.com/zebra', add_date: '1600000000' },
+            { title: 'Apple Tech', url: 'https://tech.com/apple', add_date: '1600000000' },
+            { title: 'Mango Tech', url: 'https://tech.com/mango', add_date: '1600000000' }
+        ]
+
+        const service = createOrganizerService(
+            'test-key',
+            ['Tech'],
+            () => {},
+            'google/gemini-3.1-flash-lite',
+            'medium',
+            false,
+            true,
+            false,
+            false,
+            'desc',
+            'date-asc'
+        )
+
+        const results = await service.start(bookmarks)
+        expect(results.map(b => b.title)).toEqual(['Zebra Tech', 'Apple Tech', 'Mango Tech'])
+    })
+
     it('sorts bookmarks inside folders by Website Domain A-Z when schemaSortOrder is domain', async () => {
         const bookmarks = [
             { title: 'YouTube Video', url: 'https://www.youtube.com/watch?v=123' },

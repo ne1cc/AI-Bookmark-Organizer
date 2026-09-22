@@ -1331,14 +1331,13 @@ export class OrganizerService {
                     message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
                 });
             }
-
-            // The ordinal is run-local reconciliation metadata, never part of
-            // the bookmark result or downloaded file.
-            classifiedActive = classifiedActive.map(({ _detailRunOrdinal, ...item }) => item);
         }
 
-        // Combine classified reachable links with archived unreachable links
-        const finalResults = [...classifiedActive, ...deadLinks];
+        // Combine classified reachable links with archived unreachable links.
+        // Items still carry _detailRunOrdinal here — it's used as a same-timestamp
+        // tie-break below and stripped afterward, since it's run-local
+        // reconciliation metadata, never part of the bookmark result or downloaded file.
+        let finalResults = [...classifiedActive, ...deadLinks];
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
@@ -1378,6 +1377,9 @@ export class OrganizerService {
                     const timeB = getBookmarkTimestamp(b);
                     if (timeA > 0 && timeB > 0) {
                         if (timeA !== timeB) return timeB - timeA;
+                        // Same timestamp: fall back to original bookmark order,
+                        // a closer proxy for true add order than title.
+                        return (b._detailRunOrdinal ?? 0) - (a._detailRunOrdinal ?? 0);
                     } else if (timeA > 0) {
                         return -1;
                     } else if (timeB > 0) {
@@ -1390,6 +1392,7 @@ export class OrganizerService {
                     const timeB = getBookmarkTimestamp(b);
                     if (timeA > 0 && timeB > 0) {
                         if (timeA !== timeB) return timeA - timeB;
+                        return (a._detailRunOrdinal ?? 0) - (b._detailRunOrdinal ?? 0);
                     } else if (timeA > 0) {
                         return -1;
                     } else if (timeB > 0) {
@@ -1410,6 +1413,8 @@ export class OrganizerService {
                 }
             }
         });
+
+        finalResults = finalResults.map(({ _detailRunOrdinal, ...item }) => item);
 
         if (this.isCancelled) {
             this.onProgress({ status: 'warning', message: 'Process cancelled.' });
