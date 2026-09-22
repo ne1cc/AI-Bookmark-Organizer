@@ -411,7 +411,7 @@ describe('OrganizerService cleanTitles integration', () => {
     })
 
     it('stores cleanTitles as true when passed in constructor', () => {
-        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, true)
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-3.1-flash-lite', 'medium', true, true, true)
         expect(service.cleanTitles).toBe(true)
     })
 
@@ -458,7 +458,7 @@ describe('OrganizerService cleanTitles integration', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             true
@@ -498,7 +498,7 @@ describe('OrganizerService cleanTitles integration', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             true
@@ -576,7 +576,7 @@ describe('OrganizerService detail enrichment integration', () => {
     it('assigns detail folders through the real inferred OrganizerService run', async () => {
         vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
-        const service = createOrganizerService('test-key', [], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, true)
+        const service = createOrganizerService('test-key', [], () => {}, undefined, 'medium', true, true, false, false, 'desc', undefined, true)
         const results = await service.start(links)
         expect(results.map(item => item.detail_category)).toEqual(['React', 'React', 'React', 'Vue', 'Vue', 'Vue'])
         expect(results.stats.detailFoldersCount).toBe(2)
@@ -587,7 +587,7 @@ describe('OrganizerService detail enrichment integration', () => {
         vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyBatch').mockResolvedValue(classified.map(item => ({ ...item, category: 'tech', sub_category: 'Frontend' })))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map((item, i) => ({ ...item, detail_category: i % 2 ? 'Vue' : 'React' })))
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, 'medium', true, true, false, false, 'desc', undefined, false)
         const results = await service.start(links)
         expect(new Set(results.map(item => item.category))).toEqual(new Set(['Tech']))
         expect(results.every(item => item.sub_category === 'Frontend')).toBe(true)
@@ -631,7 +631,7 @@ describe('OrganizerService detail enrichment integration', () => {
                 : (index < 3 ? 'Tokens' : 'Components')
         })))
 
-        const service = createOrganizerService('test-key', ['Tech', 'Design'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech', 'Design'], () => {}, undefined, 'medium', true, false, false, false, 'desc', undefined, false)
         const results = await service.start(groupedLinks)
 
         expect(results.find(item => item.id === 'tech-0')).toMatchObject({
@@ -653,7 +653,7 @@ describe('OrganizerService detail enrichment integration', () => {
             detail_category: index < 3 ? 'React' : 'Vue'
         })))
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, 'medium', true, false, false, false, 'desc', undefined, false)
         const results = await service.start(duplicateLinks)
 
         expect(results.find(item => item.title === 'React duplicate')?.detail_category).toBe('React')
@@ -675,7 +675,7 @@ describe('OrganizerService detail enrichment integration', () => {
             }))
         })
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, false, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, 'medium', true, false, false, false, 'desc', undefined, false)
         const results = await service.start(largeGroup)
 
         expect(detailCalls.map(records => records.length)).toEqual([50, 50, 20])
@@ -711,7 +711,7 @@ describe('OrganizerService detail enrichment integration', () => {
             }))
         })
         const logs = []
-        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, 'medium', true, true, false, false, 'desc', undefined, false)
 
         const results = await service.start(multiGroupLinks)
 
@@ -741,7 +741,7 @@ describe('OrganizerService detail enrichment integration', () => {
             }))
         })
         const logs = []
-        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, 'medium', true, true, false, false, 'desc', undefined, false)
 
         const results = await service.start(links)
 
@@ -797,12 +797,12 @@ describe('OrganizerService detail enrichment integration', () => {
         detailSchemas.mockClear()
         detailClassifier.mockClear()
         const small = links.slice(0, 5)
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, undefined, 'medium', true, true, false, false, 'desc', undefined, false)
         await service.start(small)
         expect(detailSchemas).not.toHaveBeenCalled()
         expect(detailClassifier).not.toHaveBeenCalled()
 
-        const flat = createOrganizerService('test-key', ['Tech'], () => {}, undefined, '5-10', true, true, false, true, 'desc', undefined, false)
+        const flat = createOrganizerService('test-key', ['Tech'], () => {}, undefined, 'medium', true, true, false, true, 'desc', undefined, false)
         await flat.start(links)
         expect(detailSchemas).not.toHaveBeenCalled()
         expect(detailClassifier).not.toHaveBeenCalled()
@@ -814,7 +814,7 @@ describe('OrganizerService detail enrichment integration', () => {
             .mockResolvedValue(new Map([['tech\u0000frontend', ['React', 'Vue']]]))
         vi.spyOn(ai, 'classifyDetailBatch').mockResolvedValue(classified.map(item => ({ ...item, detail_category: 'React' })))
         const logs = []
-        const sparse = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, '5-10', true, true, false, false, 'desc', undefined, false)
+        const sparse = createOrganizerService('test-key', ['Tech'], event => logs.push(event), undefined, 'medium', true, true, false, false, 'desc', undefined, false)
         const sparseResults = await sparse.start(links)
         expect(sparseResults.every(item => item.detail_category === null)).toBe(true)
         expect(logs.some(event => typeof event.message === 'string' && event.message.includes('Finding useful third-level groups'))).toBe(true)
@@ -1625,7 +1625,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             ['Tech'],
             onProgress,
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true, // sortAlphabetically
             true, // removeDuplicates
             false, // cleanTitles
@@ -1661,7 +1661,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             false,
@@ -1692,7 +1692,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             true, // cleanTitles enabled
@@ -1718,7 +1718,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             false,
@@ -1742,7 +1742,7 @@ describe('OrganizerService flat chronological date sorting', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true, // removeDuplicates enabled
             false,
@@ -1768,7 +1768,7 @@ describe('OrganizerService flat chronological date sorting', () => {
 
         const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true, false,
+            'medium', true, true, false,
             true,  // flatDateSort
             'desc'
         )
@@ -1796,7 +1796,7 @@ describe('OrganizerService flat chronological date sorting', () => {
 
         const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true, false,
+            'medium', true, true, false,
             true, 'desc'
         )
         service.snapshotProvider = async () => {}
@@ -1835,7 +1835,7 @@ describe('OrganizerService flat chronological date sorting', () => {
 
         const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, false, false,
+            'medium', true, false, false,
             true,  // flatDateSort
             'desc' // Newest First
         );
@@ -1884,7 +1884,7 @@ describe('OrganizerService flat chronological date sorting', () => {
 
         const service = createOrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, false, false,
+            'medium', true, false, false,
             false, // AI Categorized mode
             'desc'
         );
@@ -1918,7 +1918,7 @@ describe('OrganizerService flat chronological date sorting', () => {
         })
 
         const messages = []
-        const service = createOrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => messages.push(d.message), 'google/gemini-3.1-flash-lite', 'medium', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2157,7 +2157,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             ['Tech', 'Design'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             false, // sortAlphabetically
             true, // removeDuplicates
             false, // cleanTitles
@@ -2190,7 +2190,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             false,
             true,
             false,
@@ -2217,7 +2217,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             false,
             true,
             false,
@@ -2250,7 +2250,7 @@ describe('Schema Folder Content Sorting (schemaSortOrder)', () => {
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             false,
@@ -2355,7 +2355,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             true,
             true,
             false,
@@ -2387,7 +2387,7 @@ describe('total date range in categorized mode and oldest first sorting', () => 
             ['Tech'],
             () => {},
             'google/gemini-3.1-flash-lite',
-            '5-10',
+            'medium',
             false,
             true,
             false,
@@ -2569,7 +2569,7 @@ describe('fixed hierarchy placement and export', () => {
             return found || store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = createOrganizerService('test-key', selected, () => {}, undefined, '5-10', false, true, false, false, 'desc', sortOrder)
+        const service = createOrganizerService('test-key', selected, () => {}, undefined, 'medium', false, true, false, false, 'desc', sortOrder)
         service.snapshotProvider = async () => {}
         const browserResults = await service.start(null)
         const fileResults = await service.start([...classifications.keys()].map(id => ({ ...store.node(id) })))
@@ -2648,7 +2648,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, id, title)
         })
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2686,7 +2686,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.addFolder(parentId, `folder-${parentId}-${title}`, title)
         })
 
-        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech', 'Finance'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2713,7 +2713,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2738,7 +2738,7 @@ describe('categorized browser write moves and isolates failures', () => {
             return store.move(id, dest)
         })
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         const results = await service.start(null)
 
@@ -2757,7 +2757,7 @@ describe('categorized browser write moves and isolates failures', () => {
             .mockResolvedValueOnce(store.addFolder('2', 'org-root-1', 'AI Organized Bookmarks-2026-09-05'))
             .mockRejectedValue(new Error('quota exceeded'))
 
-        const service = createOrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', '5-10', false, true, false, false, 'desc', 'alpha')
+        const service = createOrganizerService('test-key', ['Tech'], (d) => d.message && logs.push(d.message), 'google/gemini-3.1-flash-lite', 'medium', false, true, false, false, 'desc', 'alpha')
         service.snapshotProvider = async () => {}
         await service.start(null)
 
@@ -2795,14 +2795,14 @@ describe('Phase B reorder pass and idempotency', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         vi.spyOn(bookmarksService, 'findOrCreateFolder').mockResolvedValue({ id: 'chron-root-123', title: 'Chronological Bookmarks' })
         wireStore(store)
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', true, true, false, true, 'desc')
         service.snapshotProvider = async () => {} // installed for real in Task 7
 
         await service.start(null)
         const opsAfterFirst = store.ops.length
         expect(opsAfterFirst).toBeGreaterThan(0)
 
-        const service2 = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service2 = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', true, true, false, true, 'desc')
         service2.snapshotProvider = async () => {}
         await service2.start(null)
 
@@ -2825,7 +2825,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         wireStore(store)
         const downloadSpy = vi.spyOn(bookmarksExport, 'downloadBookmarks').mockImplementation(() => {})
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', true, true, false, true, 'desc')
         await service.start(null)
 
         expect(downloadSpy).toHaveBeenCalledTimes(1)
@@ -2840,7 +2840,7 @@ describe('pre-write snapshot gate (mandatory before browser mutation)', () => {
         vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue(store.rootTree())
         wireStore(store)
 
-        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', '5-10', true, true, false, true, 'desc')
+        const service = createOrganizerService('test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite', 'medium', true, true, false, true, 'desc')
         service.snapshotProvider = async () => { throw new Error('disk full') }
         const results = await service.start(null)
 

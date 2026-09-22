@@ -64,7 +64,7 @@ describe('bookmark date preservation: original file → organized file', () => {
 
         const service = new OrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true, false,
+            'medium', true, true, false,
             true,   // flatDateSort — no AI
             'desc'
         )
@@ -100,7 +100,7 @@ describe('bookmark date preservation: original file → organized file', () => {
 
         const service = new OrganizerService(
             'test-key', ['Tech', 'News'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', false, true, false,
+            'medium', false, true, false,
             false,  // categorized (AI) mode
             'desc', undefined, false
         )
@@ -126,7 +126,7 @@ describe('bookmark date preservation: original file → organized file', () => {
 
         const service = new OrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true,
+            'medium', true, true,
             true,   // cleanTitles
             true,   // flatDateSort
             'asc'
@@ -150,7 +150,7 @@ describe('bookmark date preservation: original file → organized file', () => {
 
         const service = new OrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true, false, true, 'desc'
+            'medium', true, true, false, true, 'desc'
         )
 
         const html = await organizeFileToHtml(service, links)
@@ -172,7 +172,7 @@ describe('bookmark date preservation: original file → organized file', () => {
 
         const service = new OrganizerService(
             'test-key', ['Tech'], () => {}, 'google/gemini-3.1-flash-lite',
-            '5-10', true, true, false, true, 'desc'
+            'medium', true, true, false, true, 'desc'
         )
 
         const html = await organizeFileToHtml(service, links)
