@@ -12,6 +12,9 @@ export { getBookmarkDomain } from './sorting';
 // free-tier rate limits (15 RPM) and triggering cascading 60s backoffs.
 const DETAIL_CLASSIFICATION_CONCURRENCY = 2;
 
+// Main classification pass: 4 concurrent requests for throughput.
+const CLASSIFY_CONCURRENCY = 4;
+
 const PARTIAL_CANCEL_MESSAGE = 'Cancelled — bookmarks partially reorganized. Run again to finish.';
 const HALT_CANCEL_MESSAGE = 'Cancelled — halting operations.';
 
@@ -497,6 +500,16 @@ export class OrganizerService {
         }
     }
 
+    async runPool(count, limit, worker) {
+        let next = 0;
+        const lane = async () => {
+            while (next < count && !this.isCancelled) {
+                await worker(next++);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(limit, count) }, lane));
+    }
+
     // One-line shape of the structure the run will actually use, so a thin
     // schema is visible in the log before thousands of bookmarks are filed
     // against it.
@@ -908,391 +921,365 @@ export class OrganizerService {
         return finalResults;
     }
 
+    async designSchema(links) {
+        const inferenceMode = this.isInferenceMode();
+        if (!inferenceMode && this.categories && this.categories.length > 0) {
+            this.onProgress({ status: 'processing', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...`, percent: 5 });
+        } else {
+            this.onProgress({ status: 'processing', message: 'Analyzing bookmarks to generate categories automatically...', percent: 5 });
+        }
+        if (links.length > SCHEMA_SAMPLE_LIMIT) {
+            this.onProgress({
+                status: 'info',
+                message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${links.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
+            });
+        }
+
+        let schema;
+        try {
+            const schemaRetryReporter = ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
+                // The corrective round-trip is not a transport failure:
+                // reporting it as one hides the only signal that says
+                // why the structure came back flat.
+                if (isSchemaCorrection) {
+                    this.onProgress({
+                        status: 'warning',
+                        message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
+                    });
+                    return;
+                }
+                const sec = Math.ceil(delayMs / 1000);
+                this.onProgress({
+                    status: 'warning',
+                    message: isRateLimit
+                        ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
+                        : `Network issue during schema generation. Retrying in ${sec}s...`
+                });
+            };
+            schema = inferenceMode
+                ? await generateInferredSchema(
+                    links, this.apiKey, this.model, this.subfolderTarget,
+                    () => this.isCancelled, schemaRetryReporter
+                )
+                : await generateSchema(
+                    links, this.apiKey, this.categories, this.model, this.subfolderTarget,
+                    () => this.isCancelled, schemaRetryReporter
+                );
+            this.onProgress({ status: 'info', message: 'Generated category schema:' });
+            if (schema && schema.categories) {
+                schema.categories.forEach(cat => {
+                    const subCats = cat.sub_categories && cat.sub_categories.length > 0
+                        ? ` (${cat.sub_categories.join(', ')})`
+                        : '';
+                    this.onProgress({ status: 'info', message: `  • ${cat.name}${subCats}` });
+                });
+            }
+            this.onProgress({ status: 'info', message: this.describeSchema(schema), percent: 14 });
+        } catch (err) {
+            if (this.isCancelled || err?.isCancelled) {
+                return this.cancelled();
+            }
+
+            if (inferenceMode) {
+                this.onProgress({
+                    status: 'error',
+                    message: `Could not infer categories from your bookmarks: ${err.message}`
+                });
+                throw err;
+            }
+
+            console.error('Schema generation failed, falling back to curated default folders:', err);
+            this.onProgress({ status: 'warning', message: `Schema generation failed: ${err.message}` });
+
+            // A schema-less run is what filed every bookmark under "General".
+            // Retry once on a smaller sample and the default granularity —
+            // a token ceiling or an over-ambitious structure is the common
+            // cause, and both ease off with less input.
+            schema = await this.retrySchemaOnSmallerSample(links);
+
+            if (!schema) {
+                const { schema: fallback, curatedCount, carriedCount } = buildFallbackSchema(this.categories, err?.partialSchema);
+                schema = fallback;
+
+                // `status` is a lifecycle signal in both consumers, not a
+                // log severity: 'error' would flip the panel to a terminal
+                // failure screen for the rest of a run that is still going,
+                // and jobRunner does not log it at all.
+                this.onProgress({
+                    status: 'warning',
+                    message: 'AI schema generation failed — used built-in default folders. Re-run for a structure tailored to your bookmarks.'
+                });
+                this.onProgress({
+                    status: 'warning',
+                    message: `Fallback structure: ${curatedCount} categor${curatedCount === 1 ? 'y' : 'ies'} from built-in defaults, ${carriedCount} salvaged from the AI response.`
+                });
+                this.onProgress({ status: 'info', message: this.describeSchema(schema) });
+
+                const structureless = schema.categories.filter(c => c.sub_categories.length === 0).length;
+                if (structureless > 0) {
+                    this.onProgress({
+                        status: 'warning',
+                        message: `${structureless} custom categor${structureless === 1 ? 'y has' : 'ies have'} no built-in subfolders — those bookmarks will sit directly in the category folder.`
+                    });
+                }
+            }
+        }
+
+        if (this.isCancelled) {
+            return this.cancelled();
+        }
+
+        // The selected categories are authoritative even when an adapter or
+        // a recovery path supplies the schema. Classifiers and placement
+        // below therefore share the same two-level source of truth.
+        if (!inferenceMode) {
+            schema = buildAuthoritativeSchema(this.categories, schema);
+        }
+        return schema;
+    }
+
+    async classifyAll(links, schema) {
+        const total = links.length;
+        let processed = 0;
+        const percentDone = () => Math.min(70, Math.round(15 + (processed / total) * 55));
+
+        const batchSize = this.calculateAdaptiveBatchSize(total);
+        this.onProgress({ status: 'info', message: `Processing with adaptive batch size: ${batchSize} items/batch` });
+
+        const batches = sliceBatches(links, batchSize);
+        const results = new Array(batches.length);
+        const failedBatches = [];
+
+        await this.runPool(batches.length, CLASSIFY_CONCURRENCY, async (currentIdx) => {
+            const { index, batchData } = batches[currentIdx];
+
+            this.onProgress({
+                status: 'processing',
+                message: `Classifying batch ${currentIdx + 1}/${batches.length}...`,
+                percent: percentDone()
+            });
+
+            try {
+                const classified = await classifyBatch(
+                    batchData,
+                    this.apiKey,
+                    schema,
+                    this.model,
+                    this.cleanTitles,
+                    () => this.isCancelled,
+                    ({ delayMs, isRateLimit }) => {
+                        const sec = Math.ceil(delayMs / 1000);
+                        this.onProgress({
+                            status: 'warning',
+                            message: isRateLimit
+                                ? `Rate limit reached (429). Pausing for ${sec}s before retrying batch ${currentIdx + 1}...`
+                                : `Network issue on batch ${currentIdx + 1}. Retrying in ${sec}s...`
+                        });
+                    }
+                );
+                if (this.isCancelled) return;
+
+                // Accumulate results
+                results[index] = retainDetailRunOrdinals(classified, batchData);
+                processed += batchData.length;
+                this.onProgress({ status: 'progress', percent: percentDone(), clearNotice: true });
+            } catch (err) {
+                if (this.isCancelled || err?.isCancelled) return;
+                console.error(`Batch ${currentIdx + 1} failed:`, err);
+                failedBatches.push({ index, batchData, label: currentIdx + 1 });
+                this.onProgress({ status: 'warning', message: `Batch ${currentIdx + 1} failed (${err.message}) — will retry after the main pass. Continuing remaining batches in background...` });
+            }
+        });
+
+        if (this.isCancelled) return this.cancelled();
+
+        // Second pass: retry failed batches one at a time, with no concurrent
+        // traffic competing — transient network drops usually clear by now.
+        for (const { index, batchData, label } of failedBatches) {
+            if (this.isCancelled) break;
+
+            this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...`, percent: percentDone() });
+            results[index] = retainDetailRunOrdinals(
+                await this.classifyWithSubdivision(batchData, schema, label),
+                batchData
+            );
+            if (this.isCancelled) break;
+            processed += batchData.length;
+            this.onProgress({ status: 'progress', percent: percentDone(), clearNotice: true });
+        }
+
+        if (this.isCancelled) return this.cancelled();
+
+        return results.flat().filter(Boolean).map(item => {
+            const { category, sub_category, proposed } = normalizeClassificationForSchema(item, schema);
+            return { ...item, category, sub_category, ...(proposed ? { proposed: true } : {}) };
+        });
+    }
+
+    reconcileClassified(classified, schema) {
+        // Batches run concurrently and cannot see each other, so this is the
+        // first point where the whole set of subcategories is visible —
+        // and the only place spelling variants and one-bookmark folders can
+        // be resolved.
+        const { classified: reconciled, summary } = reconcileSubcategories(
+            classified,
+            schema,
+            { subfolderTarget: this.subfolderTarget }
+        );
+
+        const foldedTotal = summary.orphansFolded + summary.cappedFolded;
+        if (summary.proposedKept > 0 || summary.merged > 0 || foldedTotal > 0) {
+            this.onProgress({
+                status: 'info',
+                message: `Subcategories: +${summary.proposedKept} AI-created, ~${summary.merged} merged, ${foldedTotal} folded into General.`
+            });
+        }
+        return reconciled;
+    }
+
     async runAI({ links, duplicatesRemoved, isBrowserMode }) {
         // Bypassing network reachability probe on arbitrary bookmark URLs in Chrome extension context:
         // External websites returning HTTP 'Link: ... rel="modulepreload"' or 'rel="preload"' response headers
         // cause the browser to attempt preloading scripts into the extension's index.html context,
         // violating Manifest V3 Content Security Policy (script-src 'self'). All bookmarks are classified directly.
-        const activeLinks = links;
         const deadLinks = [];
 
-        let classifiedActive = [];
-        let runSchema = null;
+        const schema = await this.designSchema(links);
+        if (schema === null) return null;
+        const runSchema = schema;
 
-        if (activeLinks.length > 0) {
-            // --- Phase 1: Generate Schema ---
-            const inferenceMode = this.isInferenceMode();
-            if (!inferenceMode && this.categories && this.categories.length > 0) {
-                this.onProgress({ status: 'processing', message: `Using ${this.categories.length} hard-coded categories — designing subfolder structure...`, percent: 5 });
-            } else {
-                this.onProgress({ status: 'processing', message: 'Analyzing bookmarks to generate categories automatically...', percent: 5 });
-            }
-            if (activeLinks.length > SCHEMA_SAMPLE_LIMIT) {
-                this.onProgress({
-                    status: 'info',
-                    message: `Large collection: designing the folder structure from a sample of ${SCHEMA_SAMPLE_LIMIT.toLocaleString()} of ${activeLinks.length.toLocaleString()} bookmarks. All bookmarks will still be classified.`
-                });
-            }
+        let classifiedActive = await this.classifyAll(links, schema);
+        if (!classifiedActive) return null;
+        classifiedActive = this.reconcileClassified(classifiedActive, schema);
 
-            let schema;
+        const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
+        const eligibleGroupCount = eligibleGroups.size;
+        this.onProgress({
+            status: 'processing',
+            message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`,
+            percent: 71
+        });
+        let detailSchemaFailures = 0;
+        let detailClassificationFailures = 0;
+        if (eligibleGroupCount > 0) {
             try {
-                const schemaRetryReporter = ({ delayMs, isRateLimit, isSchemaCorrection, error }) => {
-                    // The corrective round-trip is not a transport failure:
-                    // reporting it as one hides the only signal that says
-                    // why the structure came back flat.
-                    if (isSchemaCorrection) {
-                        this.onProgress({
-                            status: 'warning',
-                            message: `The first folder structure was too flat (${error.message}) — asking the AI to try again with specifics.`
-                        });
-                        return;
-                    }
-                    const sec = Math.ceil(delayMs / 1000);
+                const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
+                    () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
+                        ? `Rate limit reached while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...`
+                        : `Network issue while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
+                if (detailSchemas.size === 0) {
+                    this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
+                }
+                const canonicalDetailSchemas = new Map(
+                    [...detailSchemas.entries()]
+                        .map(([key, names]) => [canonicalDetailGroupKey(key), names])
+                        .filter(([key]) => key)
+                );
+                detailSchemaFailures = [...eligibleGroups.keys()].filter(key => !canonicalDetailSchemas.has(key)).length;
+                if (detailSchemaFailures > 0 && canonicalDetailSchemas.size > 0) {
                     this.onProgress({
                         status: 'warning',
-                        message: isRateLimit
-                            ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
-                            : `Network issue during schema generation. Retrying in ${sec}s...`
-                    });
-                };
-                schema = inferenceMode
-                    ? await generateInferredSchema(
-                        activeLinks, this.apiKey, this.model, this.subfolderTarget,
-                        () => this.isCancelled, schemaRetryReporter
-                    )
-                    : await generateSchema(
-                        activeLinks, this.apiKey, this.categories, this.model, this.subfolderTarget,
-                        () => this.isCancelled, schemaRetryReporter
-                    );
-                this.onProgress({ status: 'info', message: 'Generated category schema:' });
-                if (schema && schema.categories) {
-                    schema.categories.forEach(cat => {
-                        const subCats = cat.sub_categories && cat.sub_categories.length > 0
-                            ? ` (${cat.sub_categories.join(', ')})`
-                            : '';
-                        this.onProgress({ status: 'info', message: `  • ${cat.name}${subCats}` });
+                        message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
                     });
                 }
-                this.onProgress({ status: 'info', message: this.describeSchema(schema), percent: 14 });
-            } catch (err) {
-                if (this.isCancelled || err?.isCancelled) {
+                this.onProgress({
+                    status: 'processing',
+                    message: `Enriching subfolders across ${canonicalDetailSchemas.size} group${canonicalDetailSchemas.size === 1 ? '' : 's'}...`,
+                    percent: 74
+                });
+                // Flat task list of (group, chunk) pairs so a worker pool
+                // can overlap them: group order and within-group chunk
+                // order are preserved by task index, but groups no longer
+                // wait for each other's round-trips.
+                const detailTasks = [];
+                for (const [key, names] of canonicalDetailSchemas) {
+                    const records = eligibleGroups.get(key) || [];
+                    for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
+                        detailTasks.push({
+                            key,
+                            names,
+                            chunk: records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE),
+                            label: `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`
+                        });
+                    }
+                }
+
+                const detailed = new Array(detailTasks.length);
+                let detailTaskIdx = 0;
+                let completedDetailTasks = 0;
+                const detailWorker = async () => {
+                    while (detailTaskIdx < detailTasks.length && !this.isCancelled) {
+                        const taskIdx = detailTaskIdx++;
+                        const { key, names, chunk, label } = detailTasks[taskIdx];
+                        try {
+                            detailed[taskIdx] = retainDetailRunOrdinals(
+                                await classifyDetailBatch(chunk, this.apiKey, names, this.model,
+                                    () => this.isCancelled,
+                                    ({ delayMs, isRateLimit }) => this.onProgress({
+                                        status: 'warning',
+                                        message: isRateLimit
+                                            ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
+                                            : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                    })
+                                ),
+                                chunk
+                            );
+                        } catch (err) {
+                            if (this.isCancelled || err?.isCancelled) throw err;
+                            detailClassificationFailures++;
+                            this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
+                        } finally {
+                            completedDetailTasks++;
+                            const detailPercent = Math.min(88, Math.round(74 + (completedDetailTasks / Math.max(1, detailTasks.length)) * 14));
+                            this.onProgress({
+                                status: 'progress',
+                                percent: detailPercent,
+                                clearNotice: true
+                            });
+                        }
+                    }
+                };
+
+                const detailWorkers = [];
+                for (let w = 0; w < Math.min(DETAIL_CLASSIFICATION_CONCURRENCY, detailTasks.length); w++) {
+                    detailWorkers.push(detailWorker());
+                }
+                await Promise.all(detailWorkers);
+                if (this.isCancelled) {
                     this.onProgress({ status: 'warning', message: 'Process cancelled.' });
                     return null;
                 }
-
-                if (inferenceMode) {
-                    this.onProgress({
-                        status: 'error',
-                        message: `Could not infer categories from your bookmarks: ${err.message}`
-                    });
-                    throw err;
-                }
-
-                console.error('Schema generation failed, falling back to curated default folders:', err);
-                this.onProgress({ status: 'warning', message: `Schema generation failed: ${err.message}` });
-
-                // A schema-less run is what filed every bookmark under "General".
-                // Retry once on a smaller sample and the default granularity —
-                // a token ceiling or an over-ambitious structure is the common
-                // cause, and both ease off with less input.
-                schema = await this.retrySchemaOnSmallerSample(activeLinks);
-
-                if (!schema) {
-                    const { schema: fallback, curatedCount, carriedCount } = buildFallbackSchema(this.categories, err?.partialSchema);
-                    schema = fallback;
-
-                    // `status` is a lifecycle signal in both consumers, not a
-                    // log severity: 'error' would flip the panel to a terminal
-                    // failure screen for the rest of a run that is still going,
-                    // and jobRunner does not log it at all.
-                    this.onProgress({
-                        status: 'warning',
-                        message: 'AI schema generation failed — used built-in default folders. Re-run for a structure tailored to your bookmarks.'
-                    });
-                    this.onProgress({
-                        status: 'warning',
-                        message: `Fallback structure: ${curatedCount} categor${curatedCount === 1 ? 'y' : 'ies'} from built-in defaults, ${carriedCount} salvaged from the AI response.`
-                    });
-                    this.onProgress({ status: 'info', message: this.describeSchema(schema) });
-
-                    const structureless = schema.categories.filter(c => c.sub_categories.length === 0).length;
-                    if (structureless > 0) {
-                        this.onProgress({
-                            status: 'warning',
-                            message: `${structureless} custom categor${structureless === 1 ? 'y has' : 'ies have'} no built-in subfolders — those bookmarks will sit directly in the category folder.`
-                        });
-                    }
-                }
+                // Each task wrote an array; flatten (holes from failed
+                // tasks drop out) back into the assignment map the way the
+                // previous per-group push(...items) spread did.
+                const detailAssignments = new Map(detailed.flat().filter(Boolean).map(item => [detailAssignmentKey(item), item.detail_category]));
+                classifiedActive = classifiedActive.map(item => ({
+                    ...item,
+                    detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
+                }));
+                const detailResult = reconcileDetailCategories(classifiedActive, canonicalDetailSchemas);
+                classifiedActive = detailResult.classified;
+                this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
+                this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
+            } catch (err) {
+                if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
+                detailSchemaFailures = eligibleGroupCount;
+                this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
             }
+        } else {
+            this.onProgress({ status: 'progress', percent: 88, clearNotice: true });
+        }
 
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-                return null;
-            }
-
-            // The selected categories are authoritative even when an adapter or
-            // a recovery path supplies the schema. Classifiers and placement
-            // below therefore share the same two-level source of truth.
-            if (!inferenceMode) {
-                schema = buildAuthoritativeSchema(this.categories, schema);
-            }
-            runSchema = schema;
-
-            const total = activeLinks.length;
-            let processed = 0;
-
-            const batchSize = this.calculateAdaptiveBatchSize(total);
-            this.onProgress({ status: 'info', message: `Processing with adaptive batch size: ${batchSize} items/batch` });
-
-            // Group into batches
-            const batches = [];
-            for (let i = 0; i < total; i += batchSize) {
-                batches.push({
-                    index: batches.length,
-                    batchData: activeLinks.slice(i, i + batchSize)
-                });
-            }
-
-            const results = new Array(batches.length);
-            const failedBatches = [];
-            let batchIdx = 0;
-
-            const processNext = async () => {
-                if (batchIdx >= batches.length || this.isCancelled) return;
-                const currentIdx = batchIdx++;
-                const { index, batchData } = batches[currentIdx];
-
-                const currentPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
-                this.onProgress({
-                    status: 'processing',
-                    message: `Classifying batch ${currentIdx + 1}/${batches.length}...`,
-                    percent: currentPercent
-                });
-
-                try {
-                    const classified = await classifyBatch(
-                        batchData,
-                        this.apiKey,
-                        schema,
-                        this.model,
-                        this.cleanTitles,
-                        () => this.isCancelled,
-                        ({ delayMs, isRateLimit }) => {
-                            const sec = Math.ceil(delayMs / 1000);
-                            this.onProgress({
-                                status: 'warning',
-                                message: isRateLimit
-                                    ? `Rate limit reached (429). Pausing for ${sec}s before retrying batch ${currentIdx + 1}...`
-                                    : `Network issue on batch ${currentIdx + 1}. Retrying in ${sec}s...`
-                            });
-                        }
-                    );
-                    if (this.isCancelled) return;
-
-                    // Accumulate results
-                    results[index] = retainDetailRunOrdinals(classified, batchData);
-                    processed += batchData.length;
-                    const batchPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
-                    this.onProgress({ status: 'progress', percent: batchPercent, clearNotice: true });
-
-                } catch (err) {
-                    if (this.isCancelled || err?.isCancelled) return;
-                    console.error(`Batch ${currentIdx + 1} failed:`, err);
-                    failedBatches.push({ index, batchData, label: currentIdx + 1 });
-                    this.onProgress({ status: 'warning', message: `Batch ${currentIdx + 1} failed (${err.message}) — will retry after the main pass. Continuing remaining batches in background...` });
-                }
-
-                await processNext();
-            };
-
-            // Run batches concurrently (increased to 4 concurrent requests for optimal throughput)
-            const concurrencyLimit = 4;
-            const workers = [];
-            for (let w = 0; w < Math.min(concurrencyLimit, batches.length); w++) {
-                workers.push(processNext());
-            }
-            await Promise.all(workers);
-
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-                return null;
-            }
-
-            // Second pass: retry failed batches one at a time, with no concurrent
-            // traffic competing — transient network drops usually clear by now.
-            for (const { index, batchData, label } of failedBatches) {
-                if (this.isCancelled) break;
-
-                const currentPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
-                this.onProgress({ status: 'processing', message: `Retrying batch ${label}/${batches.length}...`, percent: currentPercent });
-                results[index] = retainDetailRunOrdinals(
-                    await this.classifyWithSubdivision(batchData, schema, label),
-                    batchData
-                );
-                if (this.isCancelled) break;
-                processed += batchData.length;
-                const retryPercent = Math.min(70, Math.round(15 + (processed / total) * 55));
-                this.onProgress({ status: 'progress', percent: retryPercent, clearNotice: true });
-            }
-
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-                return null;
-            }
-
-            classifiedActive = results.flat().filter(Boolean).map(item => {
-                const { category, sub_category, proposed } = normalizeClassificationForSchema(item, schema);
-                return { ...item, category, sub_category, ...(proposed ? { proposed: true } : {}) };
-            });
-
-            // Batches run concurrently and cannot see each other, so this is the
-            // first point where the whole set of subcategories is visible —
-            // and the only place spelling variants and one-bookmark folders can
-            // be resolved.
-            const { classified: reconciled, summary } = reconcileSubcategories(
-                classifiedActive,
-                schema,
-                { subfolderTarget: this.subfolderTarget }
-            );
-            classifiedActive = reconciled;
-
-            const foldedTotal = summary.orphansFolded + summary.cappedFolded;
-            if (summary.proposedKept > 0 || summary.merged > 0 || foldedTotal > 0) {
-                this.onProgress({
-                    status: 'info',
-                    message: `Subcategories: +${summary.proposedKept} AI-created, ~${summary.merged} merged, ${foldedTotal} folded into General.`
-                });
-            }
-
-            const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
-            const eligibleGroupCount = eligibleGroups.size;
+        const detailGroupsKeptAtTwoLevels = eligibleGroupCount - (this.stats.detailedSubcategories || 0);
+        this.onProgress({
+            status: 'info',
+            message: `Third-level enrichment summary: ${eligibleGroupCount} eligible group${eligibleGroupCount === 1 ? '' : 's'}, ${this.stats.detailFoldersCount || 0} detail folder${this.stats.detailFoldersCount === 1 ? '' : 's'} created, ${this.stats.detailedSubcategories || 0} detailed subcategor${this.stats.detailedSubcategories === 1 ? 'y' : 'ies'}, ${detailGroupsKeptAtTwoLevels} group${detailGroupsKeptAtTwoLevels === 1 ? '' : 's'} kept at two levels.`
+        });
+        if (detailSchemaFailures > 0 || detailClassificationFailures > 0) {
             this.onProgress({
-                status: 'processing',
-                message: `Finding useful third-level groups for ${eligibleGroupCount} eligible parent group${eligibleGroupCount === 1 ? '' : 's'}...`,
-                percent: 71
+                status: 'warning',
+                message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
             });
-            let detailSchemaFailures = 0;
-            let detailClassificationFailures = 0;
-            if (eligibleGroupCount > 0) {
-                try {
-                    const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
-                        () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
-                            ? `Rate limit reached while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...`
-                            : `Network issue while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
-                    if (detailSchemas.size === 0) {
-                        this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
-                    }
-                    const canonicalDetailSchemas = new Map(
-                        [...detailSchemas.entries()]
-                            .map(([key, names]) => [canonicalDetailGroupKey(key), names])
-                            .filter(([key]) => key)
-                    );
-                    detailSchemaFailures = [...eligibleGroups.keys()].filter(key => !canonicalDetailSchemas.has(key)).length;
-                    if (detailSchemaFailures > 0 && canonicalDetailSchemas.size > 0) {
-                        this.onProgress({
-                            status: 'warning',
-                            message: `Third-level schema generation skipped ${detailSchemaFailures} eligible group${detailSchemaFailures === 1 ? '' : 's'}; valid sibling groups will still be enriched.`
-                        });
-                    }
-                    this.onProgress({
-                        status: 'processing',
-                        message: `Enriching subfolders across ${canonicalDetailSchemas.size} group${canonicalDetailSchemas.size === 1 ? '' : 's'}...`,
-                        percent: 74
-                    });
-                    // Flat task list of (group, chunk) pairs so a worker pool
-                    // can overlap them: group order and within-group chunk
-                    // order are preserved by task index, but groups no longer
-                    // wait for each other's round-trips.
-                    const detailTasks = [];
-                    for (const [key, names] of canonicalDetailSchemas) {
-                        const records = eligibleGroups.get(key) || [];
-                        for (let start = 0; start < records.length; start += DETAIL_CLASSIFICATION_BATCH_SIZE) {
-                            detailTasks.push({
-                                key,
-                                names,
-                                chunk: records.slice(start, start + DETAIL_CLASSIFICATION_BATCH_SIZE),
-                                label: `${key.replace('\u0000', '/')} #${Math.floor(start / DETAIL_CLASSIFICATION_BATCH_SIZE) + 1}`
-                            });
-                        }
-                    }
-
-                    const detailed = new Array(detailTasks.length);
-                    let detailTaskIdx = 0;
-                    let completedDetailTasks = 0;
-                    const detailWorker = async () => {
-                        while (detailTaskIdx < detailTasks.length && !this.isCancelled) {
-                            const taskIdx = detailTaskIdx++;
-                            const { key, names, chunk, label } = detailTasks[taskIdx];
-                            try {
-                                detailed[taskIdx] = retainDetailRunOrdinals(
-                                    await classifyDetailBatch(chunk, this.apiKey, names, this.model,
-                                        () => this.isCancelled,
-                                        ({ delayMs, isRateLimit }) => this.onProgress({
-                                            status: 'warning',
-                                            message: isRateLimit
-                                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
-                                                : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
-                                        })
-                                    ),
-                                    chunk
-                                );
-                            } catch (err) {
-                                if (this.isCancelled || err?.isCancelled) throw err;
-                                detailClassificationFailures++;
-                                this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
-                            } finally {
-                                completedDetailTasks++;
-                                const detailPercent = Math.min(88, Math.round(74 + (completedDetailTasks / Math.max(1, detailTasks.length)) * 14));
-                                this.onProgress({
-                                    status: 'progress',
-                                    percent: detailPercent,
-                                    clearNotice: true
-                                });
-                            }
-                        }
-                    };
-
-                    const detailWorkers = [];
-                    for (let w = 0; w < Math.min(DETAIL_CLASSIFICATION_CONCURRENCY, detailTasks.length); w++) {
-                        detailWorkers.push(detailWorker());
-                    }
-                    await Promise.all(detailWorkers);
-                    if (this.isCancelled) {
-                        this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-                        return null;
-                    }
-                    // Each task wrote an array; flatten (holes from failed
-                    // tasks drop out) back into the assignment map the way the
-                    // previous per-group push(...items) spread did.
-                    const detailAssignments = new Map(detailed.flat().filter(Boolean).map(item => [detailAssignmentKey(item), item.detail_category]));
-                    classifiedActive = classifiedActive.map(item => ({
-                        ...item,
-                        detail_category: detailAssignments.get(detailAssignmentKey(item)) ?? null
-                    }));
-                    const detailResult = reconcileDetailCategories(classifiedActive, canonicalDetailSchemas);
-                    classifiedActive = detailResult.classified;
-                    this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
-                    this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
-                } catch (err) {
-                    if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
-                    detailSchemaFailures = eligibleGroupCount;
-                    this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
-                }
-            } else {
-                this.onProgress({ status: 'progress', percent: 88, clearNotice: true });
-            }
-
-            const detailGroupsKeptAtTwoLevels = eligibleGroupCount - (this.stats.detailedSubcategories || 0);
-            this.onProgress({
-                status: 'info',
-                message: `Third-level enrichment summary: ${eligibleGroupCount} eligible group${eligibleGroupCount === 1 ? '' : 's'}, ${this.stats.detailFoldersCount || 0} detail folder${this.stats.detailFoldersCount === 1 ? '' : 's'} created, ${this.stats.detailedSubcategories || 0} detailed subcategor${this.stats.detailedSubcategories === 1 ? 'y' : 'ies'}, ${detailGroupsKeptAtTwoLevels} group${detailGroupsKeptAtTwoLevels === 1 ? '' : 's'} kept at two levels.`
-            });
-            if (detailSchemaFailures > 0 || detailClassificationFailures > 0) {
-                this.onProgress({
-                    status: 'warning',
-                    message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
-                });
-            }
         }
 
         // Combine classified reachable links with archived unreachable links.
