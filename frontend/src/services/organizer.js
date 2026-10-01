@@ -4,6 +4,8 @@ import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
+import { isAlphaOrder, isAlphaDescOrder, sortFlat, sortWithinFolders } from './sorting';
+export { getBookmarkDomain } from './sorting';
 
 // Detail-classification chunks are small, uniform requests, so they run
 // through a worker pool with bounded concurrency (2) to avoid exhausting
@@ -207,24 +209,12 @@ export {
     getStandardizedOutputLabel
 } from '../utils/dates';
 import {
-    getBookmarkTimestamp,
     calculateDateSpan,
     getMonthYearBucket,
     sortMonthYearBuckets,
     getStandardizedOutputLabel
 } from '../utils/dates';
 
-
-// Normalizes and extracts hostname/domain from bookmark URL
-export function getBookmarkDomain(bookmark) {
-    if (!bookmark || !bookmark.url) return '';
-    try {
-        const hostname = new URL(bookmark.url).hostname.toLowerCase();
-        return hostname.replace(/^www\./, '');
-    } catch {
-        return '';
-    }
-}
 
 // Determines if an error CANNOT be resolved by subdividing a batch into smaller chunks.
 // Subdividing is ONLY beneficial for prompt/payload size limits, model token truncation, or malformed JSON.
@@ -725,8 +715,8 @@ export class OrganizerService {
             }));
 
             // Alphabetical vs Chronological sort
-            const isAlpha = this.dateSortOrder === 'alpha-asc' || this.dateSortOrder === 'alpha-desc' || this.dateSortOrder === 'a-z' || this.dateSortOrder === 'z-a' || this.dateSortOrder === 'alpha';
-            const isAlphaDesc = this.dateSortOrder === 'alpha-desc' || this.dateSortOrder === 'z-a';
+            const isAlpha = isAlphaOrder(this.dateSortOrder);
+            const isAlphaDesc = isAlphaDescOrder(this.dateSortOrder);
 
             if (isAlpha) {
                 this.onProgress({
@@ -734,46 +724,15 @@ export class OrganizerService {
                     message: `Sorting ${finalResults.length} bookmarks alphabetically (${isAlphaDesc ? 'Z–A' : 'A–Z'})...`,
                     percent: 30
                 });
-
-                finalResults.sort((a, b) => {
-                    const titleA = (a.title || a.url || '').trim();
-                    const titleB = (b.title || b.url || '').trim();
-                    const diff = titleA.localeCompare(titleB, undefined, { sensitivity: 'base', numeric: true });
-                    if (diff !== 0) {
-                        return isAlphaDesc ? -diff : diff;
-                    }
-                    return (a._origIndex ?? 0) - (b._origIndex ?? 0);
-                });
             } else {
-                // Chronological sort
                 const isDesc = this.dateSortOrder !== 'asc'; // default 'desc' (newest first)
                 this.onProgress({
                     status: 'processing',
                     message: `Sorting ${finalResults.length} bookmarks chronologically (${isDesc ? 'Newest First' : 'Oldest First'})...`,
                     percent: 30
                 });
-
-                finalResults.sort((a, b) => {
-                    const timeA = getBookmarkTimestamp(a);
-                    const timeB = getBookmarkTimestamp(b);
-                    if (timeA > 0 && timeB > 0) {
-                        if (timeA !== timeB) {
-                            return isDesc ? timeB - timeA : timeA - timeB;
-                        }
-                        // Same timestamp (common with second-precision Netscape
-                        // add_date on batch-imported bookmarks): fall back to
-                        // original bookmark order, a closer proxy for true add
-                        // order than title.
-                        const origDiff = (a._origIndex ?? 0) - (b._origIndex ?? 0);
-                        return isDesc ? -origDiff : origDiff;
-                    } else if (timeA > 0) {
-                        return -1; // Valid timestamp comes before missing timestamp
-                    } else if (timeB > 0) {
-                        return 1;  // Missing timestamp goes to bottom
-                    }
-                    return (a._origIndex ?? 0) - (b._origIndex ?? 0);
-                });
             }
+            sortFlat(finalResults, this.dateSortOrder);
 
             finalResults.isFlat = true;
 
@@ -1364,60 +1323,7 @@ export class OrganizerService {
             });
         }
 
-        finalResults.sort((a, b) => {
-            // Selected category order applies even when content sorting is off.
-            const catDiff = (categoryRank.get(a.category) ?? categoryRank.size)
-                - (categoryRank.get(b.category) ?? categoryRank.size);
-            if (catDiff !== 0) return catDiff;
-            const subDiff = (a.sub_category || '').localeCompare(b.sub_category || '');
-            if (subDiff !== 0) return subDiff;
-            const detailDiff = (a.detail_category || '').localeCompare(b.detail_category || '');
-            if (detailDiff !== 0) return detailDiff;
-            if (!sortContents) return 0;
-
-            // Sort bookmarks within each folder according to chosen schema
-            switch (this.schemaSortOrder) {
-                case 'date-desc': {
-                    const timeA = getBookmarkTimestamp(a);
-                    const timeB = getBookmarkTimestamp(b);
-                    if (timeA > 0 && timeB > 0) {
-                        if (timeA !== timeB) return timeB - timeA;
-                        // Same timestamp: fall back to original bookmark order,
-                        // a closer proxy for true add order than title.
-                        return (b._detailRunOrdinal ?? 0) - (a._detailRunOrdinal ?? 0);
-                    } else if (timeA > 0) {
-                        return -1;
-                    } else if (timeB > 0) {
-                        return 1;
-                    }
-                    return (a.title || '').localeCompare(b.title || '');
-                }
-                case 'date-asc': {
-                    const timeA = getBookmarkTimestamp(a);
-                    const timeB = getBookmarkTimestamp(b);
-                    if (timeA > 0 && timeB > 0) {
-                        if (timeA !== timeB) return timeA - timeB;
-                        return (a._detailRunOrdinal ?? 0) - (b._detailRunOrdinal ?? 0);
-                    } else if (timeA > 0) {
-                        return -1;
-                    } else if (timeB > 0) {
-                        return 1;
-                    }
-                    return (a.title || '').localeCompare(b.title || '');
-                }
-                case 'domain': {
-                    const domainA = getBookmarkDomain(a);
-                    const domainB = getBookmarkDomain(b);
-                    const domainDiff = domainA.localeCompare(domainB);
-                    if (domainDiff !== 0) return domainDiff;
-                    return (a.title || '').localeCompare(b.title || '');
-                }
-                case 'alpha':
-                default: {
-                    return (a.title || '').localeCompare(b.title || '');
-                }
-            }
-        });
+        sortWithinFolders(finalResults, { categoryRank, schemaSortOrder: this.schemaSortOrder });
 
         finalResults = finalResults.map(({ _detailRunOrdinal, ...item }) => item);
 
