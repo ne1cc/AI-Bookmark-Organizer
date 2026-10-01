@@ -2578,41 +2578,619 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder no
 }
 `;
 
-exports[`start() golden snapshots > G7 multi-batch AI with one failed batch (order-insensitive progress) > classifies concurrently and retries the failed batch 1`] = `
+exports[`start() golden snapshots > G6b browser AI third-level folders > creates detail folders under a Firefox root 1`] = `
+{
+  "dateSpan": "7/13/2017 – 7/26/2017",
+  "filename": "bookmarks_ai_alpha_2026-10-01.html",
+  "isFlat": null,
+  "messages": [
+    {
+      "message": "Reading bookmarks (Browser)...",
+      "status": "info",
+    },
+    {
+      "dateSpan": "7/13/2017 – 11/14/2023",
+      "message": "Found 15 bookmarks (Date range: 7/13/2017 – 11/14/2023).",
+      "status": "info",
+      "totalBookmarks": 15,
+    },
+    {
+      "dateSpan": "7/13/2017 – 11/14/2023",
+      "message": "Total date range: 7/13/2017 – 11/14/2023",
+      "status": "info",
+    },
+    {
+      "message": "Removed 1 duplicate URL from the organized result.",
+      "status": "info",
+    },
+    {
+      "dateSpan": "7/13/2017 – 7/26/2017",
+      "message": "Date range after deduplication: 7/13/2017 – 7/26/2017",
+      "status": "info",
+    },
+    {
+      "message": "Using 2 hard-coded categories — designing subfolder structure...",
+      "percent": 5,
+      "status": "processing",
+    },
+    {
+      "message": "Generated category schema:",
+      "status": "info",
+    },
+    {
+      "message": "  • Tech (Tools)",
+      "status": "info",
+    },
+    {
+      "message": "  • Finance (Banking)",
+      "status": "info",
+    },
+    {
+      "message": "Schema: 2 categories, 2 subcategories (avg 1.0 per category).",
+      "percent": 14,
+      "status": "info",
+    },
+    {
+      "message": "Processing with adaptive batch size: 30 items/batch",
+      "status": "info",
+    },
+    {
+      "message": "Classifying batch 1/1...",
+      "percent": 15,
+      "status": "processing",
+    },
+    {
+      "clearNotice": true,
+      "percent": 70,
+      "status": "progress",
+    },
+    {
+      "message": "Finding useful third-level groups for 1 eligible parent group...",
+      "percent": 71,
+      "status": "processing",
+    },
+    {
+      "message": "Enriching subfolders across 1 group...",
+      "percent": 74,
+      "status": "processing",
+    },
+    {
+      "clearNotice": true,
+      "percent": 88,
+      "status": "progress",
+    },
+    {
+      "message": "Third-level enrichment summary: 1 eligible group, 2 detail folders created, 1 detailed subcategory, 0 groups kept at two levels.",
+      "status": "info",
+    },
+    {
+      "message": "Sorting folder contents (Alphabetical (A–Z))...",
+      "percent": 89,
+      "status": "processing",
+    },
+    {
+      "dateSpan": "7/13/2017 – 7/26/2017",
+      "message": "Reorganizing 14 bookmarks (7/13/2017 – 7/26/2017) in the browser...",
+      "percent": 90,
+      "status": "processing",
+    },
+    {
+      "message": "Saving a backup before touching your bookmarks (restores content and dates, not the previous folder layout)...",
+      "status": "info",
+    },
+    {
+      "message": "Moving bookmarks in browser (14/14)...",
+      "percent": 97,
+      "status": "processing",
+    },
+    {
+      "message": "Finalizing folder structure...",
+      "percent": 98,
+      "status": "processing",
+    },
+    {
+      "dateSpan": "7/13/2017 – 7/26/2017",
+      "message": "Total date range: 7/13/2017 – 7/26/2017",
+      "status": "info",
+    },
+    {
+      "message": "Category breakdown:",
+      "status": "info",
+    },
+    {
+      "message": "  • Tech: 14",
+      "status": "info",
+    },
+    {
+      "message": "Filed directly under their category (General): 0 (0%).",
+      "status": "info",
+    },
+    {
+      "message": "Organization complete!",
+      "status": "done",
+    },
+  ],
+  "ops": [
+    [
+      "move",
+      "100",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "110",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "112",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "102",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "104",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "106",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "108",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Editors",
+      },
+    ],
+    [
+      "move",
+      "101",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "111",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "113",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "103",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "105",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "107",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "move",
+      "109",
+      {
+        "parentId": "folder-folder-folder-folder-unfiled_____-[AI Categorized - Alphabetical] Bookmarks-2026-10-01-Tech-Tools-Terminals",
+      },
+    ],
+    [
+      "remove",
+      "200",
+    ],
+  ],
+  "resultStats": {
+    "categoriesCount": 1,
+    "categoryBreakdown": {
+      "Tech": 14,
+    },
+    "dateSpan": "7/13/2017 – 7/26/2017",
+    "deadLinksArchived": 0,
+    "detailFoldersCount": 2,
+    "detailedSubcategories": 1,
+    "duplicatesRemoved": 1,
+    "failedMoves": [],
+    "folderTitle": "[AI Categorized - Alphabetical] Bookmarks-2026-10-01",
+    "isFlat": false,
+    "schemaSortOrder": "alpha",
+    "total": 14,
+  },
+  "results": [
+    {
+      "add_date": "1500000000",
+      "category": "Tech",
+      "dateAdded": 1500000000000,
+      "detail_category": "Editors",
+      "id": "100",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S0",
+      "url": "https://s0.com",
+    },
+    {
+      "add_date": "1500864000",
+      "category": "Tech",
+      "dateAdded": 1500864000000,
+      "detail_category": "Editors",
+      "id": "110",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S10",
+      "url": "https://s10.com",
+    },
+    {
+      "add_date": "1501036800",
+      "category": "Tech",
+      "dateAdded": 1501036800000,
+      "detail_category": "Editors",
+      "id": "112",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S12",
+      "url": "https://s12.com",
+    },
+    {
+      "add_date": "1500172800",
+      "category": "Tech",
+      "dateAdded": 1500172800000,
+      "detail_category": "Editors",
+      "id": "102",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S2",
+      "url": "https://s2.com",
+    },
+    {
+      "add_date": "1500345600",
+      "category": "Tech",
+      "dateAdded": 1500345600000,
+      "detail_category": "Editors",
+      "id": "104",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S4",
+      "url": "https://s4.com",
+    },
+    {
+      "add_date": "1500518400",
+      "category": "Tech",
+      "dateAdded": 1500518400000,
+      "detail_category": "Editors",
+      "id": "106",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S6",
+      "url": "https://s6.com",
+    },
+    {
+      "add_date": "1500691200",
+      "category": "Tech",
+      "dateAdded": 1500691200000,
+      "detail_category": "Editors",
+      "id": "108",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S8",
+      "url": "https://s8.com",
+    },
+    {
+      "add_date": "1500086400",
+      "category": "Tech",
+      "dateAdded": 1500086400000,
+      "detail_category": "Terminals",
+      "id": "101",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S1",
+      "url": "https://s1.com",
+    },
+    {
+      "add_date": "1500950400",
+      "category": "Tech",
+      "dateAdded": 1500950400000,
+      "detail_category": "Terminals",
+      "id": "111",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S11",
+      "url": "https://s11.com",
+    },
+    {
+      "add_date": "1501123200",
+      "category": "Tech",
+      "dateAdded": 1501123200000,
+      "detail_category": "Terminals",
+      "id": "113",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S13",
+      "url": "https://s13.com",
+    },
+    {
+      "add_date": "1500259200",
+      "category": "Tech",
+      "dateAdded": 1500259200000,
+      "detail_category": "Terminals",
+      "id": "103",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S3",
+      "url": "https://s3.com",
+    },
+    {
+      "add_date": "1500432000",
+      "category": "Tech",
+      "dateAdded": 1500432000000,
+      "detail_category": "Terminals",
+      "id": "105",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S5",
+      "url": "https://s5.com",
+    },
+    {
+      "add_date": "1500604800",
+      "category": "Tech",
+      "dateAdded": 1500604800000,
+      "detail_category": "Terminals",
+      "id": "107",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S7",
+      "url": "https://s7.com",
+    },
+    {
+      "add_date": "1500777600",
+      "category": "Tech",
+      "dateAdded": 1500777600000,
+      "detail_category": "Terminals",
+      "id": "109",
+      "parentId": "1",
+      "sub_category": "Tools",
+      "title": "S9",
+      "url": "https://s9.com",
+    },
+  ],
+  "returned": "array",
+  "serviceStats": {
+    "categoriesCount": 1,
+    "categoryBreakdown": {
+      "Tech": 14,
+    },
+    "dateSpan": "7/13/2017 – 7/26/2017",
+    "deadLinksArchived": 0,
+    "detailFoldersCount": 2,
+    "detailedSubcategories": 1,
+    "duplicatesRemoved": 1,
+    "failedMoves": [],
+    "folderTitle": "[AI Categorized - Alphabetical] Bookmarks-2026-10-01",
+    "isFlat": false,
+    "schemaSortOrder": "alpha",
+    "total": 14,
+  },
+  "tree": {
+    "root": [
+      {
+        "Bookmarks Bar": [],
+      },
+      {
+        "Other Bookmarks": [
+          {
+            "[AI Categorized - Alphabetical] Bookmarks-2026-10-01": [
+              {
+                "Tech": [
+                  {
+                    "Tools": [
+                      {
+                        "Editors": [
+                          "S0",
+                          "S10",
+                          "S12",
+                          "S2",
+                          "S4",
+                          "S6",
+                          "S8",
+                        ],
+                      },
+                      {
+                        "Terminals": [
+                          "S1",
+                          "S11",
+                          "S13",
+                          "S3",
+                          "S5",
+                          "S7",
+                          "S9",
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+}
+`;
+
+exports[`start() golden snapshots > G7 multi-batch AI with one failed batch > classifies concurrently and retries the failed batch 1`] = `
 {
   "dateSpan": "9/13/2020 – 9/13/2020",
   "filename": "bookmarks_ai_alpha_2026-10-01.html",
   "isFlat": null,
   "messages": [
-    "{"status":"done","message":"Organization complete!"}",
-    "{"status":"info","message":"  • Tech (Tools)"}",
-    "{"status":"info","message":"  • Tech: 120"}",
-    "{"status":"info","message":"Category breakdown:"}",
-    "{"status":"info","message":"Filed directly under their category (General): 0 (0%)."}",
-    "{"status":"info","message":"Found 120 bookmarks (Date range: 9/13/2020 – 9/13/2020).","dateSpan":"9/13/2020 – 9/13/2020","totalBookmarks":120}",
-    "{"status":"info","message":"Generated category schema:"}",
-    "{"status":"info","message":"No duplicate URLs found."}",
-    "{"status":"info","message":"Processing uploaded file..."}",
-    "{"status":"info","message":"Processing with adaptive batch size: 45 items/batch"}",
-    "{"status":"info","message":"Schema: 1 categories, 1 subcategories (avg 1.0 per category).","percent":14}",
-    "{"status":"info","message":"Third-level enrichment summary: 1 eligible group, 0 detail folders created, 0 detailed subcategories, 1 group kept at two levels."}",
-    "{"status":"info","message":"Total date range: 9/13/2020 – 9/13/2020","dateSpan":"9/13/2020 – 9/13/2020"}",
-    "{"status":"info","message":"Total date range: 9/13/2020 – 9/13/2020","dateSpan":"9/13/2020 – 9/13/2020"}",
-    "{"status":"processing","message":"Analyzing bookmarks to generate categories automatically...","percent":5}",
-    "{"status":"processing","message":"Classifying batch 1/3...","percent":15}",
-    "{"status":"processing","message":"Classifying batch 2/3...","percent":15}",
-    "{"status":"processing","message":"Classifying batch 3/3...","percent":15}",
-    "{"status":"processing","message":"Enriching subfolders across 0 groups...","percent":74}",
-    "{"status":"processing","message":"Finding useful third-level groups for 1 eligible parent group...","percent":71}",
-    "{"status":"processing","message":"Generating organized file (9/13/2020 – 9/13/2020)...","percent":95,"dateSpan":"9/13/2020 – 9/13/2020"}",
-    "{"status":"processing","message":"Retrying batch 2/3...","percent":49}",
-    "{"status":"processing","message":"Sorting folder contents (Alphabetical (A–Z))...","percent":89}",
-    "{"status":"progress","percent":36,"clearNotice":true}",
-    "{"status":"progress","percent":49,"clearNotice":true}",
-    "{"status":"progress","percent":70,"clearNotice":true}",
-    "{"status":"warning","message":"Batch 2 failed (boom) — will retry after the main pass. Continuing remaining batches in background..."}",
-    "{"status":"warning","message":"Third-level enrichment had partial failures (1 schema, 0 classification); valid sibling groups were retained and failed groups stayed at two levels."}",
-    "{"status":"warning","message":"Third-level enrichment returned no usable folder schemas; keeping the two-level result."}",
+    {
+      "message": "Processing uploaded file...",
+      "status": "info",
+    },
+    {
+      "dateSpan": "9/13/2020 – 9/13/2020",
+      "message": "Found 120 bookmarks (Date range: 9/13/2020 – 9/13/2020).",
+      "status": "info",
+      "totalBookmarks": 120,
+    },
+    {
+      "dateSpan": "9/13/2020 – 9/13/2020",
+      "message": "Total date range: 9/13/2020 – 9/13/2020",
+      "status": "info",
+    },
+    {
+      "message": "No duplicate URLs found.",
+      "status": "info",
+    },
+    {
+      "message": "Analyzing bookmarks to generate categories automatically...",
+      "percent": 5,
+      "status": "processing",
+    },
+    {
+      "message": "Generated category schema:",
+      "status": "info",
+    },
+    {
+      "message": "  • Tech (Tools)",
+      "status": "info",
+    },
+    {
+      "message": "Schema: 1 categories, 1 subcategories (avg 1.0 per category).",
+      "percent": 14,
+      "status": "info",
+    },
+    {
+      "message": "Processing with adaptive batch size: 45 items/batch",
+      "status": "info",
+    },
+    {
+      "message": "Classifying batch 1/3...",
+      "percent": 15,
+      "status": "processing",
+    },
+    {
+      "message": "Classifying batch 2/3...",
+      "percent": 15,
+      "status": "processing",
+    },
+    {
+      "message": "Classifying batch 3/3...",
+      "percent": 15,
+      "status": "processing",
+    },
+    {
+      "clearNotice": true,
+      "percent": 36,
+      "status": "progress",
+    },
+    {
+      "message": "Batch 2 failed (boom) — will retry after the main pass. Continuing remaining batches in background...",
+      "status": "warning",
+    },
+    {
+      "clearNotice": true,
+      "percent": 49,
+      "status": "progress",
+    },
+    {
+      "message": "Retrying batch 2/3...",
+      "percent": 49,
+      "status": "processing",
+    },
+    {
+      "clearNotice": true,
+      "percent": 70,
+      "status": "progress",
+    },
+    {
+      "message": "Finding useful third-level groups for 1 eligible parent group...",
+      "percent": 71,
+      "status": "processing",
+    },
+    {
+      "message": "Third-level enrichment returned no usable folder schemas; keeping the two-level result.",
+      "status": "warning",
+    },
+    {
+      "message": "Enriching subfolders across 0 groups...",
+      "percent": 74,
+      "status": "processing",
+    },
+    {
+      "message": "Third-level enrichment summary: 1 eligible group, 0 detail folders created, 0 detailed subcategories, 1 group kept at two levels.",
+      "status": "info",
+    },
+    {
+      "message": "Third-level enrichment had partial failures (1 schema, 0 classification); valid sibling groups were retained and failed groups stayed at two levels.",
+      "status": "warning",
+    },
+    {
+      "message": "Sorting folder contents (Alphabetical (A–Z))...",
+      "percent": 89,
+      "status": "processing",
+    },
+    {
+      "dateSpan": "9/13/2020 – 9/13/2020",
+      "message": "Generating organized file (9/13/2020 – 9/13/2020)...",
+      "percent": 95,
+      "status": "processing",
+    },
+    {
+      "dateSpan": "9/13/2020 – 9/13/2020",
+      "message": "Total date range: 9/13/2020 – 9/13/2020",
+      "status": "info",
+    },
+    {
+      "message": "Category breakdown:",
+      "status": "info",
+    },
+    {
+      "message": "  • Tech: 120",
+      "status": "info",
+    },
+    {
+      "message": "Filed directly under their category (General): 0 (0%).",
+      "status": "info",
+    },
+    {
+      "message": "Organization complete!",
+      "status": "done",
+    },
   ],
   "ops": null,
   "resultStats": {

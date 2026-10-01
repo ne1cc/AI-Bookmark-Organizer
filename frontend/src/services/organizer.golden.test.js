@@ -19,12 +19,12 @@ Date.prototype.toLocaleDateString = function (locales, options) {
 }
 
 class FakeStore {
-    constructor() {
+    constructor(otherId = '2') {
         this.nodes = new Map()
         this.ops = []
         const root = { id: '0', parentId: null, title: 'root', children: [] }
         const bar = { id: '1', parentId: '0', title: 'Bookmarks Bar', children: [] }
-        const other = { id: '2', parentId: '0', title: 'Other Bookmarks', children: [] }
+        const other = { id: otherId, parentId: '0', title: 'Other Bookmarks', children: [] }
         root.children.push(bar, other)
         for (const n of [root, bar, other]) this.nodes.set(n.id, n)
     }
@@ -214,7 +214,29 @@ describe('start() golden snapshots', () => {
         })
     })
 
-    describe('G7 multi-batch AI with one failed batch (order-insensitive progress)', () => {
+    describe('G6b browser AI third-level folders', () => {
+        it('creates detail folders under a Firefox root', async () => {
+            const store = new FakeStore('unfiled_____')
+            for (let i = 0; i < 14; i++) store.addUrl('1', String(100 + i), `https://s${i}.com`, `S${i}`, 1500000000000 + i * 86400000)
+            store.addUrl('1', '200', 'https://s3.com', 'S3 dup', 1700000000000)
+            wire(store)
+            // The root is resolved inside bookmarks.js, so the test must supply the Firefox id.
+            vi.spyOn(bookmarksService, 'getOtherBookmarksRootId').mockResolvedValue('unfiled_____')
+            vi.spyOn(ai, 'generateSchema').mockResolvedValue({
+                categories: [
+                    { name: 'Tech', sub_categories: ['Tools'] },
+                    { name: 'Finance', sub_categories: ['Banking'] }
+                ]
+            })
+            vi.spyOn(ai, 'classifyBatch').mockImplementation(async (batch) => batch.map(b => ({ ...b, category: 'Tech', sub_category: 'Tools' })))
+            vi.spyOn(ai, 'generateDetailSchemas').mockResolvedValue(new Map([['tech\u0000tools', ['Editors', 'Terminals']]]))
+            vi.spyOn(ai, 'classifyDetailBatch').mockImplementation(async (chunk) => chunk.map((b, i) => ({ ...b, detail_category: i % 2 ? 'Terminals' : 'Editors' })))
+            const { service, messages } = make({ categories: ['Tech', 'Finance'], schemaSortOrder: 'alpha' })
+            expect(await record(service, messages, null, store)).toMatchSnapshot()
+        })
+    })
+
+    describe('G7 multi-batch AI with one failed batch', () => {
         it('classifies concurrently and retries the failed batch', async () => {
             const links = Array.from({ length: 120 }, (_, i) => ({ title: `Link ${i}`, url: `https://multi.test/${i}`, add_date: String(1600000000 + i) }))
             // File mode (function 12th arg) implies inference mode, so mock the inferred schema.
@@ -229,11 +251,7 @@ describe('start() golden snapshots', () => {
                 return batch.map(b => ({ ...b, category: 'Tech', sub_category: 'Tools' }))
             })
             const { service, messages } = make({ categories: ['Tech'], schemaSortOrder: 'alpha', twelfth: vi.fn() })
-            const snap = await record(service, messages, links)
-            // Concurrent lanes may interleave progress messages differently across
-            // equivalent implementations; their multiset is the contract here.
-            snap.messages = [...snap.messages].map(m => JSON.stringify(m)).sort()
-            expect(snap).toMatchSnapshot()
+            expect(await record(service, messages, links)).toMatchSnapshot()
         })
     })
 
