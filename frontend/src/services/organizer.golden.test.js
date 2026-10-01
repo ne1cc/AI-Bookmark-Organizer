@@ -10,6 +10,14 @@ import * as bookmarksService from './bookmarks'
 // against the UNREFACTORED code. If one changes, the refactor is wrong - do not
 // regenerate it.
 
+// Date formatting (utils/dates.js) uses the host timezone and locale, and the
+// fixtures sit near UTC day boundaries, so pin both for machine-independent snapshots.
+process.env.TZ = 'America/Los_Angeles'
+const realToLocaleDateString = Date.prototype.toLocaleDateString
+Date.prototype.toLocaleDateString = function (locales, options) {
+    return realToLocaleDateString.call(this, locales ?? 'en-US', options)
+}
+
 class FakeStore {
     constructor() {
         this.nodes = new Map()
@@ -166,7 +174,7 @@ describe('start() golden snapshots', () => {
     describe('G5 file AI with detail enrichment', () => {
         it('inferred schema, date-desc contents', async () => {
             const links = Array.from({ length: 6 }, (_, i) => ({
-                title: `Link ${i}`, url: `https://detail.test/${i}`, add_date: String(1600000000 + (i % 3) * 1000)
+                title: `Link ${i}`, url: `https://detail.test/${i}`, add_date: String(1600000000 + (i % 3) * 172800)
             }))
             const schema = { categories: [{ name: 'Tech', sub_categories: ['Frontend'] }] }
             vi.spyOn(ai, 'generateInferredSchema').mockResolvedValue(schema)
@@ -183,11 +191,11 @@ describe('start() golden snapshots', () => {
     describe('G6 browser AI placement', () => {
         it.each(['alpha', 'domain', 'date-asc', 'none'])('schemaSortOrder %s', async (schemaSortOrder) => {
             const store = new FakeStore()
-            store.addUrl('1', '10', 'https://www.zeta.com/a', 'Zeta', 1500000000000)
-            store.addUrl('1', '11', 'https://alpha.com/b', 'Alpha', 1700000000000)
+            store.addUrl('1', '10', 'https://alpha.com/b', 'Zeta', 1500000000000)
+            store.addUrl('1', '11', 'https://www.zeta.com/a', 'Alpha', 1700000000000)
             store.addUrl('1', '12', 'https://beta.com/c', 'Beta', 1600000000000)
             store.addUrl('1', '13', 'https://bank.com', 'Bank', 1600000000000)
-            store.addUrl('1', '14', 'https://alpha.com/b', 'Alpha dup', 1710000000000)
+            store.addUrl('1', '14', 'https://www.zeta.com/a', 'Alpha dup', 1710000000000)
             wire(store)
             vi.spyOn(ai, 'generateSchema').mockResolvedValue({
                 categories: [

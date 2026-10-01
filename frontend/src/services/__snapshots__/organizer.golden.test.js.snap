@@ -1268,7 +1268,7 @@ exports[`start() golden snapshots > G4 browser flat month buckets > order desc 1
 
 exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred schema, date-desc contents 1`] = `
 {
-  "dateSpan": "9/13/2020 – 9/13/2020",
+  "dateSpan": "9/13/2020 – 9/17/2020",
   "filename": "bookmarks_ai_newest_2026-10-01.html",
   "isFlat": null,
   "messages": [
@@ -1277,14 +1277,14 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
       "status": "info",
     },
     {
-      "dateSpan": "9/13/2020 – 9/13/2020",
-      "message": "Found 6 bookmarks (Date range: 9/13/2020 – 9/13/2020).",
+      "dateSpan": "9/13/2020 – 9/17/2020",
+      "message": "Found 6 bookmarks (Date range: 9/13/2020 – 9/17/2020).",
       "status": "info",
       "totalBookmarks": 6,
     },
     {
-      "dateSpan": "9/13/2020 – 9/13/2020",
-      "message": "Total date range: 9/13/2020 – 9/13/2020",
+      "dateSpan": "9/13/2020 – 9/17/2020",
+      "message": "Total date range: 9/13/2020 – 9/17/2020",
       "status": "info",
     },
     {
@@ -1348,14 +1348,14 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
       "status": "processing",
     },
     {
-      "dateSpan": "9/13/2020 – 9/13/2020",
-      "message": "Generating organized file (9/13/2020 – 9/13/2020)...",
+      "dateSpan": "9/13/2020 – 9/17/2020",
+      "message": "Generating organized file (9/13/2020 – 9/17/2020)...",
       "percent": 95,
       "status": "processing",
     },
     {
-      "dateSpan": "9/13/2020 – 9/13/2020",
-      "message": "Total date range: 9/13/2020 – 9/13/2020",
+      "dateSpan": "9/13/2020 – 9/17/2020",
+      "message": "Total date range: 9/13/2020 – 9/17/2020",
       "status": "info",
     },
     {
@@ -1381,7 +1381,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
     "categoryBreakdown": {
       "Tech": 6,
     },
-    "dateSpan": "9/13/2020 – 9/13/2020",
+    "dateSpan": "9/13/2020 – 9/17/2020",
     "deadLinksArchived": 0,
     "detailFoldersCount": 2,
     "detailedSubcategories": 1,
@@ -1394,7 +1394,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
   },
   "results": [
     {
-      "add_date": "1600002000",
+      "add_date": "1600345600",
       "category": "Tech",
       "detail_category": "React",
       "sub_category": "Frontend",
@@ -1402,7 +1402,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
       "url": "https://detail.test/2",
     },
     {
-      "add_date": "1600001000",
+      "add_date": "1600172800",
       "category": "Tech",
       "detail_category": "React",
       "sub_category": "Frontend",
@@ -1418,7 +1418,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
       "url": "https://detail.test/0",
     },
     {
-      "add_date": "1600002000",
+      "add_date": "1600345600",
       "category": "Tech",
       "detail_category": "Vue",
       "sub_category": "Frontend",
@@ -1426,7 +1426,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
       "url": "https://detail.test/5",
     },
     {
-      "add_date": "1600001000",
+      "add_date": "1600172800",
       "category": "Tech",
       "detail_category": "Vue",
       "sub_category": "Frontend",
@@ -1448,7 +1448,7 @@ exports[`start() golden snapshots > G5 file AI with detail enrichment > inferred
     "categoryBreakdown": {
       "Tech": 6,
     },
-    "dateSpan": "9/13/2020 – 9/13/2020",
+    "dateSpan": "9/13/2020 – 9/17/2020",
     "deadLinksArchived": 0,
     "detailFoldersCount": 2,
     "detailedSubcategories": 1,
@@ -1658,7 +1658,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder al
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Alpha",
-      "url": "https://alpha.com/b",
+      "url": "https://www.zeta.com/a",
     },
     {
       "add_date": "1600000000",
@@ -1678,7 +1678,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder al
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Zeta",
-      "url": "https://www.zeta.com/a",
+      "url": "https://alpha.com/b",
     },
     {
       "add_date": "1600000000",
@@ -1938,7 +1938,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder da
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Zeta",
-      "url": "https://www.zeta.com/a",
+      "url": "https://alpha.com/b",
     },
     {
       "add_date": "1600000000",
@@ -1958,7 +1958,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder da
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Alpha",
-      "url": "https://alpha.com/b",
+      "url": "https://www.zeta.com/a",
     },
     {
       "add_date": "1600000000",
@@ -2161,7 +2161,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder do
   "ops": [
     [
       "move",
-      "11",
+      "10",
       {
         "parentId": "folder-folder-folder-2-[AI Categorized - Domain A–Z] Bookmarks-2026-10-01-Tech-Tools",
       },
@@ -2175,7 +2175,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder do
     ],
     [
       "move",
-      "10",
+      "11",
       {
         "parentId": "folder-folder-folder-2-[AI Categorized - Domain A–Z] Bookmarks-2026-10-01-Tech-Tools",
       },
@@ -2211,13 +2211,13 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder do
   },
   "results": [
     {
-      "add_date": "1700000000",
+      "add_date": "1500000000",
       "category": "Tech",
-      "dateAdded": 1700000000000,
-      "id": "11",
+      "dateAdded": 1500000000000,
+      "id": "10",
       "parentId": "1",
       "sub_category": "Tools",
-      "title": "Alpha",
+      "title": "Zeta",
       "url": "https://alpha.com/b",
     },
     {
@@ -2231,13 +2231,13 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder do
       "url": "https://beta.com/c",
     },
     {
-      "add_date": "1500000000",
+      "add_date": "1700000000",
       "category": "Tech",
-      "dateAdded": 1500000000000,
-      "id": "10",
+      "dateAdded": 1700000000000,
+      "id": "11",
       "parentId": "1",
       "sub_category": "Tools",
-      "title": "Zeta",
+      "title": "Alpha",
       "url": "https://www.zeta.com/a",
     },
     {
@@ -2282,9 +2282,9 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder do
                 "Tech": [
                   {
                     "Tools": [
-                      "Alpha",
-                      "Beta",
                       "Zeta",
+                      "Beta",
+                      "Alpha",
                     ],
                   },
                 ],
@@ -2493,7 +2493,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder no
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Zeta",
-      "url": "https://www.zeta.com/a",
+      "url": "https://alpha.com/b",
     },
     {
       "add_date": "1700000000",
@@ -2503,7 +2503,7 @@ exports[`start() golden snapshots > G6 browser AI placement > schemaSortOrder no
       "parentId": "1",
       "sub_category": "Tools",
       "title": "Alpha",
-      "url": "https://alpha.com/b",
+      "url": "https://www.zeta.com/a",
     },
     {
       "add_date": "1600000000",
