@@ -1280,8 +1280,9 @@ export class OrganizerService {
             });
         }
 
-        sortWithinFolders(classified, { categoryRank, schemaSortOrder: this.schemaSortOrder });
-        return classified.map(({ _detailRunOrdinal, ...item }) => item);
+        const sorted = [...classified];
+        sortWithinFolders(sorted, { categoryRank, schemaSortOrder: this.schemaSortOrder });
+        return sorted.map(({ _detailRunOrdinal, ...item }) => item);
     }
 
     writeFile(finalResults, dateSpan) {
@@ -1365,7 +1366,7 @@ export class OrganizerService {
         return true;
     }
 
-    finishAI(finalResults, { duplicatesRemoved, labels, dateSpan: initialDateSpan }) {
+    finishAI(finalResults, { duplicatesRemoved, labels, dateSpan: sortedDateSpan }) {
         // Compute summary statistics and flat category breakdown
         const categoryBreakdown = {};
         for (const item of finalResults) {
@@ -1373,7 +1374,7 @@ export class OrganizerService {
             categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
         }
 
-        const dateSpan = calculateDateSpan(finalResults) || initialDateSpan || this.dateSpan;
+        const dateSpan = calculateDateSpan(finalResults) || sortedDateSpan || this.dateSpan;
         this.dateSpan = dateSpan;
         if (dateSpan) {
             this.onProgress({ status: 'info', message: `Total date range: ${dateSpan}`, dateSpan });
@@ -1421,13 +1422,14 @@ export class OrganizerService {
     }
 
     async runAI({ links, duplicatesRemoved, isBrowserMode }) {
-        // Bypassing network reachability probe on arbitrary bookmark URLs in Chrome extension context:
-        // External websites returning HTTP 'Link: ... rel="modulepreload"' or 'rel="preload"' response headers
-        // cause the browser to attempt preloading scripts into the extension's index.html context,
-        // violating Manifest V3 Content Security Policy (script-src 'self'). All bookmarks are classified directly.
         const schema = await this.designSchema(links);
+        // null means cancelled; an undefined schema from a mocked generator must flow through.
         if (schema === null) return null;
 
+        // All bookmarks are classified directly, without probing URL reachability: external
+        // sites returning HTTP 'Link: ... rel="modulepreload"' or 'rel="preload"' headers make the
+        // browser preload scripts into the extension's index.html context, violating the
+        // Manifest V3 Content Security Policy (script-src 'self').
         let classified = await this.classifyAll(links, schema);
         if (!classified) return null;
         classified = this.reconcileClassified(classified, schema);
