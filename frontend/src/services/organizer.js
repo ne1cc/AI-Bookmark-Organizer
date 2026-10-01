@@ -1137,21 +1137,8 @@ export class OrganizerService {
         return reconciled;
     }
 
-    async runAI({ links, duplicatesRemoved, isBrowserMode }) {
-        // Bypassing network reachability probe on arbitrary bookmark URLs in Chrome extension context:
-        // External websites returning HTTP 'Link: ... rel="modulepreload"' or 'rel="preload"' response headers
-        // cause the browser to attempt preloading scripts into the extension's index.html context,
-        // violating Manifest V3 Content Security Policy (script-src 'self'). All bookmarks are classified directly.
-        const deadLinks = [];
-
-        const schema = await this.designSchema(links);
-        if (schema === null) return null;
-        const runSchema = schema;
-
-        let classifiedActive = await this.classifyAll(links, schema);
-        if (!classifiedActive) return null;
-        classifiedActive = this.reconcileClassified(classifiedActive, schema);
-
+    async enrichDetails(classifiedInput) {
+        let classifiedActive = classifiedInput;
         const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
         const eligibleGroupCount = eligibleGroups.size;
         this.onProgress({
@@ -1205,49 +1192,38 @@ export class OrganizerService {
                 }
 
                 const detailed = new Array(detailTasks.length);
-                let detailTaskIdx = 0;
                 let completedDetailTasks = 0;
-                const detailWorker = async () => {
-                    while (detailTaskIdx < detailTasks.length && !this.isCancelled) {
-                        const taskIdx = detailTaskIdx++;
-                        const { key, names, chunk, label } = detailTasks[taskIdx];
-                        try {
-                            detailed[taskIdx] = retainDetailRunOrdinals(
-                                await classifyDetailBatch(chunk, this.apiKey, names, this.model,
-                                    () => this.isCancelled,
-                                    ({ delayMs, isRateLimit }) => this.onProgress({
-                                        status: 'warning',
-                                        message: isRateLimit
-                                            ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
-                                            : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
-                                    })
-                                ),
-                                chunk
-                            );
-                        } catch (err) {
-                            if (this.isCancelled || err?.isCancelled) throw err;
-                            detailClassificationFailures++;
-                            this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
-                        } finally {
-                            completedDetailTasks++;
-                            const detailPercent = Math.min(88, Math.round(74 + (completedDetailTasks / Math.max(1, detailTasks.length)) * 14));
-                            this.onProgress({
-                                status: 'progress',
-                                percent: detailPercent,
-                                clearNotice: true
-                            });
-                        }
+                await this.runPool(detailTasks.length, DETAIL_CLASSIFICATION_CONCURRENCY, async (taskIdx) => {
+                    const { key, names, chunk, label } = detailTasks[taskIdx];
+                    try {
+                        detailed[taskIdx] = retainDetailRunOrdinals(
+                            await classifyDetailBatch(chunk, this.apiKey, names, this.model,
+                                () => this.isCancelled,
+                                ({ delayMs, isRateLimit }) => this.onProgress({
+                                    status: 'warning',
+                                    message: isRateLimit
+                                        ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
+                                        : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                })
+                            ),
+                            chunk
+                        );
+                    } catch (err) {
+                        if (this.isCancelled || err?.isCancelled) throw err;
+                        detailClassificationFailures++;
+                        this.onProgress({ status: 'warning', message: `Third-level group ${key.replace('\u0000', '/')} skipped: ${err.message}` });
+                    } finally {
+                        completedDetailTasks++;
+                        const detailPercent = Math.min(88, Math.round(74 + (completedDetailTasks / Math.max(1, detailTasks.length)) * 14));
+                        this.onProgress({
+                            status: 'progress',
+                            percent: detailPercent,
+                            clearNotice: true
+                        });
                     }
-                };
-
-                const detailWorkers = [];
-                for (let w = 0; w < Math.min(DETAIL_CLASSIFICATION_CONCURRENCY, detailTasks.length); w++) {
-                    detailWorkers.push(detailWorker());
-                }
-                await Promise.all(detailWorkers);
+                });
                 if (this.isCancelled) {
-                    this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-                    return null;
+                    return this.cancelled();
                 }
                 // Each task wrote an array; flatten (holes from failed
                 // tasks drop out) back into the assignment map the way the
@@ -1262,7 +1238,7 @@ export class OrganizerService {
                 this.stats.detailFoldersCount = detailResult.summary.detailFoldersKept;
                 this.stats.detailedSubcategories = detailResult.summary.detailedSubcategories;
             } catch (err) {
-                if (this.isCancelled || err?.isCancelled) { this.onProgress({ status: 'warning', message: 'Process cancelled.' }); return null; }
+                if (this.isCancelled || err?.isCancelled) return this.cancelled();
                 detailSchemaFailures = eligibleGroupCount;
                 this.onProgress({ status: 'warning', message: `Third-level enrichment skipped: ${err.message}` });
             }
@@ -1281,17 +1257,13 @@ export class OrganizerService {
                 message: `Third-level enrichment had partial failures (${detailSchemaFailures} schema, ${detailClassificationFailures} classification); valid sibling groups were retained and failed groups stayed at two levels.`
             });
         }
+        return classifiedActive;
+    }
 
-        // Combine classified reachable links with archived unreachable links.
+    sortAndStrip(classified, categoryRank) {
         // Items still carry _detailRunOrdinal here — it's used as a same-timestamp
-        // tie-break below and stripped afterward, since it's run-local
+        // tie-break and stripped afterward, since it's run-local
         // reconciliation metadata, never part of the bookmark result or downloaded file.
-        let finalResults = [...classifiedActive, ...deadLinks];
-
-        // Creation order determines display order in Chrome, so sorting the
-        // results here controls the order of folders and bookmarks within them.
-        const categoryRank = new Map((runSchema || buildAuthoritativeSchema(this.categories)).categories
-            .map((category, index) => [category.name, index]));
         const sortContents = this.schemaSortOrder && this.schemaSortOrder !== 'none';
         if (sortContents) {
             const sortLabels = {
@@ -1308,143 +1280,92 @@ export class OrganizerService {
             });
         }
 
-        sortWithinFolders(finalResults, { categoryRank, schemaSortOrder: this.schemaSortOrder });
+        sortWithinFolders(classified, { categoryRank, schemaSortOrder: this.schemaSortOrder });
+        return classified.map(({ _detailRunOrdinal, ...item }) => item);
+    }
 
-        finalResults = finalResults.map(({ _detailRunOrdinal, ...item }) => item);
-
-        if (this.isCancelled) {
-            this.onProgress({ status: 'warning', message: 'Process cancelled.' });
-            return null;
+    writeFile(finalResults, dateSpan) {
+        this.onProgress({ status: 'processing', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, percent: 95, dateSpan });
+        try {
+            (this.fileDownload || downloadBookmarks)(finalResults);
+        } catch (dlErr) {
+            console.warn('[Organizer] Download invocation deferred:', dlErr);
         }
+    }
 
-        let dateSpan = calculateDateSpan(finalResults) || this.dateSpan;
-        this.dateSpan = dateSpan;
+    // Returns true when written, null when the run was stopped.
+    async placeInBrowser(finalResults, categoryRank, { dateSpan, labels }) {
+        if (this.isCancelled) {
+            return this.cancelled(HALT_CANCEL_MESSAGE);
+        }
+        // Browser mode: relocate existing bookmarks (spec §6)
+        this.onProgress({ status: 'processing', message: `Reorganizing ${finalResults.length.toLocaleString()} bookmarks${dateSpan ? ` (${dateSpan})` : ''} in the browser...`, percent: 90, dateSpan });
+        if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
+        if (this.isCancelled) {
+            return this.cancelled(HALT_CANCEL_MESSAGE);
+        }
+        const rootFolder = await this.resolveRootFolder(labels);
 
-        const labels = getStandardizedOutputLabel({
-            flatDateSort: false,
-            schemaSortOrder: this.schemaSortOrder,
-            date: new Date()
-        });
+        const createdFolders = {}; // path key -> folder Object
+        const folderAt = async (path, parentId, title) =>
+            (createdFolders[path] ??= await findOrCreateFolder(parentId, title));
+        const itemsWithParents = [];
 
-        if (!isBrowserMode) {
-            this.onProgress({ status: 'processing', message: `Generating organized file${dateSpan ? ` (${dateSpan})` : ''}...`, percent: 95, dateSpan });
+        for (const item of finalResults) {
+            if (this.isCancelled) break;
+
+            const category = item.category || "Uncategorized";
+            let targetParentId;
             try {
-                (this.fileDownload || downloadBookmarks)(finalResults);
-            } catch (dlErr) {
-                console.warn('[Organizer] Download invocation deferred:', dlErr);
-            }
-        } else {
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Cancelled — halting operations.' });
-                return null;
-            }
-            // Browser mode: relocate existing bookmarks (spec §6)
-            this.onProgress({ status: 'processing', message: `Reorganizing ${finalResults.length.toLocaleString()} bookmarks${dateSpan ? ` (${dateSpan})` : ''} in the browser...`, percent: 90, dateSpan });
-            if (!await this.prepareSnapshot(finalResults, this.doomedDuplicates || [])) return null;
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Cancelled — halting operations.' });
-                return null;
-            }
-            const rootId = await getOtherBookmarksRootId(); // 'Other Bookmarks' (Chrome: '2', Firefox: 'unfiled_____')
-            let rootFolder = await findOrCreateFolder(rootId, labels.rootFolderTitle);
-            if (!rootFolder && labels.legacyFolderTitle) {
-                rootFolder = await findOrCreateFolder(rootId, labels.legacyFolderTitle);
-            }
-            clearFolderCache();
+                const catFolder = await folderAt(category, rootFolder.id, category);
+                targetParentId = catFolder.id;
 
-            const createdFolders = {}; // path key -> folder Object
-            const itemsWithParents = [];
+                const subCategory = item.sub_category;
+                if (shouldCreateSubFolder(category, subCategory)) {
+                    const subFolder = await folderAt(`${category}/${subCategory}`, catFolder.id, subCategory);
+                    targetParentId = subFolder.id;
 
-            for (const item of finalResults) {
-                if (this.isCancelled) break;
-
-                const category = item.category || "Uncategorized";
-                let targetParentId;
-                try {
-                    let catFolder;
-                    if (createdFolders[category]) {
-                        catFolder = createdFolders[category];
-                    } else {
-                        catFolder = await findOrCreateFolder(rootFolder.id, category);
-                        createdFolders[category] = catFolder;
+                    const detailCategory = item.detail_category;
+                    if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
+                        const detailFolder = await folderAt(`${subFolder.id}\u0000${detailCategory}`, subFolder.id, detailCategory);
+                        targetParentId = detailFolder.id;
                     }
-
-                    targetParentId = catFolder.id;
-
-                    const subCategory = item.sub_category;
-                    if (shouldCreateSubFolder(category, subCategory)) {
-                        const subPath = `${category}/${subCategory}`;
-                        let subFolder;
-                        if (createdFolders[subPath]) {
-                            subFolder = createdFolders[subPath];
-                        } else {
-                            subFolder = await findOrCreateFolder(catFolder.id, subCategory);
-                            createdFolders[subPath] = subFolder;
-                        }
-                        targetParentId = subFolder.id;
-
-                        const detailCategory = item.detail_category;
-                        if (shouldCreateDetailFolder(category, subCategory, detailCategory)) {
-                            const detailPath = `${subFolder.id}\u0000${detailCategory}`;
-                            let detailFolder;
-                            if (createdFolders[detailPath]) {
-                                detailFolder = createdFolders[detailPath];
-                            } else {
-                                detailFolder = await findOrCreateFolder(subFolder.id, detailCategory);
-                                createdFolders[detailPath] = detailFolder;
-                            }
-                            targetParentId = detailFolder.id;
-                        }
-                    }
-                } catch (err) {
-                    this.failedMoves.push({ title: item.title, reason: err?.message || String(err) });
-                    continue;
                 }
-
-                itemsWithParents.push({ item, parentId: targetParentId });
+            } catch (err) {
+                this.failedMoves.push({ title: item.title, reason: err?.message || String(err) });
+                continue;
             }
 
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
-                return null;
-            }
-
-            await this.moveItems(itemsWithParents, 90, 97);
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
-                return null;
-            }
-
-            this.onProgress({ status: 'processing', message: 'Finalizing folder structure...', percent: 98 });
-            await this.removeDoomedDuplicates();
-            if (this.isCancelled) {
-                this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
-                return null;
-            }
-
-            const byFolder = new Map();
-            for (const { item, parentId } of itemsWithParents) {
-                if (!byFolder.has(parentId)) byFolder.set(parentId, []);
-                byFolder.get(parentId).push(item.id);
-            }
-            for (const [parentId, expectedIds] of byFolder) {
-                if (this.isCancelled) break;
-                await this.reorderFolder(parentId, expectedIds);
-            }
-            // Reused folders retain their old positions until explicitly moved.
-            const categoryIds = [...categoryRank.keys()]
-                .map(category => createdFolders[category]?.id)
-                .filter(id => id != null);
-            if (rootFolder?.id && categoryIds.length > 0) {
-                await this.reorderFolder(rootFolder.id, categoryIds);
-            }
+            itemsWithParents.push({ item, parentId: targetParentId });
         }
 
         if (this.isCancelled) {
-            this.onProgress({ status: 'warning', message: 'Cancelled — bookmarks partially reorganized. Run again to finish.' });
-            return null;
+            return this.cancelled(PARTIAL_CANCEL_MESSAGE);
         }
 
+        await this.moveItems(itemsWithParents, 90, 97);
+        if (this.isCancelled) {
+            return this.cancelled(PARTIAL_CANCEL_MESSAGE);
+        }
+
+        this.onProgress({ status: 'processing', message: 'Finalizing folder structure...', percent: 98 });
+        await this.removeDoomedDuplicates();
+        if (this.isCancelled) {
+            return this.cancelled(PARTIAL_CANCEL_MESSAGE);
+        }
+
+        await this.reorderByParent(itemsWithParents);
+        // Reused folders retain their old positions until explicitly moved.
+        const categoryIds = [...categoryRank.keys()]
+            .map(category => createdFolders[category]?.id)
+            .filter(id => id != null);
+        if (rootFolder?.id && categoryIds.length > 0) {
+            await this.reorderFolder(rootFolder.id, categoryIds);
+        }
+        return true;
+    }
+
+    finishAI(finalResults, { duplicatesRemoved, labels, dateSpan: initialDateSpan }) {
         // Compute summary statistics and flat category breakdown
         const categoryBreakdown = {};
         for (const item of finalResults) {
@@ -1452,7 +1373,7 @@ export class OrganizerService {
             categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
         }
 
-        dateSpan = calculateDateSpan(finalResults) || dateSpan || this.dateSpan;
+        const dateSpan = calculateDateSpan(finalResults) || initialDateSpan || this.dateSpan;
         this.dateSpan = dateSpan;
         if (dateSpan) {
             this.onProgress({ status: 'info', message: `Total date range: ${dateSpan}`, dateSpan });
@@ -1461,15 +1382,16 @@ export class OrganizerService {
         this.stats = {
             total: finalResults.length,
             duplicatesRemoved,
-            deadLinksArchived: deadLinks.length,
+            deadLinksArchived: 0,
             categoriesCount: Object.keys(categoryBreakdown).length,
             categoryBreakdown,
             isFlat: false,
             schemaSortOrder: this.schemaSortOrder,
             dateSpan,
             failedMoves: this.failedMoves,
-            folderTitle: labels.rootFolderTitle
-            ,detailFoldersCount: this.stats.detailFoldersCount || 0, detailedSubcategories: this.stats.detailedSubcategories || 0
+            folderTitle: labels.rootFolderTitle,
+            detailFoldersCount: this.stats.detailFoldersCount || 0,
+            detailedSubcategories: this.stats.detailedSubcategories || 0
         };
         finalResults.stats = this.stats;
         finalResults.filename = labels.downloadFilename;
@@ -1493,12 +1415,50 @@ export class OrganizerService {
                 : `Filed directly under their category (General): ${generalCount.toLocaleString()} (${generalShare}%).`
         });
 
-        if (this.failedMoves.length > 0) {
-            const n = this.failedMoves.length;
-            this.onProgress({ status: 'warning', message: `${n} move${n === 1 ? '' : 's'} failed and need${n === 1 ? 's' : ''} another run: ${this.failedMoves.map(f => f.title).slice(0, 5).join(', ')}${n > 5 ? '…' : ''}` });
-        }
-
+        this.reportFailedMoves();
         this.onProgress({ status: 'done', message: 'Organization complete!' });
         return finalResults;
+    }
+
+    async runAI({ links, duplicatesRemoved, isBrowserMode }) {
+        // Bypassing network reachability probe on arbitrary bookmark URLs in Chrome extension context:
+        // External websites returning HTTP 'Link: ... rel="modulepreload"' or 'rel="preload"' response headers
+        // cause the browser to attempt preloading scripts into the extension's index.html context,
+        // violating Manifest V3 Content Security Policy (script-src 'self'). All bookmarks are classified directly.
+        const schema = await this.designSchema(links);
+        if (schema === null) return null;
+
+        let classified = await this.classifyAll(links, schema);
+        if (!classified) return null;
+        classified = this.reconcileClassified(classified, schema);
+        classified = await this.enrichDetails(classified);
+        if (!classified) return null;
+
+        // Creation order determines display order in Chrome, so sorting the
+        // results here controls the order of folders and bookmarks within them.
+        const categoryRank = new Map((schema || buildAuthoritativeSchema(this.categories)).categories
+            .map((category, index) => [category.name, index]));
+        const finalResults = this.sortAndStrip(classified, categoryRank);
+
+        if (this.isCancelled) return this.cancelled();
+
+        const dateSpan = calculateDateSpan(finalResults) || this.dateSpan;
+        this.dateSpan = dateSpan;
+
+        const labels = getStandardizedOutputLabel({
+            flatDateSort: false,
+            schemaSortOrder: this.schemaSortOrder,
+            date: new Date()
+        });
+
+        if (!isBrowserMode) {
+            this.writeFile(finalResults, dateSpan);
+        } else if (!await this.placeInBrowser(finalResults, categoryRank, { dateSpan, labels })) {
+            return null;
+        }
+
+        if (this.isCancelled) return this.cancelled(PARTIAL_CANCEL_MESSAGE);
+
+        return this.finishAI(finalResults, { duplicatesRemoved, labels, dateSpan });
     }
 }
