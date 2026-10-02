@@ -1023,7 +1023,8 @@ describe('classifyBatch hybrid subcategory proposals', () => {
         expect(prompt).toContain('CATEGORY is fixed')
         expect(prompt).toContain('Never invent a new category')
         expect(prompt).toMatch(/at least 3 bookmarks in THIS batch share a clear, specific theme/)
-        expect(prompt).toMatch(/Use "General" as the sub_category ONLY when/)
+        expect(prompt).toMatch(/choose the nearest topic rather than "General"/)
+        expect(prompt).toMatch(/Use "General" ONLY when/)
     })
 })
 

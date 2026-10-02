@@ -1,7 +1,7 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, classifyBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
-import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey } from './reconcile';
+import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey, isExemptCategory } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 import { isAlphaOrder, isAlphaDescOrder, sortFlat, sortWithinFolders } from './sorting';
@@ -1137,6 +1137,73 @@ export class OrganizerService {
         return reconciled;
     }
 
+    // Bookmarks that would be written directly into their category folder
+    // (General or any other sink) get one more look, now that the folders that
+    // survived reconciliation are known. Best-effort: on failure they stay put.
+    async rehomeLoose(classified) {
+        const folders = new Map();
+        for (const item of classified) {
+            if (!shouldCreateSubFolder(item.category, item.sub_category)) continue;
+            if (!folders.has(item.category)) folders.set(item.category, new Map());
+            folders.get(item.category).set(canonicalKey(item.sub_category), item.sub_category);
+        }
+
+        const loose = [];
+        classified.forEach((item, index) => {
+            if (shouldCreateSubFolder(item.category, item.sub_category) || isExemptCategory(item.category)) return;
+            if (folders.has(item.category)) loose.push(index);
+        });
+        if (loose.length === 0) return classified;
+
+        const foldersByCategory = Object.fromEntries(
+            [...folders].map(([category, names]) => [category, [...names.values()]])
+        );
+        this.onProgress({
+            status: 'processing',
+            message: `Re-filing ${loose.length.toLocaleString()} bookmark${loose.length === 1 ? '' : 's'} that fit no subfolder on the first pass...`,
+            percent: 70
+        });
+
+        const chunks = sliceBatches(loose, DETAIL_CLASSIFICATION_BATCH_SIZE);
+        const rehomed = classified.slice();
+        let failure = null;
+        try {
+            await this.runPool(chunks.length, DETAIL_CLASSIFICATION_CONCURRENCY, async (chunkIdx) => {
+                const indexes = chunks[chunkIdx].batchData;
+                try {
+                    const result = await classifyRehomeBatch(
+                        indexes.map(index => classified[index]),
+                        this.apiKey,
+                        foldersByCategory,
+                        this.model,
+                        () => this.isCancelled,
+                        ({ delayMs, isRateLimit }) => this.onProgress({
+                            status: 'warning',
+                            message: isRateLimit
+                                ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying the re-file pass...`
+                                : `Network issue during the re-file pass. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                        })
+                    );
+                    result.forEach((item, i) => { rehomed[indexes[i]] = item; });
+                } catch (err) {
+                    if (this.isCancelled || err?.isCancelled) throw err;
+                    failure = failure || err;
+                }
+            });
+        } catch (err) {
+            if (this.isCancelled || err?.isCancelled) return this.cancelled();
+            throw err;
+        }
+        if (this.isCancelled) return this.cancelled();
+
+        const moved = loose.filter(index => rehomed[index].sub_category !== classified[index].sub_category).length;
+        if (failure) {
+            this.onProgress({ status: 'warning', message: `Re-file pass skipped some bookmarks: ${failure.message}` });
+        }
+        this.onProgress({ status: 'info', message: `Re-filed ${moved.toLocaleString()} of ${loose.length.toLocaleString()} loose bookmarks into existing subfolders.` });
+        return rehomed;
+    }
+
     async enrichDetails(classifiedInput) {
         let classifiedActive = classifiedInput;
         const eligibleGroups = groupEligibleDetailCandidates(classifiedActive);
@@ -1433,6 +1500,8 @@ export class OrganizerService {
         let classified = await this.classifyAll(links, schema);
         if (!classified) return null;
         classified = this.reconcileClassified(classified, schema);
+        classified = await this.rehomeLoose(classified);
+        if (!classified) return null;
         classified = await this.enrichDetails(classified);
         if (!classified) return null;
 

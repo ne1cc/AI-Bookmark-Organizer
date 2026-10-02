@@ -1403,6 +1403,31 @@ export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model
     }, 5, 1500, isCancelled, onRetry);
 }
 
+// Second chance for bookmarks filed directly under their category. Each one is
+// offered only the folders that survived reconciliation for its own category;
+// anything the model cannot place with an approved name stays where it was.
+export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+    const prompt = `
+    These bookmarks were filed directly under their category folder because no subfolder was a clear fit. Look again and re-file each one into the closest existing subfolder of ITS OWN category.
+    APPROVED SUBFOLDERS BY CATEGORY: ${JSON.stringify(foldersByCategory)}
+    Return JSON only: { "classified": [{ "i": 0, "sub_category": "..." }] }
+    Use only a name approved for that bookmark's category, written exactly as above. A loose fit is better than none: pick the nearest topic, and use null only when the bookmark has nothing in common with any of them. Every bookmark appears exactly once.
+    BOOKMARKS (each with its index "i"):
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, category: b.category, title: b.title, url: b.url })))}
+    `;
+    return withRetry(async () => {
+        const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
+        const byIndex = new Map((parsed.classified || []).filter(e => Number.isInteger(e?.i) && e.i >= 0 && e.i < bookmarks.length)
+            .map(e => [e.i, e]));
+        return bookmarks.map((bookmark, i) => {
+            const entry = byIndex.get(i);
+            const approved = (foldersByCategory[bookmark.category] || []).find(name =>
+                typeof entry?.sub_category === 'string' && canonicalKey(name) === canonicalKey(entry.sub_category));
+            return approved ? { ...bookmark, sub_category: approved } : bookmark;
+        });
+    }, 5, 1500, isCancelled, onRetry);
+}
+
 export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
     const titleInstruction = cleanTitles
         ? `\n    7. Title cleanup: If clean_title is requested, provide a cleaned, human-readable title in the 'clean_title' field for each bookmark (strip site prefixes/suffixes like 'Login |', '- Wikipedia', query noise, or convert raw URL titles into clean titles). If the existing title is already clean, keep it as is.`
@@ -1422,8 +1447,8 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
     1. For each bookmark, pick the single best-fitting category and sub_category, judging by the user's likely INTENT in saving it — not just keyword matching on the title.
     2. CATEGORY is fixed: you MUST use a "category" string EXACTLY as written in the schema above (same spelling, casing, spacing). Never invent a new category.
     3. SUB_CATEGORY: strongly prefer one written exactly as in the schema. The schema was designed from a sample, so it may miss a real theme. If at least 3 bookmarks in THIS batch share a clear, specific theme that no schema sub-category captures well, you MAY introduce ONE new sub_category for them under the correct existing category. Name it in Title Case, 1-3 words, and make sure it is not a synonym or near-duplicate of a sub-category already in the schema.
-    4. Use "General" as the sub_category ONLY when a bookmark genuinely belongs in the category but fits no sub-category at all — neither an existing one nor a new one worth creating. This should be rare.
-    5. If a bookmark fits no category at all, choose the closest approved category and use sub_category "General". Never add an "Other" category unless it is already in the approved schema.
+    4. Always prefer a sub_category from the schema, even a loose fit: choose the nearest topic rather than "General". Use "General" ONLY when a bookmark genuinely belongs in the category yet has nothing in common with any sub-category, existing or new. This should be rare.
+    5. If a bookmark fits no category at all, choose the closest approved category and its closest sub_category; fall back to "General" only when no sub-category there is even loosely related. Never add an "Other" category unless it is already in the approved schema.
     6. Every bookmark must be classified exactly once. Refer to each bookmark ONLY by its index "i" — do NOT repeat titles or urls in your output.${titleInstruction}
 
     Return JSON object: ${returnSchema}
