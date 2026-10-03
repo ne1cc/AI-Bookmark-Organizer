@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar } from 'lucide-react'
+import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar, Trash2 } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
 import { normalizeSubfolderTarget } from '../services/ai'
-import { saveRun, loadRunData } from '../services/runHistory'
+import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
@@ -914,6 +914,17 @@ export default function Organizer({ theme = 'light' }) {
             addLog(`Could not save the file: ${err.message}`)
         }
     }, [addLog, reportSave])
+
+    const removePreviousRun = useCallback(async (entry) => {
+        if (!window.confirm(`Delete the run from ${formatRunTime(entry.savedAt)}? This cannot be undone.`)) return
+        setPreviousRuns(await deleteRun(entry.id))
+    }, [])
+
+    const clearPreviousRuns = useCallback(async () => {
+        if (!window.confirm('Delete all previous runs? The latest run is kept. This cannot be undone.')) return
+        await clearHistory()
+        setPreviousRuns([])
+    }, [])
 
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
@@ -2382,6 +2393,13 @@ export default function Organizer({ theme = 'light' }) {
                     <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                         Previous runs ({previousRuns.length})
                     </summary>
+                    <button
+                        type="button"
+                        onClick={clearPreviousRuns}
+                        style={{ marginTop: '0.5rem', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
+                    >
+                        Clear all previous runs
+                    </button>
                     <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '240px', overflowY: 'auto' }}>
                         {previousRuns.map((entry) => (
                             <li key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
@@ -2395,16 +2413,27 @@ export default function Organizer({ theme = 'light' }) {
                                         entry.mode === 'file' ? 'from file' : entry.mode === 'browser' ? 'from browser' : ''
                                     ].filter(Boolean).join(' · ')}
                                 </span>
-                                <button
-                                    type="button"
-                                    aria-label={`Download run from ${formatRunTime(entry.savedAt)}`}
-                                    onClick={() => downloadPreviousRun(entry)}
-                                    title="Save this run as an HTML file"
-                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                                >
-                                    <Download size={13} />
-                                    Download
-                                </button>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                                    <button
+                                        type="button"
+                                        aria-label={`Download run from ${formatRunTime(entry.savedAt)}`}
+                                        onClick={() => downloadPreviousRun(entry)}
+                                        title="Save this run as an HTML file"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                    >
+                                        <Download size={13} />
+                                        Download
+                                    </button>
+                                    <button
+                                        type="button"
+                                        aria-label={`Delete run from ${formatRunTime(entry.savedAt)}`}
+                                        onClick={() => removePreviousRun(entry)}
+                                        title="Delete this saved run"
+                                        style={{ display: 'inline-flex', alignItems: 'center', padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                                    >
+                                        <Trash2 size={13} />
+                                    </button>
+                                </div>
                             </li>
                         ))}
                     </ul>

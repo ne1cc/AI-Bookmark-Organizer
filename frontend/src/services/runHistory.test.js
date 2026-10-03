@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { rotateRuns, saveRun, loadHistory, loadRunData, loadLatestRun } from './runHistory'
+import { rotateRuns, deleteRun, clearHistory, saveRun, loadHistory, loadRunData, loadLatestRun } from './runHistory'
 
 // In-memory stand-in for one chrome.storage area (callback style, like the real API).
 const fakeArea = () => {
@@ -77,6 +77,28 @@ describe('saved run history', () => {
         )
         for (let n = 1; n < count; n++) expect(await loadRunData(String(n * 1000))).toEqual(run(n).results)
         expect([...local.data.keys()].filter(k => k.startsWith('organizedRun:'))).toHaveLength(count - 1)
+    })
+
+    it('deletes one older run and its data, leaving the others and the latest', async () => {
+        for (const n of [1, 2, 3, 4]) await saveRun(run(n).results, run(n).meta)
+
+        const remaining = await deleteRun('2000')
+
+        expect(remaining.map(e => e.id)).toEqual(['3000', '1000'])
+        expect((await loadHistory()).map(e => e.id)).toEqual(['3000', '1000'])
+        expect(await loadRunData('2000')).toBeNull()
+        expect(await loadRunData('1000')).toEqual(run(1).results)
+        expect(local.data.get('organizedData')).toEqual(run(4).results)
+    })
+
+    it('clears every older run but keeps the latest', async () => {
+        for (const n of [1, 2, 3, 4]) await saveRun(run(n).results, run(n).meta)
+
+        await clearHistory()
+
+        expect(await loadHistory()).toEqual([])
+        expect([...local.data.keys()].filter(k => k.startsWith('organizedRun:'))).toEqual([])
+        expect(local.data.get('organizedData')).toEqual(run(4).results)
     })
 
     it('does not turn a previous run without stored data into a history entry', async () => {

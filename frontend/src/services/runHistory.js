@@ -1,5 +1,5 @@
 // Every organized result, kept on disk so each run stays downloadable after the
-// panel closes or the browser restarts. Nothing is ever discarded automatically.
+// panel closes or the browser restarts. Nothing is discarded unless the user deletes it.
 //
 // Layout in chrome.storage.local (panel startup reads only the small keys):
 //   organizedMeta / organizedData   latest run (data also mirrored to session)
@@ -13,6 +13,11 @@ const RUN_PREFIX = 'organizedRun:';
 const runKey = (id) => `${RUN_PREFIX}${id}`;
 
 const read = (area, keys) => new Promise((resolve) => area.get(keys, (res) => resolve(res || {})));
+
+const erase = (area, keys) => new Promise((resolve) => {
+    if (keys.length === 0) return resolve();
+    area.remove(keys, () => resolve());
+});
 
 const write = (area, entries) => new Promise((resolve, reject) => {
     area.set(entries, () => {
@@ -72,4 +77,21 @@ export async function loadRunData(id) {
     const stored = await read(chrome.storage.local, [runKey(id)]);
     const data = stored[runKey(id)];
     return Array.isArray(data) && data.length > 0 ? data : null;
+}
+
+// Deletes one older run (metadata and data); returns the remaining older runs.
+export async function deleteRun(id) {
+    const local = chrome.storage.local;
+    const history = (await loadHistory()).filter(entry => entry.id !== id);
+    await write(local, { [HISTORY_KEY]: history });
+    await erase(local, [runKey(id)]);
+    return history;
+}
+
+// Deletes every older run; the latest run is untouched.
+export async function clearHistory() {
+    const local = chrome.storage.local;
+    const history = await loadHistory();
+    await write(local, { [HISTORY_KEY]: [] });
+    await erase(local, history.map(entry => runKey(entry.id)));
 }

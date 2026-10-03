@@ -60,3 +60,9 @@ Two requirements from the user: (1) every run must be stored so it can be downlo
 - `Organizer.jsx`: the "Previous runs (N)" `<details>` dropdown scrolls (max 240px) and each row shows the run time,
   bookmark count, category count, date span and file/browser mode.
 - Tests: `npx vitest run` → 21 files, 520 tests passed; `npm run lint` → 0 errors, 3 pre-existing warnings.
+
+## Follow-up: delete saved runs
+- `runHistory.js`: `deleteRun(id)` (metadata + data, returns the remaining list) and `clearHistory()` (all older runs; the latest is untouched).
+- `Organizer.jsx`: a trash button per row and a "Clear all previous runs" button in the dropdown, both behind `window.confirm`
+  because deletion is irreversible. The latest run (banner) cannot be deleted from here.
+- Tests added in `runHistory.test.js` and `Organizer.test.jsx`.

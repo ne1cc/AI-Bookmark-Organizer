@@ -1767,6 +1767,55 @@ describe('Saved runs', () => {
         expect(screen.getAllByText(/Jan 2024 – Mar 2024/).length).toBeGreaterThan(0)
     })
 
+    it('deletes one previous run after confirmation, and not when declined', async () => {
+        const [older1, older2, latest] = [run(1), run(2), run(3)]
+        const store = installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older2.meta, id: String(older2.meta.savedAt) }, { ...older1.meta, id: String(older1.meta.savedAt) }],
+            [`organizedRun:${older1.meta.savedAt}`]: older1.results,
+            [`organizedRun:${older2.meta.savedAt}`]: older2.results
+        })
+        global.chrome.storage.local.set = vi.fn((obj, cb) => { for (const [k, v] of Object.entries(obj)) store.set(k, v); cb && cb() })
+        global.chrome.storage.local.remove = vi.fn((keys, cb) => { for (const k of [].concat(keys)) store.delete(k); cb && cb() })
+
+        render(<Organizer />)
+        await screen.findByText(/Previous runs \(2\)/i)
+
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false)
+        fireEvent.click(screen.getAllByRole('button', { name: /^Delete run from/i })[0])
+        await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
+        expect(screen.getByText(/Previous runs \(2\)/i)).toBeDefined()
+
+        confirmSpy.mockReturnValueOnce(true)
+        fireEvent.click(screen.getAllByRole('button', { name: /^Delete run from/i })[0])
+
+        expect(await screen.findByText(/Previous runs \(1\)/i)).toBeDefined()
+        expect(store.has(`organizedRun:${older2.meta.savedAt}`)).toBe(false)
+        expect(store.has(`organizedRun:${older1.meta.savedAt}`)).toBe(true)
+        confirmSpy.mockRestore()
+    })
+
+    it('clears all previous runs after confirmation and keeps the latest banner', async () => {
+        const [older1, older2, latest] = [run(1), run(2), run(3)]
+        const store = installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older2.meta, id: String(older2.meta.savedAt) }, { ...older1.meta, id: String(older1.meta.savedAt) }],
+            [`organizedRun:${older1.meta.savedAt}`]: older1.results,
+            [`organizedRun:${older2.meta.savedAt}`]: older2.results
+        })
+        global.chrome.storage.local.set = vi.fn((obj, cb) => { for (const [k, v] of Object.entries(obj)) store.set(k, v); cb && cb() })
+        global.chrome.storage.local.remove = vi.fn((keys, cb) => { for (const k of [].concat(keys)) store.delete(k); cb && cb() })
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+        render(<Organizer />)
+        fireEvent.click(await screen.findByRole('button', { name: /Clear all previous runs/i }))
+
+        await waitFor(() => expect(screen.queryByText(/Previous runs/i)).toBeNull())
+        expect([...store.keys()].filter(k => k.startsWith('organizedRun:'))).toEqual([])
+        expect(store.get('organizedMeta')).toEqual(latest.meta)
+        confirmSpy.mockRestore()
+    })
+
     it('shows no previous-runs list when only one run has been saved', () => {
         installStore({ organizedMeta: run(1).meta })
 
