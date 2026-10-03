@@ -16,6 +16,10 @@ const SINK_SUBCATEGORY = 'General';
 // makes it useful.
 const EXEMPT_CATEGORIES = new Set(['archive']);
 
+export function isExemptCategory(category) {
+    return typeof category === 'string' && EXEMPT_CATEGORIES.has(category.trim().toLowerCase());
+}
+
 // Tokens too common to signal that two folder names are related.
 const STOPWORDS = new Set(['and', 'the', 'of', 'for', 'in', 'on', 'to', 'a', 'an', '&']);
 
@@ -191,8 +195,10 @@ function overlap(a, b) {
     return shared;
 }
 
-// The surviving group a dissolved folder's bookmarks belong closest to, or
-// null when it shares no token with any of them.
+// The surviving group a dissolved folder's bookmarks belong closest to. With
+// no shared token it falls back to the largest survivor (`kept` is sorted
+// largest first), so a bookmark only lands in the sink when the category has no
+// surviving folder at all.
 function nearestSibling(group, kept) {
     let best = null;
     let bestScore = 0;
@@ -203,7 +209,7 @@ function nearestSibling(group, kept) {
             best = candidate;
         }
     }
-    return best;
+    return best || kept[0] || null;
 }
 
 /**
@@ -248,7 +254,7 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
 
     for (const item of classified) {
         const category = typeof item?.category === 'string' ? item.category : '';
-        if (!category || EXEMPT_CATEGORIES.has(category.trim().toLowerCase())) continue;
+        if (!category || isExemptCategory(category)) continue;
         categoryTotals.set(category, (categoryTotals.get(category) || 0) + 1);
         if (isSink(item.sub_category)) continue;
 

@@ -91,15 +91,19 @@ describe('reconcileSubcategories', () => {
         expect(result.summary.proposedFolded).toBe(1)
     })
 
-    it('sends an undersized subcategory with no related sibling to General', () => {
+    it('sends an undersized subcategory with no related sibling to the largest survivor', () => {
         const classified = [
             ...items('Tech', 'Web Development', 6),
+            ...items('Tech', 'Databases', 4),
             ...items('Tech', 'Knitting Patterns', 1, { proposed: true })
         ]
 
         const result = reconcileSubcategories(classified, schema, { subfolderTarget: 'medium' })
 
-        expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(1)
+        // Nothing shares a token with "Knitting Patterns", but a surviving folder
+        // is still a better home than leaving the bookmark loose in the category.
+        expect(subsIn(result, 'Tech')).not.toContain('General')
+        expect(subsIn(result, 'Tech').filter(s => s === 'Web Development')).toHaveLength(7)
         expect(result.summary.orphansFolded).toBe(1)
     })
 
@@ -152,13 +156,13 @@ describe('reconcileSubcategories', () => {
         expect(result.summary.cappedFolded).toBe(16)
     })
 
-    it('sends capped overflow to General only when it shares no token with a survivor', () => {
+    it('sends capped overflow with no shared token to the largest survivor, not General', () => {
         const classified = []
         // 20 topics of 4 bookmarks each plus Knitting Patterns (3): population
         // 83 → dynamic cap = 2 × naturalGroupCount(83) = 8 for 'medium'. The cap
         // keeps the 8 largest groups; topics I–T overflow but share the token
         // "topic" with a survivor, so they fold into it; Knitting Patterns
-        // shares nothing and goes to General.
+        // shares nothing and goes to the largest survivor.
         for (let i = 0; i < 20; i++) {
             classified.push(...items('Tech', `Topic ${String.fromCharCode(65 + i)}`, 4, { proposed: true }))
         }
@@ -166,7 +170,8 @@ describe('reconcileSubcategories', () => {
 
         const result = reconcileSubcategories(classified, schema, { subfolderTarget: 'medium' })
 
-        expect(subsIn(result, 'Tech').filter(s => s === 'General')).toHaveLength(3)
+        expect(subsIn(result, 'Tech')).not.toContain('General')
+        expect(subsIn(result, 'Tech').filter(s => s === 'Topic A')).toHaveLength(4 + 3 + 4 * 12)
         expect(result.summary.cappedFolded).toBe(13)
     })
 

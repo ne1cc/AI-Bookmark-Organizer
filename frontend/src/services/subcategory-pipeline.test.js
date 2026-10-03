@@ -343,6 +343,31 @@ describe('subcategory pipeline regression', () => {
         expect(results).toHaveLength(bookmarks.length)
     })
 
+    it('re-files bookmarks the model dumped in General into the folders that survived', async () => {
+        const seen = new Set()
+        const fetchMock = mockAi({
+            schemaResponses: [healthySchema],
+            // A sloppy first pass: every third bookmark is parked in General. A
+            // bookmark asked about again (the re-file pass) is answered correctly.
+            distort: (entry, expected) => {
+                if (seen.has(expected.url)) return entry
+                seen.add(expected.url)
+                return seen.size % 3 === 0 ? { ...entry, sub_category: 'General' } : entry
+            }
+        })
+
+        const { results, messages } = await runOrganizer(fetchMock)
+
+        const rehomeCalls = fetchMock.mock.calls.filter(([, options]) => promptOf(options).includes('APPROVED SUBFOLDERS BY CATEGORY'))
+        expect(rehomeCalls.length).toBeGreaterThan(0)
+        // A third were parked in General. What remains belongs to subfolders
+        // reconciliation dissolved for being too small, which the pass must not
+        // resurrect.
+        expect(generalShare(results)).toBeLessThan(0.1)
+        expect(messages.some(m => /^Re-filed \d[\d,]* of \d[\d,]* loose bookmarks/.test(m))).toBe(true)
+        expect(results).toHaveLength(bookmarks.length)
+    })
+
     it('reports the General share in the run log', async () => {
         const { messages } = await runOrganizer(mockAi({ schemaResponses: [healthySchema] }))
 
