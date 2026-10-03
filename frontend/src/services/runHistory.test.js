@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { MAX_RUNS, rotateRuns, saveRun, loadHistory, loadRunData, loadLatestRun } from './runHistory'
+import { rotateRuns, saveRun, loadHistory, loadRunData, loadLatestRun } from './runHistory'
 
 // In-memory stand-in for one chrome.storage area (callback style, like the real API).
 const fakeArea = () => {
@@ -19,30 +19,25 @@ const run = (n) => ({
 
 describe('rotateRuns', () => {
     it('keeps no older runs after the very first run', () => {
-        expect(rotateRuns([], null)).toEqual({ entries: [], dropped: [] })
+        expect(rotateRuns([], null)).toEqual([])
     })
 
     it('moves the previous latest to the front of the older runs, tagged with an id', () => {
-        const { entries, dropped } = rotateRuns([], run(1).meta)
-
-        expect(entries).toEqual([{ ...run(1).meta, id: '1000' }])
-        expect(dropped).toEqual([])
+        expect(rotateRuns([], run(1).meta)).toEqual([{ ...run(1).meta, id: '1000' }])
     })
 
-    it('holds MAX_RUNS in total (latest included) and reports the oldest as dropped', () => {
-        const older = [{ ...run(3).meta, id: '3000' }, { ...run(2).meta, id: '2000' }]
+    it('keeps every older run, newest first', () => {
+        const older = [{ ...run(3).meta, id: '3000' }, { ...run(2).meta, id: '2000' }, { ...run(1).meta, id: '1000' }]
 
-        const { entries, dropped } = rotateRuns(older, run(4).meta)
+        const entries = rotateRuns(older, run(4).meta)
 
-        expect(MAX_RUNS).toBe(3)
-        expect(entries.map(e => e.id)).toEqual(['4000', '3000'])
-        expect(dropped).toEqual(['2000'])
+        expect(entries.map(e => e.id)).toEqual(['4000', '3000', '2000', '1000'])
     })
 
     it('never lists the same run twice', () => {
         const older = [{ ...run(1).meta, id: '1000' }]
 
-        const { entries } = rotateRuns(older, run(1).meta)
+        const entries = rotateRuns(older, run(1).meta)
 
         expect(entries.map(e => e.id)).toEqual(['1000'])
     })
@@ -71,17 +66,17 @@ describe('saved run history', () => {
         expect(await loadHistory()).toEqual([])
     })
 
-    it('keeps the three most recent runs downloadable and discards the rest', async () => {
-        for (const n of [1, 2, 3, 4]) await saveRun(run(n).results, run(n).meta)
+    it('keeps every run downloadable, however many there are', async () => {
+        const count = 12
+        for (let n = 1; n <= count; n++) await saveRun(run(n).results, run(n).meta)
 
-        // Latest is run 4; runs 3 and 2 are the older ones; run 1 is gone.
-        expect(local.data.get('organizedData')).toEqual(run(4).results)
-        expect((await loadHistory()).map(e => e.id)).toEqual(['3000', '2000'])
-        expect(await loadRunData('3000')).toEqual(run(3).results)
-        expect(await loadRunData('2000')).toEqual(run(2).results)
-        expect(await loadRunData('1000')).toBeNull()
-        expect([...local.data.keys()].filter(k => k.startsWith('organizedRun:')).sort())
-            .toEqual(['organizedRun:2000', 'organizedRun:3000'])
+        // Latest is run 12; runs 11 down to 1 are the older ones, none discarded.
+        expect(local.data.get('organizedData')).toEqual(run(count).results)
+        expect((await loadHistory()).map(e => e.id)).toEqual(
+            Array.from({ length: count - 1 }, (_, i) => String((count - 1 - i) * 1000))
+        )
+        for (let n = 1; n < count; n++) expect(await loadRunData(String(n * 1000))).toEqual(run(n).results)
+        expect([...local.data.keys()].filter(k => k.startsWith('organizedRun:'))).toHaveLength(count - 1)
     })
 
     it('does not turn a previous run without stored data into a history entry', async () => {

@@ -315,8 +315,8 @@ export class BackgroundJobRunner {
                     this.currentJob.activeDateSpan = finalSpan;
                 }
 
-                // Every completed run is kept (latest plus the two before it) so it can
-                // be downloaded after the panel closes or the browser restarts.
+                // Every completed run is kept so it can be downloaded after the panel
+                // closes or the browser restarts.
                 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
                     try {
                         await saveRun(results, meta);

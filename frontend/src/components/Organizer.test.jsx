@@ -1700,7 +1700,7 @@ describe('Input Bookmarks card', () => {
 describe('Saved runs', () => {
     const run = (n) => ({
         results: [{ title: `Run ${n}`, url: `https://run${n}.example.com`, category: 'Tech', sub_category: 'Web' }],
-        meta: { count: 1, savedAt: new Date(2026, 8, n, 12, 0).getTime(), mode: n % 2 ? 'browser' : 'file', filename: `run_${n}.html`, stats: { categoriesCount: 1 } }
+        meta: { count: 1, savedAt: new Date(2026, 8, n, 12, 0).getTime(), mode: n % 2 ? 'browser' : 'file', filename: `run_${n}.html`, dateSpan: 'Jan 2024 – Mar 2024', stats: { categoriesCount: 4 } }
     })
 
     const installStore = (initial) => {
@@ -1745,6 +1745,26 @@ describe('Saved runs', () => {
 
         fireEvent.click(downloadButtons[1]) // the oldest run
         await waitFor(() => expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(older1.results, 'run_1.html'))
+    })
+
+    it('lists every saved run, newest first, with when it ran and what it held', async () => {
+        const runs = [1, 2, 3, 4, 5, 6, 7].map(run)
+        const latest = runs.pop()
+        installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: runs.map(r => ({ ...r.meta, id: String(r.meta.savedAt) })).reverse()
+        })
+
+        render(<Organizer />)
+
+        expect(await screen.findByText(/Previous runs \(6\)/i)).toBeDefined()
+        const buttons = screen.getAllByRole('button', { name: /^Download run from/i })
+        expect(buttons).toHaveLength(6)
+        const stamp = (n) => new Date(2026, 8, n, 12, 0).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+        expect(buttons[0].getAttribute('aria-label')).toBe(`Download run from ${stamp(6)}`)
+        expect(buttons[5].getAttribute('aria-label')).toBe(`Download run from ${stamp(1)}`)
+        expect(screen.getAllByText(/4 categories/).length).toBe(6)
+        expect(screen.getAllByText(/Jan 2024 – Mar 2024/).length).toBeGreaterThan(0)
     })
 
     it('shows no previous-runs list when only one run has been saved', () => {

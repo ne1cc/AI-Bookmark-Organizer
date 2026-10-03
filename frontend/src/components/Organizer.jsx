@@ -2376,18 +2376,24 @@ export default function Organizer({ theme = 'light' }) {
                 </div>
             )}
 
-            {/* Older saved runs: each one stays downloadable (the latest is the banner above) */}
+            {/* Every older saved run, newest first, each downloadable (the latest is the banner above) */}
             {status === 'idle' && lastOrganized && previousRuns.length > 0 && (
                 <details className="previous-runs section-block">
                     <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                         Previous runs ({previousRuns.length})
                     </summary>
-                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '240px', overflowY: 'auto' }}>
                         {previousRuns.map((entry) => (
                             <li key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                                 <span>
-                                    {formatRunTime(entry.savedAt)} · {entry.count.toLocaleString()} bookmarks
-                                    {entry.mode === 'file' ? ' · from file' : entry.mode === 'browser' ? ' · from browser' : ''}
+                                    <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{formatRunTime(entry.savedAt)}</strong>
+                                    <br />
+                                    {[
+                                        `${entry.count.toLocaleString()} bookmarks`,
+                                        entry.stats?.categoriesCount ? `${entry.stats.categoriesCount} categories` : '',
+                                        formatDateSpan(entry.dateSpan || entry.stats?.dateSpan),
+                                        entry.mode === 'file' ? 'from file' : entry.mode === 'browser' ? 'from browser' : ''
+                                    ].filter(Boolean).join(' · ')}
                                 </span>
                                 <button
                                     type="button"

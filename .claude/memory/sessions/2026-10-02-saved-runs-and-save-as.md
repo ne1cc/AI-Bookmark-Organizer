@@ -1,6 +1,6 @@
 # 2026-10-02 — Keep the last 3 organized runs on disk + always offer Save As
 
-Two requirements from the user: (1) every run must be stored so it can be downloaded, up to 3;
+Two requirements from the user: (1) every run must be stored so it can be downloaded (first capped at 3, later changed to unlimited);
 (2) every download must give a Save As dialog.
 
 ## Findings that drove the design
@@ -14,9 +14,9 @@ Two requirements from the user: (1) every run must be stored so it can be downlo
 
 ## What changed
 - `services/runHistory.js` (new): `saveRun`, `loadLatestRun`, `loadHistory`, `loadRunData`, pure `rotateRuns`. Layout in
-  `chrome.storage.local`: `organizedMeta`/`organizedData` = latest; `organizedHistory` = metadata of up to 2 older runs;
+  `chrome.storage.local`: `organizedMeta`/`organizedData` = latest; `organizedHistory` = metadata of every older run;
   `organizedRun:<id>` = data of one older run. Session mirror of the latest data is best-effort. Previous latest only
-  rotates into history if it has stored data. MAX_RUNS = 3 in total.
+  rotates into history if it has stored data. No cap: `MAX_RUNS` and the oldest-run deletion were removed (follow-up request).
 - `background/jobRunner.js`: every completed run goes through `saveRun` (meta gains `mode: 'file' | 'browser'`) and is
   awaited before the worker may idle. `resetJob` no longer deletes saved runs ("Organize another" / removing the
   uploaded file call it; wiping history there would defeat the feature).
@@ -52,3 +52,11 @@ Two requirements from the user: (1) every run must be stored so it can be downlo
 - Service-worker restart path is unit-tested (`GET_RESULTS` fallback) but was not exercised in a real browser.
 - No UI to delete an individual saved run.
 - My probe once ran `screencapture` of the full display; images were deleted. Use window-scoped capture next time.
+
+## Follow-up: unlimited runs
+- `runHistory.js`: removed `MAX_RUNS`, the `dropped` list and the erase step; `rotateRuns(history, previousLatest)` now returns the
+  full newest-first list. `unlimitedStorage` is already in the manifest, so disk quota is not a limit; each run is one
+  `organizedRun:<id>` key plus one small metadata entry, and nothing prunes them (no UI to delete a run yet).
+- `Organizer.jsx`: the "Previous runs (N)" `<details>` dropdown scrolls (max 240px) and each row shows the run time,
+  bookmark count, category count, date span and file/browser mode.
+- Tests: `npx vitest run` → 21 files, 520 tests passed; `npm run lint` → 0 errors, 3 pre-existing warnings.

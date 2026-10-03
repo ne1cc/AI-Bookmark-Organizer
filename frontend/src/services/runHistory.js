@@ -1,12 +1,10 @@
-// The newest organized result plus up to MAX_RUNS - 1 older ones, kept on disk so
-// every run stays downloadable after the panel closes or the browser restarts.
+// Every organized result, kept on disk so each run stays downloadable after the
+// panel closes or the browser restarts. Nothing is ever discarded automatically.
 //
 // Layout in chrome.storage.local (panel startup reads only the small keys):
 //   organizedMeta / organizedData   latest run (data also mirrored to session)
 //   organizedHistory                metadata of the older runs, newest first
 //   organizedRun:<id>               data of one older run
-export const MAX_RUNS = 3;
-
 const META_KEY = 'organizedMeta';
 const DATA_KEY = 'organizedData';
 const HISTORY_KEY = 'organizedHistory';
@@ -24,25 +22,16 @@ const write = (area, entries) => new Promise((resolve, reject) => {
     });
 });
 
-const erase = (area, keys) => new Promise((resolve) => {
-    if (keys.length === 0) return resolve();
-    area.remove(keys, () => resolve());
-});
-
 /**
  * Pure: given the older runs and the run that is about to be replaced as latest,
- * returns the new older-run list (newest first) and the ids that fell off the end.
+ * returns the new older-run list (newest first).
  */
-export function rotateRuns(history, previousLatest, max = MAX_RUNS) {
+export function rotateRuns(history, previousLatest) {
     const older = Array.isArray(history) ? history : [];
     const previous = previousLatest && Number.isFinite(previousLatest.savedAt)
         ? { ...previousLatest, id: String(previousLatest.savedAt) }
         : null;
-    const merged = previous ? [previous, ...older.filter(entry => entry.id !== previous.id)] : [...older];
-    return {
-        entries: merged.slice(0, max - 1),
-        dropped: merged.slice(max - 1).map(entry => entry.id)
-    };
+    return previous ? [previous, ...older.filter(entry => entry.id !== previous.id)] : [...older];
 }
 
 export async function saveRun(results, meta) {
@@ -52,7 +41,7 @@ export async function saveRun(results, meta) {
     // A previous latest without stored data (older builds kept metadata only)
     // has nothing to download, so it does not become a history entry.
     const previousHasData = Array.isArray(stored[DATA_KEY]) && stored[DATA_KEY].length > 0;
-    const { entries, dropped } = rotateRuns(stored[HISTORY_KEY], previousHasData ? stored[META_KEY] : null);
+    const entries = rotateRuns(stored[HISTORY_KEY], previousHasData ? stored[META_KEY] : null);
 
     const update = { [META_KEY]: meta, [DATA_KEY]: results, [HISTORY_KEY]: entries };
     if (previousHasData) {
@@ -60,7 +49,6 @@ export async function saveRun(results, meta) {
         if (demoted) update[runKey(demoted.id)] = stored[DATA_KEY];
     }
     await write(local, update);
-    await erase(local, dropped.map(runKey));
 
     // RAM copy for fast reads in this browser session; disk is the source of truth.
     if (chrome.storage.session) {
