@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, getInputBookmarkFile, removeInputBookmarkFile, INPUT_MAX_BYTES } from './input_bookmarks'
+import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile, INPUT_MAX_BYTES } from './input_bookmarks'
 
 const htmlOf = (n) => `<!DOCTYPE NETSCAPE-Bookmark-file-1>${'<DT><A HREF="https://x.com">x</A>'.repeat(n)}`
 
@@ -78,5 +78,36 @@ describe('input bookmarks cache', () => {
         } } }
         await expect(getInputBookmarkMeta()).resolves.toBeNull()
         await expect(getInputBookmarkHtml()).resolves.toBeNull()
+    })
+})
+
+describe('input bookmarks download', () => {
+    afterEach(() => { delete global.chrome; delete window.showSaveFilePicker })
+
+    it('offers the Save As picker with the original filename and writes the pristine HTML', async () => {
+        const html = htmlOf(2)
+        const write = vi.fn(async () => {})
+        window.showSaveFilePicker = vi.fn(async () => ({ name: 'copy.html', createWritable: async () => ({ write, close: vi.fn(async () => {}) }) }))
+        global.chrome = { runtime: {}, downloads: { download: vi.fn() } }
+
+        const result = await downloadInputBookmarkFile({ filename: 'bookmarks_20260603.html', html })
+
+        expect(window.showSaveFilePicker).toHaveBeenCalledWith(expect.objectContaining({ suggestedName: 'bookmarks_20260603.html' }))
+        expect(write).toHaveBeenCalledWith(html)
+        expect(global.chrome.downloads.download).not.toHaveBeenCalled()
+        expect(result).toEqual({ status: 'saved', method: 'picker', name: 'copy.html' })
+    })
+
+    it('falls back to a saveAs download when the picker is unavailable', async () => {
+        delete window.showSaveFilePicker
+        URL.createObjectURL = vi.fn(() => 'blob:input')
+        global.chrome = { runtime: {}, downloads: { download: vi.fn() } }
+
+        await downloadInputBookmarkFile({ filename: 'in.html', html: htmlOf(1) })
+
+        expect(global.chrome.downloads.download).toHaveBeenCalledWith(
+            expect.objectContaining({ filename: 'in.html', saveAs: true }),
+            expect.any(Function)
+        )
     })
 })

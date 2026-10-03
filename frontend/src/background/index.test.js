@@ -227,14 +227,14 @@ describe('Background Service Worker Entry Point', () => {
         expect(port.postMessage.mock.calls[0][0].payload.meta.filename).toBe('bookmarks_chronological_newest_2026-09-22.html');
     });
 
-    it('reports that transient results are unavailable after worker memory is lost', async () => {
+    const connectFreshPort = async () => {
         vi.resetModules();
         let onConnectHandler = null;
         globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
 
         await import('./index');
         const { jobRunner: freshRunner } = await import('./jobRunner');
-        const getResultsSpy = vi.spyOn(freshRunner, 'getResults').mockReturnValue(null);
+        vi.spyOn(freshRunner, 'getResults').mockReturnValue(null);
 
         const port = {
             name: 'organizer-channel',
@@ -244,18 +244,31 @@ describe('Background Service Worker Entry Point', () => {
         };
         onConnectHandler(port);
         port.postMessage.mockClear();
+        return { port, send: (msg) => port.onMessage.addListener.mock.calls[0][0](msg) };
+    };
 
-        const messageHandler = port.onMessage.addListener.mock.calls[0][0];
-        messageHandler({ type: 'GET_RESULTS' });
+    it('serves the saved latest run when the worker has restarted and lost its memory', async () => {
+        const saved = [{ title: 'Saved', url: 'https://example.com/saved', category: 'Tech', sub_category: 'Web' }];
+        const meta = { count: 1, savedAt: 1757890000000, mode: 'browser', stats: null };
+        globalThis.chrome.storage.local.get = vi.fn((keys, cb) => cb({ organizedMeta: meta, organizedData: saved }));
+        const { port, send } = await connectFreshPort();
 
-        expect(getResultsSpy).toHaveBeenCalledOnce();
+        await send({ type: 'GET_RESULTS' });
+
+        expect(port.postMessage).toHaveBeenCalledWith({ type: 'JOB_RESULTS', payload: { results: saved, meta } });
+        expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+    });
+
+    it('reports results unavailable only when nothing was saved either', async () => {
+        globalThis.chrome.storage.local.get = vi.fn((keys, cb) => cb({}));
+        const { port, send } = await connectFreshPort();
+
+        await send({ type: 'GET_RESULTS' });
+
         expect(port.postMessage).toHaveBeenCalledWith({
             type: 'JOB_RESULTS_UNAVAILABLE',
-            payload: {
-                message: 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
-            }
+            payload: { message: 'No saved organized bookmarks were found. Run organization again.' }
         });
         expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
-        expect(globalThis.chrome.storage.local).not.toHaveProperty('set');
     });
 });

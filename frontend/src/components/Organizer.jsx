@@ -4,6 +4,7 @@ import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
 import { normalizeSubfolderTarget } from '../services/ai'
+import { saveRun, loadRunData } from '../services/runHistory'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
@@ -118,6 +119,8 @@ export default function Organizer({ theme = 'light' }) {
     const [isCancelling, setIsCancelling] = useState(false)
     const organizedResultsRef = useRef(null)
     const [lastOrganized, setLastOrganized] = useState(null)
+    // Older saved runs (newest first); the latest run is `lastOrganized`.
+    const [previousRuns, setPreviousRuns] = useState([])
     const [activeDateSpan, setActiveDateSpan] = useState(null)
     const [showSchema, setShowSchema] = useState(true)
     const [showIdleSchema, setShowIdleSchema] = useState(false)
@@ -526,7 +529,7 @@ export default function Organizer({ theme = 'light' }) {
     useEffect(() => {
         const startTime = performance.now()
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta'], (result) => {
+            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta', 'organizedHistory'], (result) => {
                 if (!result) return
                 if (result.apiKey) setApiKey(prev => (prev !== result.apiKey ? result.apiKey : prev))
                 if (Array.isArray(result.categories)) {
@@ -573,6 +576,7 @@ export default function Organizer({ theme = 'light' }) {
                     setDateSortOrder(result.dateSortOrder)
                     try { localStorage.setItem('dateSortOrder', result.dateSortOrder) } catch {}
                 }
+                if (Array.isArray(result.organizedHistory)) setPreviousRuns(result.organizedHistory)
                 if (result.organizedMeta) {
                     const meta = result.organizedMeta
                     setLastOrganized(meta)
@@ -603,10 +607,21 @@ export default function Organizer({ theme = 'light' }) {
 
             // Defer LevelDB cleanup to idle time (3s delay) so disk I/O NEVER competes with window opening
             const cleanupTimer = setTimeout(() => {
-                chrome.storage.local.remove(['organizedData', 'flatDateSort'])
+                chrome.storage.local.remove(['flatDateSort'])
             }, 3000)
             return () => clearTimeout(cleanupTimer)
         }
+    }, [])
+
+    // The background worker saves each finished run; follow its history list live.
+    useEffect(() => {
+        const onChanged = typeof chrome !== 'undefined' ? chrome.storage?.onChanged : null
+        if (!onChanged?.addListener) return undefined
+        const listener = (changes, area) => {
+            if (area === 'local' && changes.organizedHistory) setPreviousRuns(changes.organizedHistory.newValue || [])
+        }
+        onChanged.addListener(listener)
+        return () => onChanged.removeListener?.(listener)
     }, [])
 
     // Warm the lazy organize pipeline after first paint so clicking
@@ -720,6 +735,13 @@ export default function Organizer({ theme = 'light' }) {
         setLogs(prev => [...prev, { message, timestamp: new Date() }])
     }, [])
 
+    // Says where a download went, since a download manager can save silently.
+    const reportSave = useCallback((result) => {
+        if (result?.status === 'saved') addLog(`Saved ${result.name}.`)
+        else if (result?.status === 'started') addLog('Download started — it will appear in your browser\'s Downloads.')
+        else if (result?.status === 'cancelled') addLog('Save cancelled.')
+    }, [addLog])
+
     const processFile = useCallback((file) => {
         if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
             setErrorMsg("Please upload a valid bookmarks HTML file.");
@@ -777,8 +799,8 @@ export default function Organizer({ theme = 'light' }) {
     }, [])
 
     const handleDownloadInput = useCallback(() => {
-        if (inputFile) downloadInputBookmarkFile(inputFile)
-    }, [inputFile])
+        if (inputFile) Promise.resolve(downloadInputBookmarkFile(inputFile)).then(reportSave).catch((err) => addLog(`Could not save the input file: ${err.message}`))
+    }, [inputFile, reportSave, addLog])
 
     const handleReorganizeInput = useCallback(async () => {
         if (!inputFile) return
@@ -831,8 +853,8 @@ export default function Organizer({ theme = 'light' }) {
                 }
             }
             const filename = lastOrganized?.filename || data.filename;
-            if (filename) downloadBookmarks(data, filename);
-            else downloadBookmarks(data);
+            const saving = filename ? downloadBookmarks(data, filename) : downloadBookmarks(data);
+            Promise.resolve(saving).then(reportSave).catch((err) => addLog(`Could not save the file: ${err.message}`));
         };
 
         if (organizedResultsRef.current) {
@@ -876,7 +898,22 @@ export default function Organizer({ theme = 'light' }) {
                 });
             }
         }
-    }, [addLog, lastOrganized, activeDateSpan])
+    }, [addLog, reportSave, lastOrganized, activeDateSpan])
+
+    const downloadPreviousRun = useCallback(async (entry) => {
+        const data = await loadRunData(entry.id)
+        if (!data) {
+            addLog(`The run from ${formatRunTime(entry.savedAt)} is no longer saved.`)
+            return
+        }
+        const { downloadBookmarks } = await import('../services/bookmarks_export')
+        addLog(`Downloading ${data.length.toLocaleString()} bookmarks from ${formatRunTime(entry.savedAt)}...`)
+        try {
+            reportSave(await (entry.filename ? downloadBookmarks(data, entry.filename) : downloadBookmarks(data)))
+        } catch (err) {
+            addLog(`Could not save the file: ${err.message}`)
+        }
+    }, [addLog, reportSave])
 
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
@@ -1186,6 +1223,7 @@ export default function Organizer({ theme = 'light' }) {
                 const meta = {
                     count: results.length,
                     savedAt: Date.now(),
+                    mode: parsedBookmarks ? 'file' : 'browser',
                     stats: enrichedStats,
                     ...(finalSpan ? { dateSpan: finalSpan } : {}),
                     ...(results.filename ? { filename: results.filename } : {})
@@ -1194,21 +1232,11 @@ export default function Organizer({ theme = 'light' }) {
                     setActiveDateSpan(finalSpan);
                 }
                 setLastOrganized(meta);
-                const shouldPersistRun = flatDateSort || !inferCategories;
-                if (shouldPersistRun && typeof chrome !== 'undefined' && chrome.storage) {
-                    // Save bookmark tree into memory-based session storage (RAM) so local LevelDB remains tiny (<5KB)
-                    if (chrome.storage.session) {
-                        try {
-                            chrome.storage.session.set({ organizedData: results });
-                        } catch { /* ignore session set errors */ }
-                    }
-                    chrome.storage.local.set({ organizedMeta: meta }, () => {
-                        if (chrome.runtime.lastError) {
-                            addLog(`Could not save results metadata: ${chrome.runtime.lastError.message}`);
-                        } else {
-                            addLog('Results saved — downloadable anytime during your browsing session.');
-                        }
-                    });
+                if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+                    // Every run is saved (latest plus the two before it) so it stays downloadable.
+                    saveRun(results, meta)
+                        .then(() => addLog('Results saved — downloadable anytime, even after reopening the panel.'))
+                        .catch((saveError) => addLog(`Could not save results for later download: ${saveError.message}`));
                 }
             }
 
@@ -2346,6 +2374,35 @@ export default function Organizer({ theme = 'light' }) {
                         </div>
                     )}
                 </div>
+            )}
+
+            {/* Older saved runs: each one stays downloadable (the latest is the banner above) */}
+            {status === 'idle' && lastOrganized && previousRuns.length > 0 && (
+                <details className="previous-runs section-block">
+                    <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        Previous runs ({previousRuns.length})
+                    </summary>
+                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        {previousRuns.map((entry) => (
+                            <li key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                <span>
+                                    {formatRunTime(entry.savedAt)} · {entry.count.toLocaleString()} bookmarks
+                                    {entry.mode === 'file' ? ' · from file' : entry.mode === 'browser' ? ' · from browser' : ''}
+                                </span>
+                                <button
+                                    type="button"
+                                    aria-label={`Download run from ${formatRunTime(entry.savedAt)}`}
+                                    onClick={() => downloadPreviousRun(entry)}
+                                    title="Save this run as an HTML file"
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                >
+                                    <Download size={13} />
+                                    Download
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </details>
             )}
 
             {/* Controls */}

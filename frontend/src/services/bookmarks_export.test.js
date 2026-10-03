@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { generateNetscapeHTML } from './bookmarks_export'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { generateNetscapeHTML, downloadBookmarks } from './bookmarks_export'
 
 // Folder and link names are HTML-escaped in the output; decode them so the
 // assertions read as the folder names a user would actually see.
@@ -142,5 +142,94 @@ describe('generateNetscapeHTML grouping is prototype-safe', () => {
             expect.arrayContaining(['Tech', 'constructor', 'toString', '__proto__', 'Web Dev'])
         )
         expect(linkTitles(html)).toEqual(['A', 'B', 'C'])
+    })
+})
+
+describe('downloadBookmarks Save As', () => {
+    const items = [{ title: 'A', url: 'https://a.example.com', category: 'Tech', sub_category: 'Web' }]
+    let originalChrome
+    let originalPicker
+
+    const pickerReturning = (handleOrError) => {
+        const write = vi.fn(async () => {})
+        const close = vi.fn(async () => {})
+        const picker = vi.fn(async () => {
+            if (handleOrError instanceof Error) throw handleOrError
+            return { name: handleOrError ?? 'chosen.html', createWritable: async () => ({ write, close }) }
+        })
+        window.showSaveFilePicker = picker
+        return { picker, write, close }
+    }
+
+    beforeEach(() => {
+        originalChrome = global.chrome
+        originalPicker = window.showSaveFilePicker
+        global.chrome = { downloads: { download: vi.fn() }, runtime: {} }
+        URL.createObjectURL = vi.fn(() => 'blob:test')
+    })
+
+    afterEach(() => {
+        global.chrome = originalChrome
+        if (originalPicker) window.showSaveFilePicker = originalPicker
+        else delete window.showSaveFilePicker
+    })
+
+    it('opens the browser Save As picker with the suggested name and writes the file there', async () => {
+        const { picker, write, close } = pickerReturning('my-copy.html')
+
+        const result = await downloadBookmarks(items, 'bookmarks_ai_alpha_2026-10-02.html')
+
+        expect(picker).toHaveBeenCalledWith(expect.objectContaining({ suggestedName: 'bookmarks_ai_alpha_2026-10-02.html' }))
+        expect(write).toHaveBeenCalledTimes(1)
+        expect(write.mock.calls[0][0]).toContain('<DT><A HREF="https://a.example.com"')
+        expect(close).toHaveBeenCalledTimes(1)
+        expect(global.chrome.downloads.download).not.toHaveBeenCalled()
+        expect(result).toEqual({ status: 'saved', method: 'picker', name: 'my-copy.html' })
+    })
+
+    it('does nothing further when the user cancels the picker', async () => {
+        const { write } = pickerReturning(Object.assign(new Error('cancelled'), { name: 'AbortError' }))
+
+        const result = await downloadBookmarks(items)
+
+        expect(result).toEqual({ status: 'cancelled' })
+        expect(write).not.toHaveBeenCalled()
+        expect(global.chrome.downloads.download).not.toHaveBeenCalled()
+    })
+
+    it('falls back to chrome.downloads with saveAs when the picker is refused', async () => {
+        pickerReturning(Object.assign(new Error('needs user gesture'), { name: 'SecurityError' }))
+
+        const result = await downloadBookmarks(items, 'out.html')
+
+        expect(global.chrome.downloads.download).toHaveBeenCalledWith(
+            expect.objectContaining({ filename: 'out.html', saveAs: true }),
+            expect.any(Function)
+        )
+        expect(result).toEqual({ status: 'started', method: 'downloads' })
+    })
+
+    it('uses chrome.downloads with saveAs when there is no picker (service worker)', async () => {
+        delete window.showSaveFilePicker
+
+        const result = await downloadBookmarks(items, 'out.html')
+
+        expect(global.chrome.downloads.download).toHaveBeenCalledWith(
+            expect.objectContaining({ filename: 'out.html', saveAs: true }),
+            expect.any(Function)
+        )
+        expect(result).toEqual({ status: 'started', method: 'downloads' })
+    })
+
+    it('skips the picker when saveAs is switched off', async () => {
+        const { picker } = pickerReturning('x.html')
+
+        await downloadBookmarks(items, 'out.html', { saveAs: false })
+
+        expect(picker).not.toHaveBeenCalled()
+        expect(global.chrome.downloads.download).toHaveBeenCalledWith(
+            expect.objectContaining({ saveAs: false }),
+            expect.any(Function)
+        )
     })
 })
