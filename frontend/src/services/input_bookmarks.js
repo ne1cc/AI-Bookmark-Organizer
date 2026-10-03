@@ -87,19 +87,8 @@ export async function removeInputBookmarkFile() {
 
 export async function downloadInputBookmarkFile(entry) {
     const html = (typeof entry?.html === 'string' && entry.html.length > 0) ? entry.html : await getInputBookmarkHtml();
-    if (!html) return;
-    const name = entry?.filename || 'input_bookmarks.html';
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
-        chrome.downloads.download({ url, filename: name, saveAs: true });
-    } else if (typeof document !== 'undefined' && document.createElement) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-    }
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    if (!html) return { status: 'unavailable' };
+    // Loaded on demand so the export module stays out of the panel's startup chunk.
+    const { saveHtmlFile } = await import('./bookmarks_export');
+    return saveHtmlFile(html, entry?.filename || 'input_bookmarks.html');
 }

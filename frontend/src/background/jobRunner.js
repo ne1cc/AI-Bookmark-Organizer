@@ -1,5 +1,6 @@
 import { OrganizerService } from '../services/organizer';
 import { downloadBookmarks } from '../services/bookmarks_export';
+import { saveRun } from '../services/runHistory';
 import { calculateDateSpan } from '../utils/dates';
 import { createStorageSnapshotProvider } from './snapshotProvider';
 
@@ -299,6 +300,7 @@ export class BackgroundJobRunner {
                 const meta = {
                     count: results.length,
                     savedAt: completedAt,
+                    mode: parsedBookmarks ? 'file' : 'browser',
                     stats: enrichedStats,
                     ...(finalSpan ? { dateSpan: finalSpan } : {}),
                     ...(results.filename ? { filename: results.filename } : {})
@@ -313,14 +315,13 @@ export class BackgroundJobRunner {
                     this.currentJob.activeDateSpan = finalSpan;
                 }
 
-                if (this.persistJobState && typeof chrome !== 'undefined' && chrome.storage) {
-                    if (chrome.storage.session) {
-                        try {
-                            chrome.storage.session.set({ organizedData: results });
-                        } catch { /* ignore session set errors */ }
-                    }
-                    if (chrome.storage.local) {
-                        chrome.storage.local.set({ organizedMeta: meta, organizedData: results });
+                // Every completed run is kept so it can be downloaded after the panel
+                // closes or the browser restarts.
+                if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+                    try {
+                        await saveRun(results, meta);
+                    } catch (saveError) {
+                        this.addLog(`Could not save this run for later download: ${saveError.message}`);
                     }
                 }
 
@@ -393,13 +394,6 @@ export class BackgroundJobRunner {
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.remove(['activeJobState', 'organizedData']);
-            } catch {
-                // Ignore removal error
-            }
-        }
-        if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-            try {
-                chrome.storage.local.remove(['organizedMeta', 'organizedData']);
             } catch {
                 // Ignore removal error
             }

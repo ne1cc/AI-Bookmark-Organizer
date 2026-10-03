@@ -146,7 +146,7 @@ describe('Organizer Component UI Tests', () => {
         }
     )
 
-    it('does not persist categories generated for an inferred run', async () => {
+    it('saves an in-panel inferred run for later download without saving its categories as a setting', async () => {
         localStorage.setItem('apiKey', 'sk-or-test-inferred-run')
         OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
             this.stats = {
@@ -172,12 +172,13 @@ describe('Organizer Component UI Tests', () => {
         await waitFor(() => expect(screen.getByText(/Organization complete!/i)).toBeDefined())
         expect(localStorage.getItem('categories')).toBeNull()
         expect(global.chrome.storage.local.set.mock.calls.some(([entry]) => Object.hasOwn(entry, 'categories'))).toBe(false)
-        const persistedPayloads = [
-            ...global.chrome.storage.local.set.mock.calls,
-            ...global.chrome.storage.session.set.mock.calls
-        ].map(([payload]) => payload)
-        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic')
-        expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail')
+        await waitFor(() => expect(global.chrome.storage.local.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                organizedMeta: expect.objectContaining({ count: 1, mode: 'browser' }),
+                organizedData: [expect.objectContaining({ category: 'Generated Topic', sub_category: 'Generated Detail' })]
+            }),
+            expect.any(Function)
+        ))
     })
 
     it('preserves an actionable inference error from the in-panel runner', async () => {
@@ -1693,5 +1694,170 @@ describe('Input Bookmarks card', () => {
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
             expect.objectContaining({ filename: 'b.html' })
         )
+    })
+})
+
+describe('Saved runs', () => {
+    const run = (n) => ({
+        results: [{ title: `Run ${n}`, url: `https://run${n}.example.com`, category: 'Tech', sub_category: 'Web' }],
+        meta: { count: 1, savedAt: new Date(2026, 8, n, 12, 0).getTime(), mode: n % 2 ? 'browser' : 'file', filename: `run_${n}.html`, dateSpan: 'Jan 2024 – Mar 2024', stats: { categoriesCount: 4 } }
+    })
+
+    const installStore = (initial) => {
+        const store = new Map(Object.entries(initial))
+        global.chrome = {
+            storage: {
+                local: {
+                    get: vi.fn((keys, cb) => cb(Object.fromEntries([].concat(keys).filter(k => store.has(k)).map(k => [k, store.get(k)])))),
+                    set: vi.fn(),
+                    remove: vi.fn()
+                },
+                session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+            }
+        }
+        return store
+    }
+
+    beforeEach(() => {
+        localStorage.clear()
+        vi.clearAllMocks()
+    })
+
+    afterEach(() => {
+        cleanup()
+        delete global.chrome
+    })
+
+    it('lists the older saved runs and downloads the one chosen under its own filename', async () => {
+        const [older1, older2, latest] = [run(1), run(2), run(3)]
+        installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older2.meta, id: String(older2.meta.savedAt) }, { ...older1.meta, id: String(older1.meta.savedAt) }],
+            [`organizedRun:${older1.meta.savedAt}`]: older1.results,
+            [`organizedRun:${older2.meta.savedAt}`]: older2.results
+        })
+
+        render(<Organizer />)
+
+        expect(await screen.findByText(/Previous runs \(2\)/i)).toBeDefined()
+        const downloadButtons = screen.getAllByRole('button', { name: /^Download run from/i })
+        expect(downloadButtons).toHaveLength(2)
+
+        fireEvent.click(downloadButtons[1]) // the oldest run
+        await waitFor(() => expect(bookmarksExport.downloadBookmarks).toHaveBeenCalledWith(older1.results, 'run_1.html'))
+    })
+
+    it('lists every saved run, newest first, with when it ran and what it held', async () => {
+        const runs = [1, 2, 3, 4, 5, 6, 7].map(run)
+        const latest = runs.pop()
+        installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: runs.map(r => ({ ...r.meta, id: String(r.meta.savedAt) })).reverse()
+        })
+
+        render(<Organizer />)
+
+        expect(await screen.findByText(/Previous runs \(6\)/i)).toBeDefined()
+        const buttons = screen.getAllByRole('button', { name: /^Download run from/i })
+        expect(buttons).toHaveLength(6)
+        const stamp = (n) => new Date(2026, 8, n, 12, 0).toLocaleString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+        expect(buttons[0].getAttribute('aria-label')).toBe(`Download run from ${stamp(6)}`)
+        expect(buttons[5].getAttribute('aria-label')).toBe(`Download run from ${stamp(1)}`)
+        expect(screen.getAllByText(/4 categories/).length).toBe(6)
+        expect(screen.getAllByText(/Jan 2024 – Mar 2024/).length).toBeGreaterThan(0)
+    })
+
+    it('deletes one previous run after confirmation, and not when declined', async () => {
+        const [older1, older2, latest] = [run(1), run(2), run(3)]
+        const store = installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older2.meta, id: String(older2.meta.savedAt) }, { ...older1.meta, id: String(older1.meta.savedAt) }],
+            [`organizedRun:${older1.meta.savedAt}`]: older1.results,
+            [`organizedRun:${older2.meta.savedAt}`]: older2.results
+        })
+        global.chrome.storage.local.set = vi.fn((obj, cb) => { for (const [k, v] of Object.entries(obj)) store.set(k, v); cb && cb() })
+        global.chrome.storage.local.remove = vi.fn((keys, cb) => { for (const k of [].concat(keys)) store.delete(k); cb && cb() })
+
+        render(<Organizer />)
+        await screen.findByText(/Previous runs \(2\)/i)
+
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false)
+        fireEvent.click(screen.getAllByRole('button', { name: /^Delete run from/i })[0])
+        await waitFor(() => expect(confirmSpy).toHaveBeenCalled())
+        expect(screen.getByText(/Previous runs \(2\)/i)).toBeDefined()
+
+        confirmSpy.mockReturnValueOnce(true)
+        fireEvent.click(screen.getAllByRole('button', { name: /^Delete run from/i })[0])
+
+        expect(await screen.findByText(/Previous runs \(1\)/i)).toBeDefined()
+        expect(store.has(`organizedRun:${older2.meta.savedAt}`)).toBe(false)
+        expect(store.has(`organizedRun:${older1.meta.savedAt}`)).toBe(true)
+        confirmSpy.mockRestore()
+    })
+
+    it('clears all previous runs after confirmation and keeps the latest banner', async () => {
+        const [older1, older2, latest] = [run(1), run(2), run(3)]
+        const store = installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older2.meta, id: String(older2.meta.savedAt) }, { ...older1.meta, id: String(older1.meta.savedAt) }],
+            [`organizedRun:${older1.meta.savedAt}`]: older1.results,
+            [`organizedRun:${older2.meta.savedAt}`]: older2.results
+        })
+        global.chrome.storage.local.set = vi.fn((obj, cb) => { for (const [k, v] of Object.entries(obj)) store.set(k, v); cb && cb() })
+        global.chrome.storage.local.remove = vi.fn((keys, cb) => { for (const k of [].concat(keys)) store.delete(k); cb && cb() })
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+        render(<Organizer />)
+        fireEvent.click(await screen.findByRole('button', { name: /Clear all previous runs/i }))
+
+        await waitFor(() => expect(screen.queryByText(/Previous runs/i)).toBeNull())
+        expect([...store.keys()].filter(k => k.startsWith('organizedRun:'))).toEqual([])
+        expect(store.get('organizedMeta')).toEqual(latest.meta)
+        confirmSpy.mockRestore()
+    })
+
+    it('shows no previous-runs list when only one run has been saved', () => {
+        installStore({ organizedMeta: run(1).meta })
+
+        render(<Organizer />)
+
+        expect(screen.queryByText(/Previous runs/i)).toBeNull()
+    })
+
+    it('tells the user a previous run is gone when its data is missing', async () => {
+        const [older, latest] = [run(1), run(2)]
+        installStore({
+            organizedMeta: latest.meta,
+            organizedHistory: [{ ...older.meta, id: String(older.meta.savedAt) }]
+        })
+
+        render(<Organizer />)
+        fireEvent.click(await screen.findByRole('button', { name: /^Download run from/i }))
+
+        expect(await screen.findByText(/no longer saved/i)).toBeDefined()
+        expect(bookmarksExport.downloadBookmarks).not.toHaveBeenCalled()
+    })
+
+    it('confirms where the file went after a Save As download', async () => {
+        const latest = run(2)
+        installStore({ organizedMeta: latest.meta, organizedData: latest.results })
+        bookmarksExport.downloadBookmarks.mockResolvedValueOnce({ status: 'saved', method: 'picker', name: 'my-bookmarks.html' })
+
+        render(<Organizer />)
+        fireEvent.click(await screen.findByRole('button', { name: /Download Organized Bookmarks|^Download$/i }))
+
+        expect(await screen.findByText(/Saved my-bookmarks\.html/i)).toBeDefined()
+    })
+
+    it('does not delete saved results from storage when the panel opens', () => {
+        vi.useFakeTimers()
+        installStore({ organizedMeta: run(1).meta })
+
+        render(<Organizer />)
+        act(() => vi.advanceTimersByTime(3500))
+        vi.useRealTimers()
+
+        const removed = global.chrome.storage.local.remove.mock.calls.flatMap(([keys]) => [].concat(keys))
+        expect(removed).not.toContain('organizedData')
     })
 })

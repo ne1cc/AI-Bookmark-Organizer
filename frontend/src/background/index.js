@@ -1,5 +1,6 @@
 // Background service worker for AI Bookmark Organizer
 import { jobRunner } from './jobRunner';
+import { loadLatestRun } from '../services/runHistory';
 
 export function setupSidePanel() {
     if (typeof chrome !== 'undefined' && chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
@@ -56,12 +57,20 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
                     try {
                         const results = jobRunner.getResults();
                         if (!Array.isArray(results) || results.length === 0) {
-                            port.postMessage({
-                                type: 'JOB_RESULTS_UNAVAILABLE',
-                                payload: {
-                                    message: 'Organized results are no longer available because they were kept only for this run and the background worker restarted. Run organization again.'
-                                }
-                            });
+                            // The worker restarted and lost its memory, but every run
+                            // is saved on disk: serve that before giving up.
+                            let saved = null;
+                            try { saved = await loadLatestRun(); } catch { /* treated as nothing saved */ }
+                            if (saved) {
+                                port.postMessage({ type: 'JOB_RESULTS', payload: saved });
+                            } else {
+                                port.postMessage({
+                                    type: 'JOB_RESULTS_UNAVAILABLE',
+                                    payload: {
+                                        message: 'No saved organized bookmarks were found. Run organization again.'
+                                    }
+                                });
+                            }
                             break;
                         }
                         const state = jobRunner.getState();

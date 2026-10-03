@@ -107,7 +107,8 @@ describe('BackgroundJobRunner', () => {
         expect(globalThis.chrome.storage.local.set).toHaveBeenCalledWith(
             expect.objectContaining({
                 organizedMeta: expect.objectContaining({ filename: 'bookmarks_ai_alpha_2026-09-22.html' })
-            })
+            }),
+            expect.any(Function)
         );
     });
 
@@ -153,13 +154,15 @@ describe('BackgroundJobRunner', () => {
 
         // Should have stored organizedData in session and organizedMeta in local
         expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith(
-            expect.objectContaining({ organizedData: results })
+            expect.objectContaining({ organizedData: results }),
+            expect.any(Function)
         );
         expect(globalThis.chrome.storage.local.set).toHaveBeenCalledWith(
             expect.objectContaining({
                 organizedMeta: expect.objectContaining({ count: 2 }),
                 organizedData: results
-            })
+            }),
+            expect.any(Function)
         );
     });
 
@@ -197,7 +200,7 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().logs.map(log => log.message)).toContain('Category Source: AI inferred from bookmarks');
     });
 
-    it('keeps inferred taxonomy and detail assignments in memory without nesting them in Chrome storage payloads', async () => {
+    it('saves an AI-inferred run, with its generated folders, to disk so it stays downloadable', async () => {
         const originalImplementation = OrganizerService.getMockImplementation();
         const generatedResults = [{
             title: 'Example',
@@ -238,16 +241,36 @@ describe('BackgroundJobRunner', () => {
             expect(runner.getResults()[0].detail_category).toBe('Generated Leaf');
             expect(runner.getState().logs.some(log => log.message.includes('Generated Detail'))).toBe(true);
 
-            const persistedPayloads = [
-                ...globalThis.chrome.storage.local.set.mock.calls,
-                ...globalThis.chrome.storage.session.set.mock.calls
-            ].map(([payload]) => payload);
-            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Topic');
-            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Detail');
-            expect(JSON.stringify(persistedPayloads)).not.toContain('Generated Leaf');
+            expect(globalThis.chrome.storage.local.set).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    organizedMeta: expect.objectContaining({ count: 1, mode: 'browser' }),
+                    organizedData: generatedResults
+                }),
+                expect.any(Function)
+            );
+            // Generated names are saved with the result only, never as a category setting.
+            const settingWrites = globalThis.chrome.storage.local.set.mock.calls
+                .filter(([payload]) => Object.hasOwn(payload, 'categories'));
+            expect(settingWrites).toEqual([]);
         } finally {
             OrganizerService.mockImplementation(originalImplementation);
         }
+    });
+
+    it('rotates the previous run into history when a new run completes', async () => {
+        const stored = new Map();
+        globalThis.chrome.storage.local.get = vi.fn((keys, cb) =>
+            cb(Object.fromEntries([].concat(keys).filter(k => stored.has(k)).map(k => [k, stored.get(k)]))));
+        globalThis.chrome.storage.local.set = vi.fn((obj, cb) => { Object.entries(obj).forEach(([k, v]) => stored.set(k, v)); cb && cb(); });
+        globalThis.chrome.storage.local.remove = vi.fn((keys, cb) => { [].concat(keys).forEach(k => stored.delete(k)); cb && cb(); });
+
+        await runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: true });
+        const firstSavedAt = stored.get('organizedMeta').savedAt;
+        vi.setSystemTime(Date.now() + 5000);
+        await runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: true });
+
+        expect(stored.get('organizedHistory').map(e => e.id)).toEqual([String(firstSavedAt)]);
+        expect(stored.get(`organizedRun:${firstSavedAt}`)).toHaveLength(2);
     });
 
     it('keeps service worker alive during job and stops keep-alive on completion', async () => {
@@ -340,7 +363,7 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().logs.some(l => l.message.includes('Cancellation requested'))).toBe(true);
     });
 
-    it('resets job state and removes session storage snapshot', () => {
+    it('resets job state and removes the session snapshot but keeps saved runs downloadable', () => {
         const completedResults = [{ title: 'Completed', url: 'https://example.com/completed' }];
         runner.currentJob.status = 'complete';
         runner.currentJob.progress = 100;
@@ -352,7 +375,8 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().progress).toBe(0);
         expect(runner.getResults()).toBeNull();
         expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
-        expect(globalThis.chrome.storage.local.remove).toHaveBeenCalledWith(['organizedMeta', 'organizedData']);
+        // Saved runs survive a reset: "Organize another" must not delete earlier results.
+        expect(globalThis.chrome.storage.local.remove).not.toHaveBeenCalled();
     });
 
     it('handles unexpected organizer errors gracefully', async () => {

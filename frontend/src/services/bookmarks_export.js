@@ -160,13 +160,10 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
     return html;
 }
 
-export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.html", options = {}) {
-    const { saveAs = true } = options;
-    const isFlat = Boolean(options?.isFlat || bookmarks?.isFlat || bookmarks?.isBare);
-    const defaultName = bookmarks?.filename || (isFlat ? "chronological_bookmarks.html" : "organized_bookmarks.html");
-    const actualFilename = (filename === "organized_bookmarks.html" && bookmarks?.filename) ? bookmarks.filename : (filename === "organized_bookmarks.html" ? defaultName : filename);
-    const html = generateNetscapeHTML(bookmarks, options);
-
+// Hands the file to the browser's download manager. With saveAs the manager is
+// asked for a Save As dialog, but some Chromium builds save straight to the
+// Downloads folder anyway, which is why a button click prefers the picker below.
+function startBrowserDownload(html, filename, saveAs) {
     let url;
     if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
         try {
@@ -180,17 +177,52 @@ export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.htm
     }
 
     if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
-        chrome.downloads.download({
-            url: url,
-            filename: actualFilename,
-            saveAs: saveAs
+        chrome.downloads.download({ url, filename, saveAs }, () => {
+            if (chrome.runtime?.lastError) console.warn('[Export] Download rejected:', chrome.runtime.lastError.message);
         });
     } else if (typeof document !== 'undefined' && document.createElement) {
         const a = document.createElement('a');
         a.href = url;
-        a.download = actualFilename;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     }
+    return { status: 'started', method: 'downloads' };
+}
+
+async function saveWithPicker(html, filename) {
+    // Must be requested synchronously from the click that started the download.
+    const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: 'Bookmarks HTML', accept: { 'text/html': ['.html'] } }]
+    });
+    const writable = await handle.createWritable();
+    await writable.write(html);
+    await writable.close();
+    return { status: 'saved', method: 'picker', name: handle.name };
+}
+
+/**
+ * Saves an HTML file. A page with a user click always gets the browser's Save
+ * As picker; the download manager is the fallback for contexts that cannot open
+ * it (service worker, no click behind the call).
+ * Resolves to `{ status: 'saved' | 'started' | 'cancelled', ... }`.
+ */
+export function saveHtmlFile(html, filename, { saveAs = true } = {}) {
+    if (saveAs && typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
+        return saveWithPicker(html, filename).catch((err) => {
+            if (err?.name === 'AbortError') return { status: 'cancelled' };
+            return startBrowserDownload(html, filename, saveAs);
+        });
+    }
+    return Promise.resolve(startBrowserDownload(html, filename, saveAs));
+}
+
+export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.html", options = {}) {
+    const { saveAs = true } = options;
+    const isFlat = Boolean(options?.isFlat || bookmarks?.isFlat || bookmarks?.isBare);
+    const defaultName = bookmarks?.filename || (isFlat ? "chronological_bookmarks.html" : "organized_bookmarks.html");
+    const actualFilename = (filename === "organized_bookmarks.html" && bookmarks?.filename) ? bookmarks.filename : (filename === "organized_bookmarks.html" ? defaultName : filename);
+    return saveHtmlFile(generateNetscapeHTML(bookmarks, options), actualFilename, { saveAs });
 }
