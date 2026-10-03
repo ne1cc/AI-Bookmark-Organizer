@@ -3,7 +3,7 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
-import { normalizeSubfolderTarget } from '../services/ai'
+import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
@@ -245,15 +245,15 @@ export default function Organizer({ theme = 'light' }) {
     // run and derives the depth from it. The diagrams illustrate the
     // separation between the levels.
     const subfolderTargetOptions = useMemo(() => [
-        { id: 'compact', label: 'Compact', description: 'Recommended — fewer, broader subfolders; only the clearest groups' },
-        { id: 'medium', label: 'Medium', description: 'Balanced depth that grows with each category\'s material' },
+        { id: 'compact', label: 'Compact', description: 'Fewer, broader subfolders; only the clearest groups' },
+        { id: 'medium', label: 'Medium', description: 'Recommended — balanced depth that grows with each category\'s material' },
         { id: 'detailed', label: 'Detailed', description: 'Many specific subfolders so every bookmark has a precise home' }
     ], [])
     const [subfolderTarget, setSubfolderTarget] = useState(() => {
         try {
             return normalizeSubfolderTarget(localStorage.getItem('subfolderTarget'))
         } catch {
-            return 'compact'
+            return DEFAULT_SUBFOLDER_TARGET
         }
     })
     const subfolderOptions = subfolderTargetOptions
