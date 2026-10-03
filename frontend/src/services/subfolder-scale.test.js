@@ -28,10 +28,10 @@ describe('normalizeSubfolderTarget', () => {
         expect(normalizeSubfolderTarget('10+')).toBe('detailed')
     })
 
-    it('falls back to Compact for unknown or missing values', () => {
-        expect(normalizeSubfolderTarget('nonsense')).toBe('compact')
-        expect(normalizeSubfolderTarget(undefined)).toBe('compact')
-        expect(normalizeSubfolderTarget(null)).toBe('compact')
+    it('falls back to Medium for unknown or missing values', () => {
+        expect(normalizeSubfolderTarget('nonsense')).toBe('medium')
+        expect(normalizeSubfolderTarget(undefined)).toBe('medium')
+        expect(normalizeSubfolderTarget(null)).toBe('medium')
     })
 })
 

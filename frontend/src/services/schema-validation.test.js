@@ -78,9 +78,9 @@ describe('subfolderTier', () => {
         expect(subfolderTier('10+')).toEqual(subfolderTier('detailed'))
     })
 
-    it('falls back to the compact tier for unknown or missing values', () => {
-        expect(subfolderTier(undefined)).toEqual(subfolderTier('compact'))
-        expect(subfolderTier('nonsense')).toEqual(subfolderTier('compact'))
+    it('falls back to the medium tier for unknown or missing values', () => {
+        expect(subfolderTier(undefined)).toEqual(subfolderTier('medium'))
+        expect(subfolderTier('nonsense')).toEqual(subfolderTier('medium'))
     })
 })
 

@@ -549,9 +549,12 @@ const LEGACY_SUBFOLDER_TARGETS = {
     '10+': 'detailed'
 };
 
+// What an unset or unrecognised preference falls back to.
+export const DEFAULT_SUBFOLDER_TARGET = 'medium';
+
 export function normalizeSubfolderTarget(subfolderTarget) {
     if (LEGACY_SUBFOLDER_TARGETS[subfolderTarget]) return LEGACY_SUBFOLDER_TARGETS[subfolderTarget];
-    return SUBFOLDER_TIERS[subfolderTarget] ? subfolderTarget : 'compact';
+    return SUBFOLDER_TIERS[subfolderTarget] ? subfolderTarget : DEFAULT_SUBFOLDER_TARGET;
 }
 
 export function subfolderTier(subfolderTarget) {
