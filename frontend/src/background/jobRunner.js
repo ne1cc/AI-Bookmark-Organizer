@@ -24,7 +24,8 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null
         };
         this.organizer = null;
         this.keepAliveTimer = null;
@@ -32,6 +33,7 @@ export class BackgroundJobRunner {
         this.cachedResults = null;
         this.persistJobState = true;
         this.stateFlushTimer = null;
+        this.pendingPlan = null;
     }
 
     getState() {
@@ -126,7 +128,8 @@ export class BackgroundJobRunner {
                         errorMsg: this.currentJob.errorMsg,
                         stats: this.currentJob.stats,
                         count: this.currentJob.count,
-                        completedAt: this.currentJob.completedAt
+                        completedAt: this.currentJob.completedAt,
+                        plan: this.currentJob.plan
                     }
                 });
             } catch {
@@ -157,7 +160,8 @@ export class BackgroundJobRunner {
             dateSortOrder,
             schemaSortOrder,
             inferCategories = true,
-            autoImport = true
+            autoImport = true,
+            reviewPlan = false
         } = config;
         this.persistJobState = flatDateSort || !inferCategories;
 
@@ -178,7 +182,8 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null
         };
 
         this.startKeepAlive();
@@ -272,6 +277,9 @@ export class BackgroundJobRunner {
             parsedBookmarks ? () => {} : inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
+        if (reviewPlan && !flatDateSort) {
+            this.organizer.planReviewer = (schema) => this.awaitPlanDecision(jobId, schema);
+        }
 
         try {
             const results = await this.organizer.start(parsedBookmarks);
@@ -363,7 +371,34 @@ export class BackgroundJobRunner {
         }
     }
 
+    // Phase 1 -> 2 gate: publishes the proposed folders to the panel and waits for
+    // PLAN_DECISION. The job stays 'processing' so every existing panel path still
+    // treats it as a running job; `plan` is what marks it as waiting for the user.
+    awaitPlanDecision(jobId, schema) {
+        return new Promise((resolve) => {
+            this.pendingPlan = { jobId, resolve };
+            this.currentJob.plan = {
+                categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] }))
+            };
+            this.currentJob.backgroundNotice = '';
+            this.addLog('Folder plan ready — review it, then approve to start organizing.');
+            this.flushState();
+        });
+    }
+
+    resolvePlan(decision) {
+        const pending = this.pendingPlan;
+        if (!['approve', 'regenerate', 'cancel'].includes(decision)) return;
+        if (!pending || pending.jobId !== this.currentJob.id) return;
+        this.pendingPlan = null;
+        this.currentJob.plan = null;
+        this.addLog(decision === 'regenerate' ? 'Plan rejected — generating a new one.' : decision === 'approve' ? 'Plan approved — organizing bookmarks.' : 'Plan review cancelled.');
+        this.flushState();
+        pending.resolve(decision);
+    }
+
     cancelJob() {
+        if (this.pendingPlan) this.resolvePlan('cancel');
         if (this.organizer) {
             this.organizer.cancel();
         }
@@ -389,7 +424,8 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {

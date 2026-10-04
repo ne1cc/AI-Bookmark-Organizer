@@ -328,6 +328,9 @@ export class OrganizerService {
         };
         this.failedMoves = [];
         this.snapshotProvider = null;
+        // Optional pause between planning and applying. When set, it receives the
+        // proposed schema and resolves 'approve' | 'regenerate' | 'cancel'.
+        this.planReviewer = null;
     }
 
     cancel() {
@@ -1488,9 +1491,25 @@ export class OrganizerService {
         return finalResults;
     }
 
+    // Phase 1 ends here: the user can approve the proposed folders, ask for a new
+    // plan, or cancel before any bookmark is classified.
+    async reviewPlan(links, schema) {
+        if (!this.planReviewer || !schema) return schema;
+        for (;;) {
+            const decision = await this.planReviewer(schema);
+            if (this.isCancelled || decision === 'cancel') return this.cancelled();
+            if (decision !== 'regenerate') return schema;
+            this.onProgress({ status: 'processing', message: 'Regenerating the folder plan...', percent: 5 });
+            schema = await this.designSchema(links);
+            if (!schema) return schema;
+        }
+    }
+
     async runAI({ links, duplicatesRemoved, isBrowserMode }) {
-        const schema = await this.designSchema(links);
+        let schema = await this.designSchema(links);
         // null means cancelled; an undefined schema from a mocked generator must flow through.
+        if (schema === null) return null;
+        schema = await this.reviewPlan(links, schema);
         if (schema === null) return null;
 
         // All bookmarks are classified directly, without probing URL reachability: external

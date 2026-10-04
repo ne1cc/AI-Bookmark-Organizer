@@ -349,6 +349,76 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('complete');
     });
 
+    describe('plan review (two-phase)', () => {
+        const schema = { categories: [{ name: 'Tech', sub_categories: ['Web', 'Data'] }, { name: 'Travel', sub_categories: [] }] };
+        // Real service pauses in start(); the stand-in does the same through planReviewer.
+        const pausingOrganizer = (record) => function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = null;
+            this.start = vi.fn(async () => {
+                record.decision = this.planReviewer ? await this.planReviewer(schema) : 'no-reviewer';
+                return record.decision === 'cancel' ? null : [{ title: 'A', url: 'https://example.com/a' }];
+            });
+        };
+
+        it('publishes the proposed folders, keeps the job processing, and resumes on approve', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewPlan: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(runner.getState().status).toBe('processing');
+            expect(runner.getState().plan).toEqual({ categories: schema.categories });
+
+            runner.resolvePlan('approve');
+            await job;
+
+            expect(record.decision).toBe('approve');
+            expect(runner.getState().plan).toBeNull();
+            expect(runner.getState().status).toBe('complete');
+        });
+
+        it('does not pause when review is off', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+
+            await runner.startJob({ apiKey: 'k' }, null);
+
+            expect(record.decision).toBe('no-reviewer');
+        });
+
+        it('ignores decisions it does not recognise and decisions with nothing pending', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+            const job = runner.startJob({ apiKey: 'k', reviewPlan: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+
+            runner.resolvePlan('bogus');
+            expect(runner.getState().plan).not.toBeNull();
+
+            runner.resolvePlan('approve');
+            await job;
+            expect(() => runner.resolvePlan('approve')).not.toThrow();
+        });
+
+        it('cancelling while the plan is waiting ends the job instead of hanging', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewPlan: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.cancelJob();
+            await job;
+
+            expect(record.decision).toBe('cancel');
+            expect(runner.getState().status).toBe('idle');
+            expect(runner.getState().plan).toBeNull();
+        });
+    });
+
     it('cancels an active job cleanly', async () => {
         const cancelSpy = vi.fn();
         runner.organizer = { cancel: cancelSpy };

@@ -209,6 +209,10 @@ export default function Organizer({ theme = 'light' }) {
 
     // Keep only one copy of each exact URL in the organized output.
     const [removeDuplicates, setRemoveDuplicates] = useState(() => getStored('removeDuplicates', true))
+    // Two-phase prototype: pause after the AI proposes the folders so the user can approve them first.
+    const [reviewPlan, setReviewPlan] = useState(() => getStored('reviewPlan', false))
+    const [planForReview, setPlanForReview] = useState(null)
+    const planResolverRef = useRef(null)
 
     // Clean messy or truncated titles with AI
     const [cleanTitles, setCleanTitles] = useState(() => getStored('cleanTitles', false))
@@ -307,6 +311,8 @@ export default function Organizer({ theme = 'light' }) {
             if (msg.type === 'STATUS_UPDATE') {
                 const state = msg.payload;
                 if (!state) return;
+
+                setPlanForReview(state.status === 'processing' ? (state.plan || null) : null);
 
                 if (state.status === 'processing') {
                     resultsRequestPendingRef.current = false
@@ -448,6 +454,7 @@ export default function Organizer({ theme = 'light' }) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
                             setStatus('processing');
+                            if (aj.plan) setPlanForReview(aj.plan);
                             if (typeof aj.progress === 'number') setProgress(Math.min(99, Math.max(0, aj.progress)));
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             if (aj.backgroundNotice !== undefined) setBackgroundNotice(aj.backgroundNotice);
@@ -529,7 +536,7 @@ export default function Organizer({ theme = 'light' }) {
     useEffect(() => {
         const startTime = performance.now()
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta', 'organizedHistory'], (result) => {
+            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'reviewPlan', 'organizedMeta', 'organizedHistory'], (result) => {
                 if (!result) return
                 if (result.apiKey) setApiKey(prev => (prev !== result.apiKey ? result.apiKey : prev))
                 if (Array.isArray(result.categories)) {
@@ -567,6 +574,10 @@ export default function Organizer({ theme = 'light' }) {
                 if (typeof result.removeDuplicates === 'boolean') {
                     setRemoveDuplicates(result.removeDuplicates)
                     try { localStorage.setItem('removeDuplicates', JSON.stringify(result.removeDuplicates)) } catch {}
+                }
+                if (typeof result.reviewPlan === 'boolean') {
+                    setReviewPlan(result.reviewPlan)
+                    try { localStorage.setItem('reviewPlan', JSON.stringify(result.reviewPlan)) } catch {}
                 }
                 if (result.cleanTitles !== undefined) {
                     setCleanTitles(Boolean(result.cleanTitles))
@@ -664,6 +675,11 @@ export default function Organizer({ theme = 'light' }) {
         setSchemaSortOrder(newOrder)
         updateSetting('schemaSortOrder', newOrder)
         updateSetting('sortAlphabetically', newOrder === 'alpha')
+    }, [updateSetting])
+
+    const handleReviewPlanToggle = useCallback((enabled) => {
+        setReviewPlan(enabled)
+        updateSetting('reviewPlan', enabled)
     }, [updateSetting])
 
     const handleRemoveDuplicatesToggle = useCallback((enabled) => {
@@ -926,8 +942,20 @@ export default function Organizer({ theme = 'light' }) {
         setPreviousRuns([])
     }, [])
 
+    const decidePlan = useCallback((decision) => {
+        setPlanForReview(null)
+        if (planResolverRef.current) {
+            const resolve = planResolverRef.current
+            planResolverRef.current = null
+            resolve(decision)
+        } else if (portRef.current) {
+            try { portRef.current.postMessage({ type: 'PLAN_DECISION', payload: { decision } }) } catch {}
+        }
+    }, [])
+
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
+        if (planResolverRef.current) decidePlan('cancel')
         resultsRequestPendingRef.current = false
         if (portRef.current) {
             try {
@@ -939,7 +967,7 @@ export default function Organizer({ theme = 'light' }) {
         }
         setIsCancelling(true);
         addLog('Cancellation requested — halting operations...');
-    }, [addLog]);
+    }, [addLog, decidePlan]);
 
     const returnToMenu = useCallback(() => {
         resultsRequestPendingRef.current = false
@@ -1106,7 +1134,8 @@ export default function Organizer({ theme = 'light' }) {
                                     cleanTitles,
                                     flatDateSort,
                                     dateSortOrder: effectiveDateSortOrder,
-                                    schemaSortOrder
+                                    schemaSortOrder,
+                                    reviewPlan
                                 },
                                 parsedBookmarks
                             }
@@ -1214,6 +1243,14 @@ export default function Organizer({ theme = 'light' }) {
                 parsedBookmarks ? deferFileDownload : inferCategories
             );
 
+            if (reviewPlan && !flatDateSort) {
+                organizerRef.current.planReviewer = (schema) => new Promise((resolve) => {
+                    planResolverRef.current = resolve
+                    setPlanForReview({ categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: c.sub_categories || [] })) })
+                    addLog('Folder plan ready — review it, then approve to start organizing.')
+                })
+            }
+
             // Pass parsed bookmarks if file mode, otherwise null (browser mode)
             const results = await organizerRef.current.start(parsedBookmarks);
 
@@ -1258,7 +1295,7 @@ export default function Organizer({ theme = 'light' }) {
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, reviewPlan]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -1895,6 +1932,29 @@ export default function Organizer({ theme = 'light' }) {
                             }} />
                         </button>
                     </div>
+
+                    {/* Review Plan Toggle (two-phase prototype) */}
+                    {!flatDateSort && (
+                        <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                            <div>
+                                <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
+                                    Review plan before organizing
+                                </label>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                                    Pause after the AI proposes the folders, so you can approve or regenerate them before any bookmark is filed
+                                </div>
+                            </div>
+                            <button
+                                role="switch"
+                                aria-label="Review plan before organizing"
+                                aria-checked={reviewPlan}
+                                onClick={() => handleReviewPlanToggle(!reviewPlan)}
+                                style={{ width: '44px', height: '24px', borderRadius: '12px', border: '1px solid var(--border)', background: reviewPlan ? 'var(--accent)' : 'var(--surface-solid)', position: 'relative', cursor: 'pointer', padding: 0, flexShrink: 0, transition: 'background 0.2s ease' }}
+                            >
+                                <span style={{ position: 'absolute', top: '2px', left: reviewPlan ? '22px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: reviewPlan ? 'var(--on-accent)' : 'var(--text-muted)', transition: 'left 0.2s ease' }} />
+                            </button>
+                        </div>
+                    )}
 
                     {/* Clean Titles Toggle */}
                     <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
@@ -2657,6 +2717,26 @@ export default function Organizer({ theme = 'light' }) {
                                 <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
                             </div>
                         )}
+                        {planForReview && (
+                            <div className="card-panel plan-review" role="region" aria-label="Proposed folder plan" style={{ width: '100%', textAlign: 'left' }}>
+                                <div style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--text-primary)' }}>Proposed folder plan</div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.6rem' }}>
+                                    No bookmark has been filed yet. Approve to organize into these folders, or ask for a new plan.
+                                </div>
+                                <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: '220px', overflowY: 'auto', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                                    {planForReview.categories.map((category) => (
+                                        <li key={category.name} style={{ padding: '0.15rem 0' }}>
+                                            <strong style={{ color: 'var(--text-primary)' }}>{category.name}</strong>
+                                            {category.sub_categories.length > 0 && <span> — {category.sub_categories.join(', ')}</span>}
+                                        </li>
+                                    ))}
+                                </ul>
+                                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+                                    <button type="button" className="btn-primary" onClick={() => decidePlan('approve')}>Approve &amp; organize</button>
+                                    <button type="button" onClick={() => decidePlan('regenerate')} style={{ padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer' }}>Regenerate plan</button>
+                                </div>
+                            </div>
+                        )}
                         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
                             <button
                                 className="btn-primary btn-in-progress"
@@ -2668,8 +2748,8 @@ export default function Organizer({ theme = 'light' }) {
                                     cursor: 'wait'
                                 }}
                             >
-                                <Loader2 size={18} className="spin-icon" />
-                                <span>In Progress... {Math.min(99, Math.max(0, progress))}%</span>
+                                {!planForReview && <Loader2 size={18} className="spin-icon" />}
+                                <span>{planForReview ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
                             </button>
                             <button
                                 type="button"
