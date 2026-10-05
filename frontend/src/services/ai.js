@@ -10,6 +10,34 @@ const OR_HEADERS = (apiKey) => ({
 
 // Robustly pull a JSON object out of a model response that may include
 // markdown fences, leading prose, or trailing junk. Throws if no object found.
+/**
+ * Strips sensitive data from URLs before passing them to external AI APIs.
+ * Removes basic-auth credentials, search/query strings, and hash fragments,
+ * preserving only scheme, host, and path to give the model semantic context
+ * without leaking tokens, session IDs, or private query parameters.
+ */
+export function scrubUrlForAi(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return '';
+    const trimmed = rawUrl.trim();
+    try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'ftp:') {
+            parsed.username = '';
+            parsed.password = '';
+            parsed.search = '';
+            parsed.hash = '';
+            let cleaned = parsed.toString();
+            if (!trimmed.endsWith('/') && cleaned.endsWith('/') && parsed.pathname === '/') {
+                cleaned = cleaned.slice(0, -1);
+            }
+            return cleaned;
+        }
+        return trimmed.split('?')[0].split('#')[0];
+    } catch {
+        return trimmed.split('?')[0].split('#')[0];
+    }
+}
+
 function extractJson(content) {
     let text = (content || "").trim();
 
@@ -267,11 +295,13 @@ function parseModelResponse(data, { salvageTruncated = false } = {}) {
     }
 }
 
-// The same single API-key field accepts keys from either provider. Google AI
-// Studio keys start with "AIza"; everything else (OpenRouter "sk-or-...",
-// OpenAI-style "sk-...") is treated as OpenRouter.
+// The same single API-key field accepts keys from either provider. OpenRouter
+// keys are "sk-or-..." (OpenAI-style "sk-..." included); Google AI Studio keys
+// have changed format over time ("AIza..." then "AQ....") so anything else is
+// treated as Gemini rather than matching on Google's prefix.
 export function detectProvider(apiKey) {
-    return (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter';
+    const key = (apiKey || '').trim();
+    return key && !key.startsWith('sk-') ? 'gemini' : 'openrouter';
 }
 
 // Model ids in the UI are OpenRouter-namespaced ("google/gemini-3.1-flash-lite").
@@ -378,11 +408,15 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
 // parsed JSON object. Throws errors tagged with statusCode/retryable so the
 // shared withRetry wrapper can decide whether to back off and try again.
 async function callModel(apiKey, model, systemContent, userContent, { temperature, maxTokens, salvageTruncated = false }, isCancelled = null) {
-    if (detectProvider(apiKey) === 'gemini') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const key = (apiKey || '').trim();
+    if (detectProvider(key) === 'gemini') {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent`;
         const data = await fetchWithTimeout(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": key
+            },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemContent }] },
                 contents: [{ role: "user", parts: [{ text: userContent }] }],
@@ -399,7 +433,7 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
 
     const data = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-        headers: OR_HEADERS(apiKey),
+        headers: OR_HEADERS(key),
         body: JSON.stringify({
             model,
             temperature,
@@ -645,7 +679,7 @@ export async function censusShares(sample, categories, apiKey, model = "google/g
     { "assignments": [0, 2, 1] }
 
     BOOKMARKS (in order):
-    ${JSON.stringify(sample.map(b => ({ title: b.title, url: b.url })))}
+    ${JSON.stringify(sample.map(b => ({ title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 
     try {
@@ -943,7 +977,7 @@ function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, subfol
     }
 
     BOOKMARKS TO ANALYZE:
-    ${JSON.stringify(schemaSource.map(b => ({ title: b.title, url: b.url })))}
+    ${JSON.stringify(schemaSource.map(b => ({ title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 }
 
@@ -1197,7 +1231,7 @@ export function buildDetailSchemaPrompt(groups, issues = null) {
         bookmarks: sampleForSchema(group.records, DETAIL_SCHEMA_SAMPLE_LIMIT).map((bookmark, i) => ({
             i,
             title: bookmark?.title || '',
-            url: bookmark?.url || ''
+            url: scrubUrlForAi(bookmark?.url || '')
         }))
     }));
     const correction = issues?.length
@@ -1405,7 +1439,7 @@ export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model
     Return JSON only: { "classified": [{ "i": 0, "detail_category": "..." }] }
     Use only an approved name; use null when none fits. Every bookmark appears exactly once.
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
     return withRetry(async () => {
         const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
@@ -1425,7 +1459,7 @@ export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, 
     Return JSON only: { "classified": [{ "i": 0, "sub_category": "..." }] }
     Use only a name approved for that bookmark's category, written exactly as above. A loose fit is better than none: pick the nearest topic, and use null only when the bookmark has nothing in common with any of them. Every bookmark appears exactly once.
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, category: b.category, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, category: b.category, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
     return withRetry(async () => {
         const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
@@ -1466,7 +1500,7 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
     Return JSON object: ${returnSchema}
 
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 
     const systemContent = "You are a precise classification engine and JSON generator. Output only valid JSON. Do not use Markdown blocks.";

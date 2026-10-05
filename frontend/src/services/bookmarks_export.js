@@ -2,20 +2,39 @@ import { calculateDateSpan } from '../utils/dates';
 import { shouldCreateSubFolder } from './bookmarks';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 
-// HTML escape function to prevent XSS
-function escapeHtml(text) {
-    if (!text) return '';
-    if (typeof document !== 'undefined' && document.createElement) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+// HTML escape function to prevent XSS across all execution environments
+export function escapeHtml(text) {
+    if (text === null || text === undefined || text === '') return '';
     return String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+// Strictly validates and constrains add_date to positive numeric timestamps
+export function sanitizeAddDate(raw, fallback) {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+        return Math.floor(raw);
+    }
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (/^\d{1,16}$/.test(trimmed)) {
+            const num = Number(trimmed);
+            if (Number.isFinite(num) && num >= 0) return Math.floor(num);
+        }
+    }
+    return fallback;
+}
+
+// Sanitizes suggested filenames to block path traversal and illegal characters
+export function sanitizeFilename(filename, fallback = 'organized_bookmarks.html') {
+    if (!filename || typeof filename !== 'string') return fallback;
+    const base = filename.replace(/^.*[/\\]/, '');
+    const clean = base.replace(/[/\\?%*:|"<>]/g, '_').trim();
+    if (!clean || clean === '.' || clean === '..') return fallback;
+    return clean.toLowerCase().endsWith('.html') || clean.toLowerCase().endsWith('.htm') ? clean : `${clean}.html`;
 }
 
 // Embed a favicon only when it is a pure base64 image data URL: the strict
@@ -29,12 +48,17 @@ function iconAttribute(icon) {
 }
 
 // URL sanitization - only allow http/https protocols
-function sanitizeUrl(url) {
+export function sanitizeUrl(url) {
     if (!url) return '';
+    const trimmed = String(url).trim();
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('javascript:') || lower.startsWith('data:') || lower.startsWith('vbscript:')) {
+        return '';
+    }
     try {
-        const parsed = new URL(url);
-        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-            return escapeHtml(url);
+        const parsed = new URL(trimmed);
+        if (['http:', 'https:', 'ftp:', 'file:', 'chrome:', 'edge:', 'brave:', 'about:'].includes(parsed.protocol)) {
+            return escapeHtml(trimmed);
         }
         return '';
     } catch {
@@ -62,7 +86,7 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
         bookmarks.forEach(item => {
             const safeTitle = escapeHtml(item.title);
             const safeUrl = sanitizeUrl(item.url);
-            const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
+            const itemAddDate = sanitizeAddDate(item.add_date, item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
             if (safeUrl) {
                 html += `    <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
             }
@@ -121,7 +145,7 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
                 items.forEach(item => {
                     const safeTitle = escapeHtml(item.title);
                     const safeUrl = sanitizeUrl(item.url);
-                    const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
+                    const itemAddDate = sanitizeAddDate(item.add_date, item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
                     if (safeUrl) {
                         html += `                <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
                     }
@@ -132,7 +156,7 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
             subContent.root.forEach(item => {
                 const safeTitle = escapeHtml(item.title);
                 const safeUrl = sanitizeUrl(item.url);
-                const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
+                const itemAddDate = sanitizeAddDate(item.add_date, item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
                 if (safeUrl) {
                     html += `            <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
                 }
@@ -146,7 +170,7 @@ ${dateSpan ? `     Date range: ${dateSpan}\n` : ''}     It will be read and over
             content.root.forEach(item => {
                 const safeTitle = escapeHtml(item.title);
                 const safeUrl = sanitizeUrl(item.url);
-                const itemAddDate = item.add_date || (item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
+                const itemAddDate = sanitizeAddDate(item.add_date, item.dateAdded ? Math.floor(item.dateAdded / 1000) : now);
                 if (safeUrl) {
                     html += `        <DT><A HREF="${safeUrl}" ADD_DATE="${itemAddDate}"${iconAttribute(item.icon)}>${safeTitle}</A>\n`;
                 }
@@ -210,19 +234,21 @@ async function saveWithPicker(html, filename) {
  * Resolves to `{ status: 'saved' | 'started' | 'cancelled', ... }`.
  */
 export function saveHtmlFile(html, filename, { saveAs = true } = {}) {
+    const safeFilename = sanitizeFilename(filename);
     if (saveAs && typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
-        return saveWithPicker(html, filename).catch((err) => {
+        return saveWithPicker(html, safeFilename).catch((err) => {
             if (err?.name === 'AbortError') return { status: 'cancelled' };
-            return startBrowserDownload(html, filename, saveAs);
+            return startBrowserDownload(html, safeFilename, saveAs);
         });
     }
-    return Promise.resolve(startBrowserDownload(html, filename, saveAs));
+    return Promise.resolve(startBrowserDownload(html, safeFilename, saveAs));
 }
 
 export function downloadBookmarks(bookmarks, filename = "organized_bookmarks.html", options = {}) {
     const { saveAs = true } = options;
     const isFlat = Boolean(options?.isFlat || bookmarks?.isFlat || bookmarks?.isBare);
     const defaultName = bookmarks?.filename || (isFlat ? "chronological_bookmarks.html" : "organized_bookmarks.html");
-    const actualFilename = (filename === "organized_bookmarks.html" && bookmarks?.filename) ? bookmarks.filename : (filename === "organized_bookmarks.html" ? defaultName : filename);
+    const rawFilename = (filename === "organized_bookmarks.html" && bookmarks?.filename) ? bookmarks.filename : (filename === "organized_bookmarks.html" ? defaultName : filename);
+    const actualFilename = sanitizeFilename(rawFilename, defaultName);
     return saveHtmlFile(generateNetscapeHTML(bookmarks, options), actualFilename, { saveAs });
 }

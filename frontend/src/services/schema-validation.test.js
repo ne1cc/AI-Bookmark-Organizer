@@ -14,7 +14,8 @@ import {
     DETAIL_SCHEMA_SAMPLE_LIMIT,
     DETAIL_MIN_BOOKMARKS,
     DETAIL_MIN_FOLDER_SIZE,
-    DETAIL_MAX_FOLDERS
+    DETAIL_MAX_FOLDERS,
+    scrubUrlForAi
 } from './ai'
 
 // Builds an OpenRouter-shaped success response carrying `content` verbatim.
@@ -1187,6 +1188,18 @@ describe('native Gemini response path', () => {
         expect(body.system_instruction.parts[0].text).toMatch(/information architect/)
     })
 
+    it('routes modern AQ auth keys to native Gemini endpoint with header and omits key param', async () => {
+        const AQ_KEY = 'AQ.AbCdEf1234567890'
+        global.fetch = vi.fn(async () => geminiResponse([JSON.stringify(healthySchema)]))
+
+        await generateSchema(manyBookmarks, AQ_KEY, ['Tech'], 'google/gemini-3.1-flash-lite', 'medium')
+
+        const [url, options] = global.fetch.mock.calls[0]
+        expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent')
+        expect(url).not.toContain('?key=')
+        expect(options.headers['x-goog-api-key']).toBe(AQ_KEY)
+    })
+
     it('never salvages a classification batch cut off at MAX_TOKENS', async () => {
         vi.useFakeTimers()
 
@@ -1217,3 +1230,20 @@ describe('native Gemini response path', () => {
         expect(retryEvents[0].error.message).toMatch(/cut off/)
     })
 })
+
+describe('scrubUrlForAi privacy and data leakage protection (SEC-04)', () => {
+    it('strips basic-auth credentials, search/query strings, and hash fragments', () => {
+        expect(scrubUrlForAi('https://user:password@internal.corp.com:8080/dashboard?token=secret123&session=xyz#section2'))
+            .toBe('https://internal.corp.com:8080/dashboard');
+        expect(scrubUrlForAi('https://github.com/org/repo?private_key=abc#L100'))
+            .toBe('https://github.com/org/repo');
+        expect(scrubUrlForAi('http://localhost:3000/api?secret=1'))
+            .toBe('http://localhost:3000/api');
+        expect(scrubUrlForAi('https://example.com/'))
+            .toBe('https://example.com/');
+        expect(scrubUrlForAi('https://example.com'))
+            .toBe('https://example.com');
+        expect(scrubUrlForAi(null))
+            .toBe('');
+    });
+});

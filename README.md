@@ -4,7 +4,7 @@ AI Bookmark Organizer sorts browser bookmarks into a folder structure you can br
 
 ## What it does
 
-- Organizes bookmarks with Google Gemini through Google AI Studio or OpenRouter.
+- Organizes bookmarks with Google Gemini through Gemini API (Google AI Studio) or OpenRouter.
 - Uses your selected categories as top-level folders, then creates subfolders from the bookmarks. You can also let the organizer suggest categories.
 - Adjusts folder detail to your collection, with an optional third level for larger groups.
 - Optionally pauses to let you review and edit the proposed folders before anything is filed, and the finished folders (with bookmark counts) before they are saved. The plan review lets you rename, add, delete, move and merge folders; the result review lets you rename, delete, move and merge them.
@@ -35,7 +35,7 @@ Requires Firefox 115 or newer. Temporary add-ons are removed when Firefox restar
 
 ## Get started
 
-1. Open the extension and add an API key from Google AI Studio or OpenRouter. Links to both providers are available in the extension.
+1. Open the extension and add an API key from Google Gemini (Google AI Studio) or OpenRouter. Links to both providers are available in the extension.
 2. Choose your categories and sorting options, or use the date-based mode to organize without AI.
 3. Choose whether to organize browser bookmarks or upload an exported bookmarks HTML file, then start organizing.
 
@@ -69,7 +69,7 @@ Create release ZIP files with `npm run package:all`, or use `npm run package:chr
 
 ## Technology
 
-The extension uses React 19, Vite, and Manifest V3. AI requests use Google Gemini through Google AI Studio or OpenRouter.
+The extension uses React 19, Vite, and Manifest V3. AI requests use Google Gemini through Gemini API (Google AI Studio) or OpenRouter.
 
 ## License
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { removeDuplicateUrls, checkUrlReachable, filterReachableBookmarks, OrganizerService, getBookmarkTimestamp, getBookmarkDomain, calculateDateSpan, buildUrlIndex, dedupeFromIndex, removeBrowserDuplicates } from './organizer'
 import * as ai from './ai'
-import { classifyBatch, generateSchema, withRetry, geminiModelId, isNetworkError, isRateLimitError, isRetryableError } from './ai'
+import { classifyBatch, generateSchema, withRetry, geminiModelId, detectProvider, isNetworkError, isRateLimitError, isRetryableError } from './ai'
 import * as bookmarksExport from './bookmarks_export'
 import * as bookmarksService from './bookmarks'
 import { DEFAULT_CATEGORIES, SUGGESTED_ADDABLE_CATEGORIES, SCHEMA_SORT_OPTIONS } from '../components/Organizer'
@@ -1517,6 +1517,38 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         expect(progressMessages).toContain('Category breakdown:')
         expect(progressMessages).toContain('  • News: 1')
         expect(progressMessages).toContain('  • Tech: 2')
+    })
+})
+
+describe('detectProvider', () => {
+    it('detects standard Google AI Studio / Gemini keys starting with AIza', () => {
+        expect(detectProvider('AIzaSyD-1234567890abcdef')).toBe('gemini')
+        expect(detectProvider('AIzaCustomKey')).toBe('gemini')
+        expect(detectProvider('aizaSyLowerKey')).toBe('gemini')
+    })
+
+    it('detects modern Google AI Studio / Gemini auth keys starting with AQ', () => {
+        expect(detectProvider('AQ.AbCdEf1234567890')).toBe('gemini')
+        expect(detectProvider('AQAbCdEf1234567890')).toBe('gemini')
+        expect(detectProvider('aq.AbCdEf1234567890')).toBe('gemini')
+    })
+
+    it('detects keys with leading or trailing whitespace', () => {
+        expect(detectProvider('   AIzaSyD-12345   ')).toBe('gemini')
+        expect(detectProvider(' \n AQ.AbCdEf12345 \t ')).toBe('gemini')
+        expect(detectProvider('   sk-or-v1-abcdef   ')).toBe('openrouter')
+    })
+
+    it('detects OpenRouter keys starting with sk-or-', () => {
+        expect(detectProvider('sk-or-v1-abcdef123456')).toBe('openrouter')
+        expect(detectProvider('sk-or-test-key')).toBe('openrouter')
+    })
+
+    it('falls back to openrouter for OpenAI style keys or unknown keys', () => {
+        expect(detectProvider('sk-1234567890')).toBe('openrouter')
+        expect(detectProvider('')).toBe('openrouter')
+        expect(detectProvider(null)).toBe('openrouter')
+        expect(detectProvider(undefined)).toBe('openrouter')
     })
 })
 

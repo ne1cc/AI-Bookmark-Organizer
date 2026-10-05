@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar, Trash2 } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
-import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
-import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET } from '../services/ai'
+import { saveInputBookmarkFile, getInputBookmarkMeta, listInputBookmarkFiles, getInputBookmarkHtml, removeInputBookmarkFile, clearAllInputBookmarkFiles, downloadInputBookmarkFile } from '../services/input_bookmarks'
+import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET, detectProvider } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import ReviewPanel from './ReviewPanel'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
@@ -145,7 +145,7 @@ export default function Organizer({ theme = 'light' }) {
     })
 
     // Auto-detect provider from key format
-    const provider = useMemo(() => (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter', [apiKey])
+    const provider = useMemo(() => detectProvider(apiKey), [apiKey])
 
     // Models supported for Google Gemini
     const models = useMemo(() => [
@@ -752,6 +752,7 @@ export default function Organizer({ theme = 'light' }) {
     const [uploadedFile, setUploadedFile] = useState(null)
     const [parsedBookmarks, setParsedBookmarks] = useState(null)
     const [inputFile, setInputFile] = useState(null)
+    const [inputFiles, setInputFiles] = useState([])
     const fileInputRef = useRef(null)
 
     const addLog = useCallback((message) => {
@@ -780,7 +781,15 @@ export default function Organizer({ theme = 'light' }) {
                 setUploadedFile(file);
                 setParsedBookmarks(links);
                 saveInputBookmarkFile({ filename: file.name, html: content, count: links.length, dateSpan: span })
-                    .then((res) => { if (res.saved) setInputFile(res.entry); else addLog('Input file too large to cache (25 MB limit) — organize continues; keep your own copy of the original.'); })
+                    .then((res) => {
+                    if (res.saved) {
+                        setInputFile(res.entry);
+                        setInputFiles((prev) => [res.entry, ...prev.filter((entry) => entry.id !== res.entry.id)]);
+                        addLog(`Saved ${file.name} to persistent storage — downloadable and re-organizable anytime.`);
+                    } else {
+                        addLog(`Could not cache the input file: ${res.reason}`);
+                    }
+                })
                     .catch(() => addLog('Could not cache the input file locally.'))
                 if (span) setActiveDateSpan(span);
                 setErrorMsg('');
@@ -813,24 +822,43 @@ export default function Organizer({ theme = 'light' }) {
     // storage on demand (download / re-organize) so panel startup stays fast.
     useEffect(() => {
         const t = performance.now()
-        getInputBookmarkMeta()
-            .then((entry) => {
+        listInputBookmarkFiles()
+            .then((list) => {
                 console.log(`[Startup] input card metadata restored +${(performance.now() - t).toFixed(1)}ms`)
-                if (entry) setInputFile(entry)
+                if (Array.isArray(list) && list.length > 0) {
+                    setInputFiles(list)
+                    setInputFile(list[0])
+                } else {
+                    getInputBookmarkMeta().then((entry) => {
+                        if (entry) {
+                            setInputFile(entry)
+                            setInputFiles([entry])
+                        }
+                    }).catch(() => {})
+                }
             })
-            .catch(() => {})
+            .catch(() => {
+                getInputBookmarkMeta().then((entry) => {
+                    if (entry) {
+                        setInputFile(entry)
+                        setInputFiles([entry])
+                    }
+                }).catch(() => {})
+            })
     }, [])
 
-    const handleDownloadInput = useCallback(() => {
-        if (inputFile) Promise.resolve(downloadInputBookmarkFile(inputFile)).then(reportSave).catch((err) => addLog(`Could not save the input file: ${err.message}`))
+    const handleDownloadInput = useCallback((entryToDownload) => {
+        const target = (entryToDownload && typeof entryToDownload.filename === 'string') ? entryToDownload : inputFile
+        if (target) Promise.resolve(downloadInputBookmarkFile(target)).then(reportSave).catch((err) => addLog(`Could not save the input file: ${err.message}`))
     }, [inputFile, reportSave, addLog])
 
-    const handleReorganizeInput = useCallback(async () => {
-        if (!inputFile) return
+    const handleReorganizeInput = useCallback(async (entryToReorganize) => {
+        const target = (entryToReorganize && typeof entryToReorganize.filename === 'string') ? entryToReorganize : inputFile
+        if (!target) return
         try {
-            const html = (typeof inputFile.html === 'string' && inputFile.html.length > 0)
-                ? inputFile.html
-                : await getInputBookmarkHtml()
+            const html = (typeof target.html === 'string' && target.html.length > 0)
+                ? target.html
+                : await getInputBookmarkHtml(target.id)
             if (!html) {
                 setErrorMsg('Cached input file content is missing — drop the file in again.')
                 return
@@ -838,19 +866,42 @@ export default function Organizer({ theme = 'light' }) {
             const links = parseBookmarks(html)
             const span = calculateDateSpan(links)
             setParsedBookmarks(links)
+            setInputFile(target)
+            setUploadedFile({ name: target.filename })
+            setStatus('idle')
             if (span) setActiveDateSpan(span)
             setErrorMsg('')
-            addLog(`Re-loaded ${inputFile.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
+            addLog(`Re-loaded ${target.filename} from cached input (${links.length.toLocaleString()} bookmarks)`)
         } catch (err) {
             console.error(err)
             setErrorMsg('Cached input file could not be parsed.')
         }
     }, [inputFile, addLog])
 
-    const handleRemoveInput = useCallback(async () => {
-        try { await removeInputBookmarkFile() } catch {}
+    const handleRemoveInput = useCallback(async (entryToRemove) => {
+        const target = (entryToRemove && typeof entryToRemove.filename === 'string') ? entryToRemove : inputFile
+        if (!target) return
+        try {
+            const updated = await removeInputBookmarkFile(target.id)
+            const nextList = Array.isArray(updated) ? updated : []
+            setInputFiles(nextList)
+            if (!entryToRemove || !inputFile || inputFile.id === target.id) {
+                setInputFile(nextList.length > 0 ? nextList[0] : null)
+            }
+            addLog(`Removed ${target.filename} from persistent storage.`)
+        } catch {
+            setInputFile(null)
+            setInputFiles([])
+        }
+    }, [inputFile, addLog])
+
+    const clearAllInputFiles = useCallback(async () => {
+        if (!window.confirm('Delete all saved input bookmark files? This cannot be undone.')) return
+        await clearAllInputBookmarkFiles()
         setInputFile(null)
-    }, [])
+        setInputFiles([])
+        addLog('All saved input files removed from storage.')
+    }, [addLog])
 
     // Auto-scroll logs
     useEffect(() => {
@@ -1028,7 +1079,7 @@ export default function Organizer({ theme = 'light' }) {
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;
         if (requiresApiKey && !apiKey) {
-            setErrorMsg(`Please enter your Google AI Studio or OpenRouter API Key.`);
+            setErrorMsg(`Please enter your Google Gemini / AI Studio or OpenRouter API Key.`);
             return;
         }
         if (!flatDateSort && !inferCategories && categories.length === 0) {
@@ -1342,12 +1393,12 @@ export default function Organizer({ theme = 'light' }) {
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
                     API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
                     <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google AI Studio or OpenRouter'}
+                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google Gemini (AI Studio) or OpenRouter'}
                     </span>
                 </label>
                 <input
                     type="password"
-                    placeholder="AIza... (Google AI Studio) or sk-or-... (OpenRouter)"
+                    placeholder="AIza... or AQ... (Google AI Studio / Gemini) or sk-or-... (OpenRouter)"
                     value={apiKey}
                     onChange={(e) => handleApiKeyChange(e.target.value)}
                     style={{
@@ -1391,7 +1442,7 @@ export default function Organizer({ theme = 'light' }) {
                         onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
                         onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
                     >
-                        <span>Get Google AI Studio Key (Free)</span>
+                        <span>Get Gemini API Key (Google AI Studio - Free)</span>
                         <ExternalLink size={11} />
                     </a>
                     <a
@@ -1428,9 +1479,9 @@ export default function Organizer({ theme = 'light' }) {
                         <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
                         <span>
                             Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
-                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
+                            <strong>Google AI Studio / Gemini</strong> (free, starts with <code>AIza</code> or <code>AQ</code>) or{' '}
                             <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
-                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.
+                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}` : ''}.
                         </span>
                     </p>
                 </div>
@@ -2342,7 +2393,7 @@ export default function Organizer({ theme = 'light' }) {
             )}
 
             {/* Cached dropped-in input file (spec §12): pristine original kept for re-organize/download */}
-            {status === 'idle' && inputFile && (
+            {(status === 'idle' || status === 'complete') && inputFile && (
                 <div className="input-bookmarks-card section-block">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <div style={{ minWidth: 0 }}>
@@ -2354,12 +2405,75 @@ export default function Organizer({ theme = 'light' }) {
                             </div>
                         </div>
                         <div className="input-file-actions">
-                            <button className="input-file-action input-file-action-secondary" type="button" onClick={handleDownloadInput} title="Download the original file">Download</button>
-                            <button className="input-file-action input-file-action-primary" type="button" onClick={handleReorganizeInput} title="Organize from the cached original again">Re-organize</button>
-                            <button className="input-file-action input-file-action-danger" type="button" onClick={handleRemoveInput} title="Forget the cached input">Remove</button>
+                            <button className="input-file-action input-file-action-secondary" type="button" onClick={() => handleDownloadInput(inputFile)} title="Download the original file">Download</button>
+                            <button className="input-file-action input-file-action-primary" type="button" onClick={() => handleReorganizeInput(inputFile)} title="Organize from the cached original again">Re-organize</button>
+                            <button className="input-file-action input-file-action-danger" type="button" onClick={() => handleRemoveInput(inputFile)} title="Forget the cached input">Remove</button>
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Recorded input files history (unlimited files with download / re-organize / delete) */}
+            {(status === 'idle' || status === 'complete') && inputFiles.length > 1 && (
+                <details className="previous-inputs section-block">
+                    <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        All saved input files ({inputFiles.length})
+                    </summary>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                        <button
+                            type="button"
+                            onClick={clearAllInputFiles}
+                            style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
+                        >
+                            Clear all saved input files
+                        </button>
+                    </div>
+                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '240px', overflowY: 'auto' }}>
+                        {inputFiles.map((entry) => (
+                            <li key={entry.id || entry.savedAt} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{entry.filename}</strong>
+                                    <br />
+                                    {[
+                                        `${(entry.count || 0).toLocaleString()} bookmarks`,
+                                        formatDateSpan(entry.dateSpan),
+                                        formatRunTime(entry.savedAt)
+                                    ].filter(Boolean).join(' · ')}
+                                </span>
+                                <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
+                                    <button
+                                        type="button"
+                                        aria-label={`Download ${entry.filename}`}
+                                        onClick={() => handleDownloadInput(entry)}
+                                        title="Download this original input file"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                    >
+                                        <Download size={13} />
+                                        Download
+                                    </button>
+                                    <button
+                                        type="button"
+                                        aria-label={`Re-organize ${entry.filename}`}
+                                        onClick={() => handleReorganizeInput(entry)}
+                                        title="Load this input file to organize"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                                    >
+                                        Re-organize
+                                    </button>
+                                    <button
+                                        type="button"
+                                        aria-label={`Delete ${entry.filename}`}
+                                        onClick={() => handleRemoveInput(entry)}
+                                        title="Delete this saved input file"
+                                        style={{ display: 'inline-flex', alignItems: 'center', padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                                    >
+                                        <Trash2 size={13} />
+                                    </button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                </details>
             )}
 
             {/* Saved results from a previous run (persists across panel sessions) */}

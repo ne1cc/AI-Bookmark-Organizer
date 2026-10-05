@@ -358,4 +358,76 @@ describe('Background Service Worker Entry Point', () => {
         });
         expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
     });
+
+    describe('port sender verification (SEC-03)', () => {
+        it('disconnects port when sender extension ID does not match', async () => {
+            vi.resetModules();
+            let onConnectHandler = null;
+            globalThis.chrome.runtime.id = 'my-valid-extension-id';
+            globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+            await import('./index');
+
+            const port = {
+                name: 'organizer-channel',
+                sender: { id: 'foreign-malicious-extension-id' },
+                disconnect: vi.fn(),
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() }
+            };
+
+            onConnectHandler(port);
+
+            expect(port.disconnect).toHaveBeenCalled();
+            expect(port.postMessage).not.toHaveBeenCalled();
+        });
+
+        it('disconnects port when sender origin is an untrusted web page', async () => {
+            vi.resetModules();
+            let onConnectHandler = null;
+            globalThis.chrome.runtime.id = 'my-valid-extension-id';
+            globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+            await import('./index');
+
+            const port = {
+                name: 'organizer-channel',
+                sender: { id: 'my-valid-extension-id', url: 'https://evil.example.com/exploit.html' },
+                disconnect: vi.fn(),
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() }
+            };
+
+            onConnectHandler(port);
+
+            expect(port.disconnect).toHaveBeenCalled();
+            expect(port.postMessage).not.toHaveBeenCalled();
+        });
+
+        it('accepts port when sender matches extension ID and origin', async () => {
+            vi.resetModules();
+            let onConnectHandler = null;
+            globalThis.chrome.runtime.id = 'my-valid-extension-id';
+            globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+            await import('./index');
+
+            const port = {
+                name: 'organizer-channel',
+                sender: { id: 'my-valid-extension-id', url: 'chrome-extension://my-valid-extension-id/index.html' },
+                disconnect: vi.fn(),
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() }
+            };
+
+            onConnectHandler(port);
+
+            expect(port.disconnect).not.toHaveBeenCalled();
+            expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'STATUS_UPDATE' }));
+        });
+    });
+
 });

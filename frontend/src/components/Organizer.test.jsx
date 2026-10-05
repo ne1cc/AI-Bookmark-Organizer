@@ -37,11 +37,13 @@ vi.mock('../services/organizer', () => {
 })
 
 vi.mock('../services/input_bookmarks', () => ({
-    INPUT_MAX_BYTES: 25 * 1024 * 1024,
-    saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, size: input.html.length, savedAt: 1757000000000 } })),
+    INPUT_MAX_BYTES: Infinity,
+    saveInputBookmarkFile: vi.fn(async (input) => ({ saved: true, entry: { ...input, id: 'test-id', size: input.html.length, savedAt: 1757000000000 } })),
     getInputBookmarkMeta: vi.fn(async () => null),
+    listInputBookmarkFiles: vi.fn(async () => []),
+    clearAllInputBookmarkFiles: vi.fn(async () => {}),
     getInputBookmarkHtml: vi.fn(async () => null),
-    removeInputBookmarkFile: vi.fn(async () => {}),
+    removeInputBookmarkFile: vi.fn(async () => []),
     downloadInputBookmarkFile: vi.fn()
 }))
 
@@ -77,7 +79,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         expect(screen.getByText(/Gemini AI/i)).toBeDefined()
-        expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
+        expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
     it('defaults new installs to inferred categories with no manual selection', () => {
@@ -219,7 +221,7 @@ describe('Organizer Component UI Tests', () => {
 
         fireEvent.click(organizeButton)
 
-        expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
+        expect(screen.getByText(/Please enter your Google Gemini \/ AI Studio or OpenRouter API Key/i)).toBeDefined()
     })
 
     it('shows the matching hierarchy illustration for each subfolder setting', () => {
@@ -251,10 +253,34 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByRole('img', { name: /category and nested subfolder hierarchy/i }).getAttribute('src')).toContain('subfolder-hierarchy.png')
     })
 
+    it('detects and displays provider for both modern AQ and AIza Gemini keys as well as OpenRouter keys', () => {
+        render(<Organizer />)
+
+        const input = screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        
+        // Modern Gemini Auth Key (AQ...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'AQ.TestKey123' } })
+        })
+        expect(screen.getByText(/: Google Gemini/i)).toBeDefined()
+
+        // Standard Gemini Key (AIza...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'AIzaSyTestKey123' } })
+        })
+        expect(screen.getByText(/: Google Gemini/i)).toBeDefined()
+
+        // OpenRouter Key (sk-or-...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'sk-or-test-12345' } })
+        })
+        expect(screen.getByText(/: OpenRouter/i)).toBeDefined()
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 
-        const input = screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        const input = screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)
         act(() => {
             fireEvent.change(input, { target: { value: 'sk-or-test-12345' } })
         })
@@ -1703,6 +1729,116 @@ describe('Input Bookmarks card', () => {
         expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
             expect.objectContaining({ filename: 'b.html' })
         )
+    })
+
+    it('renders list of multiple saved input files with Download, Re-organize, and Delete options', async () => {
+        chromeWith({})
+        const multiFiles = [
+            { id: 'file-1', filename: 'work_bookmarks.html', count: 120, savedAt: 1757000000000, dateSpan: '2023 – 2024' },
+            { id: 'file-2', filename: 'personal_bookmarks.html', count: 45, savedAt: 1756900000000, dateSpan: '2022 – 2023' }
+        ]
+        inputService.listInputBookmarkFiles.mockResolvedValue(multiFiles)
+        const { container, getByText, getByLabelText } = render(<Organizer />)
+
+        await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
+        // Primary card displays latest (work_bookmarks.html)
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('work_bookmarks.html')
+
+        // Details drawer displays all saved files
+        expect(container.querySelector('.previous-inputs')).not.toBeNull()
+        expect(getByText('All saved input files (2)')).toBeTruthy()
+        expect(container.querySelector('.previous-inputs').textContent).toContain('personal_bookmarks.html')
+
+        // Each saved file has download, re-organize, and delete controls
+        expect(getByLabelText('Download personal_bookmarks.html')).toBeTruthy()
+        expect(getByLabelText('Re-organize personal_bookmarks.html')).toBeTruthy()
+        expect(getByLabelText('Delete personal_bookmarks.html')).toBeTruthy()
+    })
+
+    it('downloads and re-organizes specific input files from history list', async () => {
+        chromeWith({})
+        const file1 = { id: 'file-1', filename: 'work.html', count: 10, savedAt: 1757000000000 }
+        const file2 = { id: 'file-2', filename: 'archive.html', count: 20, savedAt: 1756900000000 }
+        inputService.listInputBookmarkFiles.mockResolvedValue([file1, file2])
+        inputService.getInputBookmarkHtml.mockResolvedValue('<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><p><DT><A HREF="https://test.com">Test</A></DL><p>')
+
+        const { container, getByLabelText } = render(<Organizer />)
+        await waitFor(() => expect(container.querySelector('.previous-inputs')).not.toBeNull())
+
+        // Download specific file
+        fireEvent.click(getByLabelText('Download archive.html'))
+        expect(inputService.downloadInputBookmarkFile).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'file-2', filename: 'archive.html' })
+        )
+
+        // Re-organize specific file
+        fireEvent.click(getByLabelText('Re-organize archive.html'))
+        await waitFor(() => expect(inputService.getInputBookmarkHtml).toHaveBeenCalledWith('file-2'))
+    })
+
+    it('deletes an individual input file from the history list', async () => {
+        chromeWith({})
+        const file1 = { id: 'file-1', filename: 'keep.html', count: 10, savedAt: 1757000000000 }
+        const file2 = { id: 'file-2', filename: 'delete_me.html', count: 5, savedAt: 1756900000000 }
+        inputService.listInputBookmarkFiles.mockResolvedValue([file1, file2])
+        inputService.removeInputBookmarkFile.mockResolvedValue([file1])
+
+        const { container, getByLabelText } = render(<Organizer />)
+        await waitFor(() => expect(container.querySelector('.previous-inputs')).not.toBeNull())
+
+        fireEvent.click(getByLabelText('Delete delete_me.html'))
+        await waitFor(() => expect(inputService.removeInputBookmarkFile).toHaveBeenCalledWith('file-2'))
+    })
+
+    it('clears all saved input files after confirmation', async () => {
+        chromeWith({})
+        const file1 = { id: 'file-1', filename: 'file1.html', count: 10, savedAt: 1757000000000 }
+        const file2 = { id: 'file-2', filename: 'file2.html', count: 20, savedAt: 1756900000000 }
+        inputService.listInputBookmarkFiles.mockResolvedValue([file1, file2])
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+        const { container, getByText } = render(<Organizer />)
+        await waitFor(() => expect(container.querySelector('.previous-inputs')).not.toBeNull())
+
+        fireEvent.click(getByText('Clear all saved input files'))
+        expect(window.confirm).toHaveBeenCalled()
+        await waitFor(() => expect(inputService.clearAllInputBookmarkFiles).toHaveBeenCalled())
+        expect(container.querySelector('.input-bookmarks-card')).toBeNull()
+        expect(container.querySelector('.previous-inputs')).toBeNull()
+    })
+
+    it('persists the input bookmarks card on the completion / downloadable page when run completes', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-12345')
+        const file1 = { id: 'file-1', filename: 'input_to_keep.html', count: 50, savedAt: 1757000000000 }
+        inputService.listInputBookmarkFiles.mockResolvedValue([file1])
+        OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+            this.start = vi.fn(async () => {
+                act(() => {
+                    onProgress({ status: 'done', message: 'Complete!' })
+                })
+                const results = [{ title: 'Item 1', url: 'https://example.com/1', dateAdded: 1788489600000 }]
+                results.stats = { total: 1, categoriesCount: 1 }
+                return results
+            })
+            this.cancel = vi.fn()
+        })
+        chromeWith({})
+
+        const { container } = render(<Organizer />)
+        await waitFor(() => expect(container.querySelector('.input-bookmarks-card')).not.toBeNull())
+
+        const startButton = screen.getByRole('button', { name: /Organize My Bookmarks/i })
+        act(() => {
+            fireEvent.click(startButton)
+        })
+
+        await waitFor(() => {
+            expect(screen.getByText(/All Done! Check your "AI Organized Bookmarks/i)).toBeDefined()
+        })
+
+        // On the complete screen, the input bookmarks card remains visible
+        expect(container.querySelector('.input-bookmarks-card')).not.toBeNull()
+        expect(container.querySelector('.input-bookmarks-card').textContent).toContain('input_to_keep.html')
     })
 })
 
