@@ -1187,6 +1187,17 @@ describe('native Gemini response path', () => {
         expect(body.system_instruction.parts[0].text).toMatch(/information architect/)
     })
 
+    it('routes modern AQ auth keys to native Gemini endpoint with header and key param', async () => {
+        const AQ_KEY = 'AQ.AbCdEf1234567890'
+        global.fetch = vi.fn(async () => geminiResponse([JSON.stringify(healthySchema)]))
+
+        await generateSchema(manyBookmarks, AQ_KEY, ['Tech'], 'google/gemini-3.1-flash-lite', 'medium')
+
+        const [url, options] = global.fetch.mock.calls[0]
+        expect(url).toContain('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=' + encodeURIComponent(AQ_KEY))
+        expect(options.headers['x-goog-api-key']).toBe(AQ_KEY)
+    })
+
     it('never salvages a classification batch cut off at MAX_TOKENS', async () => {
         vi.useFakeTimers()
 
