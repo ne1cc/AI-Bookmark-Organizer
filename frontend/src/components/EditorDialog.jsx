@@ -6,11 +6,16 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([di
 // whatever opened it, and Escape / Discard ask once before throwing unsaved edits away.
 export default function EditorDialog({ title, summary, dirty, saveLabel = 'Save', saveDisabled = false, error, onSave, onDiscard, children }) {
     const dialogRef = useRef(null)
+    const discardRef = useRef()
 
     const requestDiscard = useCallback(() => {
         if (dirty && !window.confirm('Discard your changes?')) return
         onDiscard()
     }, [dirty, onDiscard])
+
+    useEffect(() => {
+        discardRef.current = requestDiscard
+    }, [requestDiscard])
 
     useEffect(() => {
         const opener = document.activeElement
@@ -19,25 +24,34 @@ export default function EditorDialog({ title, summary, dirty, saveLabel = 'Save'
         return () => { if (opener && typeof opener.focus === 'function') opener.focus() }
     }, [])
 
-    const onKeyDown = (event) => {
-        if (event.key === 'Escape') {
-            event.stopPropagation()
-            requestDiscard()
-            return
+    useEffect(() => {
+        const onDocumentKeyDown = (event) => {
+            const dialog = dialogRef.current
+            if (!dialog) return
+            if (event.key === 'Escape') {
+                event.preventDefault()
+                discardRef.current()
+                return
+            }
+            if (event.key !== 'Tab') return
+            const focusable = [...dialog.querySelectorAll(FOCUSABLE)]
+            if (focusable.length === 0) return
+            const first = focusable[0]
+            const last = focusable[focusable.length - 1]
+            if (!dialog.contains(document.activeElement)) {
+                event.preventDefault()
+                ;(event.shiftKey ? last : first).focus()
+            } else if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault()
+                last.focus()
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault()
+                first.focus()
+            }
         }
-        if (event.key !== 'Tab') return
-        const focusable = [...dialogRef.current.querySelectorAll(FOCUSABLE)]
-        if (focusable.length === 0) return
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        if (event.shiftKey && document.activeElement === first) {
-            event.preventDefault()
-            last.focus()
-        } else if (!event.shiftKey && document.activeElement === last) {
-            event.preventDefault()
-            first.focus()
-        }
-    }
+        document.addEventListener('keydown', onDocumentKeyDown)
+        return () => document.removeEventListener('keydown', onDocumentKeyDown)
+    }, [])
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
@@ -46,7 +60,6 @@ export default function EditorDialog({ title, summary, dirty, saveLabel = 'Save'
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
-                onKeyDown={onKeyDown}
                 style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '640px', margin: '0.5rem', background: 'var(--surface-solid)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)' }}>

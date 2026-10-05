@@ -156,17 +156,58 @@ describe('PlanEditor', () => {
         opener.remove()
     })
 
-    it('keeps Tab inside the dialog', () => {
+    it('Tab on the last focusable wraps to the first', () => {
         setup()
         const dialog = screen.getByRole('dialog')
-        const save = screen.getByRole('button', { name: 'Save' })
-        save.focus()
         const buttons = dialog.querySelectorAll('button:not([disabled]), input, select')
         const last = buttons[buttons.length - 1]
+        const first = buttons[0]
         last.focus()
 
-        fireEvent.keyDown(last, { key: 'Tab' })
+        const proceeded = fireEvent.keyDown(document.activeElement, { key: 'Tab' })
+
+        expect(proceeded).toBe(false)
+        expect(document.activeElement).toBe(first)
+    })
+
+    it('Shift+Tab on the first focusable wraps to the last', () => {
+        setup()
+        const dialog = screen.getByRole('dialog')
+        const buttons = dialog.querySelectorAll('button:not([disabled]), input, select')
+        const first = buttons[0]
+        const last = buttons[buttons.length - 1]
+        first.focus()
+
+        const proceeded = fireEvent.keyDown(document.activeElement, { key: 'Tab', shiftKey: true })
+
+        expect(proceeded).toBe(false)
+        expect(document.activeElement).toBe(last)
+    })
+
+    it('Focus lost to body is pulled back in', () => {
+        setup()
+        const dialog = screen.getByRole('dialog')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
+        document.activeElement.blur()
+        expect(document.activeElement).toBe(document.body)
+
+        fireEvent.keyDown(document.body, { key: 'Tab' })
 
         expect(dialog.contains(document.activeElement)).toBe(true)
+    })
+
+    it('Escape with focus on body still asks to discard when dirty', () => {
+        const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+        const { onDiscard } = setup()
+
+        rename('Web', 'Frontend')
+        document.activeElement.blur()
+        expect(document.activeElement).toBe(document.body)
+
+        fireEvent.keyDown(document.body, { key: 'Escape' })
+
+        expect(confirm).toHaveBeenCalledTimes(1)
+        expect(onDiscard).not.toHaveBeenCalled()
     })
 })
