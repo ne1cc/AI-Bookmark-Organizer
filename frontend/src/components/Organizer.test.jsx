@@ -2048,4 +2048,87 @@ describe('Review folders (two-phase)', () => {
 
         expect((await screen.findByRole('alert')).textContent).toMatch(/no longer exists/i)
     })
+
+    it('keeps the card and says so when the decision cannot be handed to the worker', async () => {
+        const { listeners, mockPort } = connectedPanel()
+        render(<Organizer />)
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: planState() })) })
+        await screen.findByRole('region', { name: 'Proposed folder plan' })
+
+        mockPort.postMessage.mockImplementation(() => { throw new Error('Attempting to use a disconnected port object') })
+        fireEvent.click(screen.getByRole('button', { name: /Approve & organize/ }))
+
+        expect(screen.getByRole('region', { name: 'Proposed folder plan' })).toBeDefined()
+        expect(screen.getByText(/Lost contact with the background worker/)).toBeDefined()
+    })
+
+    describe('in-panel fallback (the worker never acknowledged the job)', () => {
+        const answers = []
+        let hold
+
+        const startFallbackRun = async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-fallback')
+            localStorage.setItem('reviewFolders', 'true')
+            answers.length = 0
+            OrganizerService.mockImplementation(function () {
+                this.isCancelled = false
+                this.cancel = vi.fn()
+                this.start = vi.fn(async () => {
+                    answers.push(await this.planReviewer({ categories: [{ name: 'Tech', sub_categories: ['Web'] }] }, null))
+                    answers.push(await this.resultReviewer([{ category: 'Tech', sub_category: 'Web', detail_category: null, count: 2 }], null))
+                    return []
+                })
+            })
+            const listeners = []
+            hold = {
+                listeners,
+                port: {
+                    postMessage: vi.fn(), // START_JOB vanishes: no JOB_ACK ever arrives
+                    onMessage: { addListener: vi.fn((fn) => listeners.push(fn)), removeListener: vi.fn() },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+            }
+            global.chrome = {
+                runtime: { connect: vi.fn(() => hold.port) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() }
+                }
+            }
+            render(<Organizer />)
+            await act(async () => {
+                fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                await vi.advanceTimersByTimeAsync(2500)
+            })
+        }
+        const idleUpdate = () => act(() => { hold.listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: { id: null, status: 'idle', progress: 0, logs: [] } })) })
+
+        beforeEach(() => { vi.useFakeTimers() })
+        afterEach(() => { vi.useRealTimers() })
+
+        it('keeps the plan card when the worker answers with an idle state, then approves in the panel', async () => {
+            await startFallbackRun()
+            expect(screen.getByRole('region', { name: 'Proposed folder plan' })).toBeDefined()
+
+            idleUpdate()
+            expect(screen.getByRole('region', { name: 'Proposed folder plan' })).toBeDefined()
+
+            await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Approve & organize/ })) })
+            expect(answers[0]).toEqual({ decision: 'approve' })
+            expect(screen.queryByRole('region', { name: 'Proposed folder plan' })).toBeNull()
+        })
+
+        it('keeps the result card on an idle state, and Cancel answers the pending review', async () => {
+            await startFallbackRun()
+            await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Approve & organize/ })) })
+            expect(screen.getByRole('region', { name: 'Organized folders ready for review' })).toBeDefined()
+
+            idleUpdate()
+            expect(screen.getByRole('region', { name: 'Organized folders ready for review' })).toBeDefined()
+
+            await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Cancel/i })) })
+            expect(answers[1]).toEqual({ decision: 'cancel' })
+        })
+    })
 })

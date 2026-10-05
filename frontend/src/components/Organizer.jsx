@@ -315,8 +315,10 @@ export default function Organizer({ theme = 'light' }) {
                 const state = msg.payload;
                 if (!state) return;
 
-                setPlanForReview(state.status === 'processing' ? (state.plan || null) : null);
-                setResultForReview(state.status === 'processing' ? (state.result || null) : null);
+                // An in-panel run (worker did not acknowledge) owns its review cards; the worker's idle
+                // updates must not clear them while the run still waits for an answer.
+                if (!planResolverRef.current) setPlanForReview(state.status === 'processing' ? (state.plan || null) : null);
+                if (!resultResolverRef.current) setResultForReview(state.status === 'processing' ? (state.result || null) : null);
 
                 if (state.status === 'processing') {
                     resultsRequestPendingRef.current = false
@@ -951,16 +953,23 @@ export default function Organizer({ theme = 'light' }) {
     const decideReview = useCallback((kind, decision, data = {}) => {
         const answer = { decision, ...data }
         const resolverRef = kind === 'plan' ? planResolverRef : resultResolverRef
-        if (kind === 'plan') setPlanForReview(null)
-        else setResultForReview(null)
+        const clearCard = () => (kind === 'plan' ? setPlanForReview(null) : setResultForReview(null))
         if (resolverRef.current) {
             const resolve = resolverRef.current
             resolverRef.current = null
+            clearCard()
             resolve(answer)
-        } else if (portRef.current) {
-            try { portRef.current.postMessage({ type: kind === 'plan' ? 'PLAN_DECISION' : 'RESULT_DECISION', payload: answer }) } catch {}
+            return
         }
-    }, [])
+        // Worker run: keep the card until the decision was actually handed over.
+        try {
+            if (!portRef.current) throw new Error('no port')
+            portRef.current.postMessage({ type: kind === 'plan' ? 'PLAN_DECISION' : 'RESULT_DECISION', payload: answer })
+            clearCard()
+        } catch {
+            addLog('Lost contact with the background worker. Reconnecting; try again in a moment.')
+        }
+    }, [addLog])
 
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
@@ -1312,6 +1321,10 @@ export default function Organizer({ theme = 'light' }) {
             setStatus('error');
         } finally {
             setIsCancelling(false);
+            // Edits saved for this run's review are stale once the run ends.
+            if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+                try { chrome.storage.session.remove(['reviewDraft']); } catch {}
+            }
         }
     }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, reviewFolders]);
 
