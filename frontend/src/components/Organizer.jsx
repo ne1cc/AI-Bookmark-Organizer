@@ -214,6 +214,8 @@ export default function Organizer({ theme = 'light' }) {
     const [reviewFolders, setReviewFolders] = useState(() => getStored('reviewFolders', false))
     const [planForReview, setPlanForReview] = useState(null) // { categories, error? } while the worker waits for a plan decision
     const planResolverRef = useRef(null)
+    const [resultForReview, setResultForReview] = useState(null) // { rows, error? } while the worker waits for a result decision
+    const resultResolverRef = useRef(null)
 
     // Clean messy or truncated titles with AI
     const [cleanTitles, setCleanTitles] = useState(() => getStored('cleanTitles', false))
@@ -314,6 +316,7 @@ export default function Organizer({ theme = 'light' }) {
                 if (!state) return;
 
                 setPlanForReview(state.status === 'processing' ? (state.plan || null) : null);
+                setResultForReview(state.status === 'processing' ? (state.result || null) : null);
 
                 if (state.status === 'processing') {
                     resultsRequestPendingRef.current = false
@@ -456,6 +459,7 @@ export default function Organizer({ theme = 'light' }) {
                         if (aj.status === 'processing') {
                             setStatus('processing');
                             if (aj.plan) setPlanForReview(aj.plan);
+                            if (aj.result) setResultForReview(aj.result);
                             if (typeof aj.progress === 'number') setProgress(Math.min(99, Math.max(0, aj.progress)));
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             if (aj.backgroundNotice !== undefined) setBackgroundNotice(aj.backgroundNotice);
@@ -946,20 +950,22 @@ export default function Organizer({ theme = 'light' }) {
     // Answer a review pause. In-panel runs resolve the waiting promise directly; worker runs get a port message.
     const decideReview = useCallback((kind, decision, data = {}) => {
         const answer = { decision, ...data }
+        const resolverRef = kind === 'plan' ? planResolverRef : resultResolverRef
         if (kind === 'plan') setPlanForReview(null)
-        const resolverRef = planResolverRef
+        else setResultForReview(null)
         if (resolverRef.current) {
             const resolve = resolverRef.current
             resolverRef.current = null
             resolve(answer)
         } else if (portRef.current) {
-            try { portRef.current.postMessage({ type: 'PLAN_DECISION', payload: answer }) } catch {}
+            try { portRef.current.postMessage({ type: kind === 'plan' ? 'PLAN_DECISION' : 'RESULT_DECISION', payload: answer }) } catch {}
         }
     }, [])
 
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
         if (planResolverRef.current) decideReview('plan', 'cancel')
+        if (resultResolverRef.current) decideReview('result', 'cancel')
         resultsRequestPendingRef.current = false
         if (portRef.current) {
             try {
@@ -1255,6 +1261,11 @@ export default function Organizer({ theme = 'light' }) {
                         ...(error ? { error } : {})
                     })
                     addLog('Folder plan ready — review it, then approve to start organizing.')
+                })
+                organizerRef.current.resultReviewer = (rows, error) => new Promise((resolve) => {
+                    resultResolverRef.current = resolve
+                    setResultForReview({ rows, ...(error ? { error } : {}) })
+                    addLog('Organized folders ready — review them, then save the results.')
                 })
             }
 
@@ -2724,7 +2735,7 @@ export default function Organizer({ theme = 'light' }) {
                                 <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
                             </div>
                         )}
-                        <ReviewPanel plan={planForReview} result={null} onDecide={decideReview} />
+                        <ReviewPanel plan={planForReview} result={resultForReview} onDecide={decideReview} />
                         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
                             <button
                                 className="btn-primary btn-in-progress"
@@ -2736,8 +2747,8 @@ export default function Organizer({ theme = 'light' }) {
                                     cursor: 'wait'
                                 }}
                             >
-                                {!planForReview && <Loader2 size={18} className="spin-icon" />}
-                                <span>{planForReview ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
+                                {!(planForReview || resultForReview) && <Loader2 size={18} className="spin-icon" />}
+                                <span>{(planForReview || resultForReview) ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
                             </button>
                             <button
                                 type="button"

@@ -1982,4 +1982,70 @@ describe('Review folders (two-phase)', () => {
 
         expect(await screen.findByRole('region', { name: 'Proposed folder plan' })).toBeDefined()
     })
+
+    const resultState = (extra = {}) => ({
+        id: 'job_1',
+        status: 'processing',
+        progress: 80,
+        logs: [],
+        result: {
+            rows: [
+                { category: 'Tech', sub_category: 'Web', detail_category: 'Frameworks', count: 2 },
+                { category: 'Tech', sub_category: 'Data', detail_category: null, count: 3 },
+                { category: 'Travel', sub_category: 'Flights', detail_category: null, count: 4 }
+            ]
+        },
+        ...extra
+    })
+
+    it('shows the finished folders from the worker and relays the decision', async () => {
+        const { listeners, mockPort } = connectedPanel()
+        render(<Organizer />)
+
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: resultState() })) })
+
+        const card = await screen.findByRole('region', { name: 'Organized folders ready for review' })
+        expect(card.textContent).toMatch(/Tech — 5 bookmarks/)
+        expect(screen.getByText('Waiting for your approval')).toBeDefined()
+        fireEvent.click(screen.getByRole('button', { name: 'Save results' }))
+
+        expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'RESULT_DECISION', payload: { decision: 'approve' } })
+        expect(screen.queryByRole('region', { name: 'Organized folders ready for review' })).toBeNull()
+    })
+
+    it('sends the recorded edits with the decision', async () => {
+        const { listeners, mockPort } = connectedPanel()
+        render(<Organizer />)
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: resultState() })) })
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit folders' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
+        const input = screen.getByRole('textbox', { name: 'New name for Travel' })
+        fireEvent.change(input, { target: { value: 'Trips' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save results' }))
+
+        expect(mockPort.postMessage).toHaveBeenCalledWith({
+            type: 'RESULT_DECISION',
+            payload: { decision: 'approve', ops: [{ op: 'rename', path: ['Travel'], to: 'Trips' }] }
+        })
+    })
+
+    it('restores the result card from the session snapshot after the panel is reopened', async () => {
+        connectedPanel({ activeJobState: resultState() })
+        render(<Organizer />)
+
+        expect(await screen.findByRole('region', { name: 'Organized folders ready for review' })).toBeDefined()
+    })
+
+    it('shows the reason when the worker rejected the edits', async () => {
+        const { listeners } = connectedPanel()
+        render(<Organizer />)
+        const state = resultState()
+
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: { ...state, result: { ...state.result, error: 'The folder "Nope" no longer exists.' } } })) })
+
+        expect((await screen.findByRole('alert')).textContent).toMatch(/no longer exists/i)
+    })
 })
