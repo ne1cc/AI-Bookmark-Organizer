@@ -77,7 +77,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         expect(screen.getByText(/Gemini AI/i)).toBeDefined()
-        expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
+        expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
     it('defaults new installs to inferred categories with no manual selection', () => {
@@ -254,7 +254,7 @@ describe('Organizer Component UI Tests', () => {
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 
-        const input = screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        const input = screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
         act(() => {
             fireEvent.change(input, { target: { value: 'sk-or-test-12345' } })
         })
