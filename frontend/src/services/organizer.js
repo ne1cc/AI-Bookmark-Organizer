@@ -1,5 +1,5 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, normalizeSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey, isExemptCategory } from './reconcile';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
@@ -1491,17 +1491,32 @@ export class OrganizerService {
         return finalResults;
     }
 
-    // Phase 1 ends here: the user can approve the proposed folders, ask for a new
-    // plan, or cancel before any bookmark is classified.
+    // Phase 1 ends here: the user can approve the proposed folders (optionally edited),
+    // ask for a new plan, or cancel before any bookmark is classified. An approved plan
+    // is binding: reconcile keeps every folder in it.
     async reviewPlan(links, schema) {
         if (!this.planReviewer || !schema) return schema;
+        let current = schema;
+        let error = null;
         for (;;) {
-            const decision = await this.planReviewer(schema);
-            if (this.isCancelled || decision === 'cancel') return this.cancelled();
-            if (decision !== 'regenerate') return schema;
-            this.onProgress({ status: 'processing', message: 'Regenerating the folder plan...', percent: 5 });
-            schema = await this.designSchema(links);
-            if (!schema) return schema;
+            const answer = await this.planReviewer(current, error);
+            error = null;
+            if (this.isCancelled || answer?.decision === 'cancel') return this.cancelled();
+            if (answer?.decision === 'regenerate') {
+                this.onProgress({ status: 'processing', message: 'Regenerating the folder plan...', percent: 5 });
+                current = await this.designSchema(links);
+                if (!current) return current;
+                continue;
+            }
+            let approved = current;
+            if (answer?.plan) {
+                approved = normalizeSchema(answer.plan);
+                if (approved.categories.length === 0) {
+                    error = 'The plan needs at least one category.';
+                    continue;
+                }
+            }
+            return { ...approved, binding: true };
         }
     }
 
