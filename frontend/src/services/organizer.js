@@ -1,7 +1,8 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, normalizeSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey, isExemptCategory } from './reconcile';
+import { buildRows, applyOps, detailStats } from './resultEditor';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 import { isAlphaOrder, isAlphaDescOrder, sortFlat, sortWithinFolders } from './sorting';
@@ -17,6 +18,37 @@ const CLASSIFY_CONCURRENCY = 4;
 
 const PARTIAL_CANCEL_MESSAGE = 'Cancelled — bookmarks partially reorganized. Run again to finish.';
 const HALT_CANCEL_MESSAGE = 'Cancelled — halting operations.';
+
+const PLAN_DECISIONS = new Set(['approve', 'regenerate', 'cancel']);
+const RESULT_DECISIONS = new Set(['approve', 'cancel']);
+
+// Replays applied result-review edits over category names: new name -> name before the review.
+// A category merged into another disappears.
+function aliasCategories(ops) {
+    const aliases = new Map();
+    for (const { op, path, to } of ops) {
+        if (path.length !== 1 || (op !== 'rename' && op !== 'merge')) continue;
+        const original = aliases.get(path[0]) ?? path[0];
+        aliases.delete(path[0]);
+        if (op === 'rename') aliases.set(to.trim(), original);
+    }
+    return aliases;
+}
+
+// Schema order first; a category renamed at the result review takes its original's place,
+// and any other new name follows in first-seen order. Entries are ordered by rank because
+// the browser reorders category folders by key order.
+function rankCategories(categories, records, aliases) {
+    const schemaRank = new Map(categories.map((category, index) => [category.name, index]));
+    const rank = new Map(schemaRank);
+    let next = schemaRank.size;
+    for (const { category } of records) {
+        const aliased = schemaRank.get(aliases.get(category));
+        if (aliased !== undefined) rank.set(category, aliased);
+        else if (!rank.has(category)) rank.set(category, next++);
+    }
+    return new Map([...rank].sort((a, b) => a[1] - b[1]));
+}
 
 const sliceBatches = (items, size) => {
     const batches = [];
@@ -328,6 +360,14 @@ export class OrganizerService {
         };
         this.failedMoves = [];
         this.snapshotProvider = null;
+        // Optional pause between planning and applying: (schema, error | null) resolves
+        // { decision: 'approve' | 'regenerate' | 'cancel', plan? } (plan: the edited plan).
+        this.planReviewer = null;
+        // Optional pause before sorting and writing: (rows, error | null) resolves
+        // { decision: 'approve' | 'cancel', ops? } (ops: edits to apply to the folders).
+        this.resultReviewer = null;
+        // Category renames made at the result review: new name -> name in the schema.
+        this.categoryAliases = new Map();
     }
 
     cancel() {
@@ -1488,9 +1528,72 @@ export class OrganizerService {
         return finalResults;
     }
 
+    // Phase 1 ends here: the user can approve the proposed folders (optionally edited),
+    // ask for a new plan, or cancel before any bookmark is classified. An approved plan
+    // is binding: reconcile keeps every folder in it.
+    async reviewPlan(links, schema) {
+        if (!this.planReviewer || !schema) return schema;
+        let current = schema;
+        let error = null;
+        for (;;) {
+            const answer = await this.planReviewer(current, error);
+            error = null;
+            // Fail closed: anything but a known decision stops the run.
+            if (this.isCancelled || !PLAN_DECISIONS.has(answer?.decision) || answer.decision === 'cancel') return this.cancelled();
+            if (answer?.decision === 'regenerate') {
+                this.onProgress({ status: 'processing', message: 'Regenerating the folder plan...', percent: 5 });
+                current = await this.designSchema(links);
+                if (!current) return current;
+                continue;
+            }
+            let approved = current;
+            if (answer?.plan) {
+                approved = normalizeSchema(answer.plan);
+                if (approved.categories.length === 0) {
+                    error = 'The plan needs at least one category.';
+                    continue;
+                }
+            }
+            return { ...approved, binding: true };
+        }
+    }
+
+    // Phase 2 ends here: every folder (all three levels) now exists, and the user can edit them,
+    // with their bookmarks, before anything is sorted and written.
+    async reviewResult(classified) {
+        if (!this.resultReviewer) return classified;
+        let error = null;
+        for (;;) {
+            const answer = await this.resultReviewer(buildRows(classified), error);
+            error = null;
+            // Fail closed: anything but a known decision stops the run.
+            if (this.isCancelled || !RESULT_DECISIONS.has(answer?.decision) || answer.decision === 'cancel') return this.cancelled();
+            const ops = Array.isArray(answer.ops) ? answer.ops : [];
+            if (ops.length === 0) return classified;
+            let applied;
+            try {
+                applied = applyOps(classified, ops);
+            } catch {
+                applied = { error: 'Those edits could not be applied.' };
+            }
+            if (applied.error) {
+                error = applied.error;
+                continue;
+            }
+            const { detailFolders, detailedSubcategories } = detailStats(applied.records);
+            this.stats.detailFoldersCount = detailFolders;
+            this.stats.detailedSubcategories = detailedSubcategories;
+            this.categoryAliases = aliasCategories(ops);
+            this.onProgress({ status: 'info', message: `Applied ${ops.length} edit${ops.length === 1 ? '' : 's'} to the folder structure.` });
+            return applied.records;
+        }
+    }
+
     async runAI({ links, duplicatesRemoved, isBrowserMode }) {
-        const schema = await this.designSchema(links);
+        let schema = await this.designSchema(links);
         // null means cancelled; an undefined schema from a mocked generator must flow through.
+        if (schema === null) return null;
+        schema = await this.reviewPlan(links, schema);
         if (schema === null) return null;
 
         // All bookmarks are classified directly, without probing URL reachability: external
@@ -1504,11 +1607,13 @@ export class OrganizerService {
         if (!classified) return null;
         classified = await this.enrichDetails(classified);
         if (!classified) return null;
+        classified = await this.reviewResult(classified);
+        if (!classified) return null;
 
         // Creation order determines display order in Chrome, so sorting the
         // results here controls the order of folders and bookmarks within them.
-        const categoryRank = new Map((schema || buildAuthoritativeSchema(this.categories)).categories
-            .map((category, index) => [category.name, index]));
+        const categoryRank = rankCategories((schema || buildAuthoritativeSchema(this.categories)).categories,
+            classified, this.categoryAliases);
         const finalResults = this.sortAndStrip(classified, categoryRank);
 
         if (this.isCancelled) return this.cancelled();

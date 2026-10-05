@@ -74,6 +74,44 @@ describe('Background Service Worker Entry Point', () => {
         );
     });
 
+    it('notifies when a review is waiting and the side panel is closed', () => {
+        expect(getConnectedPortCount()).toBe(0);
+
+        jobRunner.notify('review', { kind: 'plan' });
+        jobRunner.notify('review', { kind: 'result' });
+
+        expect(globalThis.chrome.notifications.create).toHaveBeenNthCalledWith(
+            1,
+            'organizer-job-review',
+            expect.objectContaining({ title: 'AI Bookmark Organizer', message: 'Your folder plan is ready for review.', priority: 2 }),
+            expect.any(Function)
+        );
+        expect(globalThis.chrome.notifications.create).toHaveBeenNthCalledWith(
+            2,
+            'organizer-job-review',
+            expect.objectContaining({ message: 'Your organized folders are ready to review.' }),
+            expect.any(Function)
+        );
+    });
+
+    it('does not notify about a waiting review while a side panel is connected', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        onConnectHandler({
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        });
+
+        freshRunner.notify('review', { kind: 'plan' });
+
+        expect(globalThis.chrome.notifications.create).not.toHaveBeenCalled();
+    });
+
     it('opens side panel when organizer notification is clicked', () => {
         // Re-trigger notification click handler logic
         if (typeof globalThis.chrome.notifications.onClicked.addListener === 'function') {
@@ -135,6 +173,55 @@ describe('Background Service Worker Entry Point', () => {
         });
 
         startSpy.mockRestore();
+    });
+
+    it('routes PLAN_DECISION to the job runner with the edited plan', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        const handler = port.onMessage.addListener.mock.calls[0][0];
+        const planSpy = vi.spyOn(freshRunner, 'resolvePlan').mockImplementation(() => {});
+
+        handler({ type: 'PLAN_DECISION', payload: { decision: 'approve', plan: { categories: [] } } });
+        handler({ type: 'PLAN_DECISION', payload: { decision: 'regenerate' } });
+
+        expect(planSpy).toHaveBeenNthCalledWith(1, 'approve', { categories: [] });
+        expect(planSpy).toHaveBeenNthCalledWith(2, 'regenerate', undefined);
+    });
+
+    it('routes RESULT_DECISION to the job runner with the recorded operations', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        const handler = port.onMessage.addListener.mock.calls[0][0];
+        const resultSpy = vi.spyOn(freshRunner, 'resolveResult').mockImplementation(() => {});
+
+        const ops = [{ op: 'delete', path: ['Tech', 'Web'] }];
+        handler({ type: 'RESULT_DECISION', payload: { decision: 'approve', ops } });
+        handler({ type: 'RESULT_DECISION', payload: { decision: 'cancel' } });
+
+        expect(resultSpy).toHaveBeenNthCalledWith(1, 'approve', ops);
+        expect(resultSpy).toHaveBeenNthCalledWith(2, 'cancel', undefined);
     });
 
     it('GET_RESULTS returns completed results with optional detail assignments without writing them to storage', async () => {

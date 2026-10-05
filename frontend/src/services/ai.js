@@ -790,17 +790,11 @@ function isInferredFillerCategory(name) {
 // subcategory per category is a legitimate result, not a degenerate one.
 const TINY_COLLECTION_THRESHOLD = 40;
 
-// Validate a model-generated schema and return a cleaned copy alongside any
-// reasons it is unusable. Normalizing here means callers (and the classifier)
-// never see filler subcategories or case-duplicate folder names.
-export function validateSchema(schema, { bookmarkCount = Infinity, expectedCategories = null } = {}) {
-    const issues = [];
-    const rawCategories = Array.isArray(schema?.categories) ? schema.categories : null;
-
-    if (!rawCategories || rawCategories.length === 0) {
-        return { ok: false, issues: ['the response contained no categories'], schema: { categories: [] } };
-    }
-
+// Trim and dedupe a schema, dropping filler subfolders and subfolders that echo
+// their category. Makes no judgement about whether the structure is rich enough:
+// the AI path adds those checks in `validateSchema`; a user-edited plan does not.
+export function normalizeSchema(schema) {
+    const rawCategories = Array.isArray(schema?.categories) ? schema.categories : [];
     const categories = [];
     const seenCategories = new Set();
 
@@ -828,6 +822,21 @@ export function validateSchema(schema, { bookmarkCount = Infinity, expectedCateg
 
         categories.push({ name, sub_categories });
     }
+
+    return { categories };
+}
+
+// Validate a model-generated schema and return a cleaned copy alongside any
+// reasons it is unusable. Normalizing here means callers (and the classifier)
+// never see filler subcategories or case-duplicate folder names.
+export function validateSchema(schema, { bookmarkCount = Infinity, expectedCategories = null } = {}) {
+    const issues = [];
+
+    if (!Array.isArray(schema?.categories) || schema.categories.length === 0) {
+        return { ok: false, issues: ['the response contained no categories'], schema: { categories: [] } };
+    }
+
+    const { categories } = normalizeSchema(schema);
 
     if (categories.length === 0) {
         return { ok: false, issues: ['no category had a usable name'], schema: { categories: [] } };

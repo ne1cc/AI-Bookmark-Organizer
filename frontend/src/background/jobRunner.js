@@ -24,7 +24,9 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null,
+            result: null
         };
         this.organizer = null;
         this.keepAliveTimer = null;
@@ -32,6 +34,7 @@ export class BackgroundJobRunner {
         this.cachedResults = null;
         this.persistJobState = true;
         this.stateFlushTimer = null;
+        this.pendingReview = null;
     }
 
     getState() {
@@ -84,6 +87,13 @@ export class BackgroundJobRunner {
             this.stateFlushTimer = null;
         }
         this.persistSessionSnapshot();
+        if (TERMINAL_STATUSES.has(this.currentJob.status)) {
+            if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+                try {
+                    chrome.storage.session.remove(['reviewDraft']);
+                } catch {}
+            }
+        }
         this.notify('status', this.getState());
     }
 
@@ -126,7 +136,9 @@ export class BackgroundJobRunner {
                         errorMsg: this.currentJob.errorMsg,
                         stats: this.currentJob.stats,
                         count: this.currentJob.count,
-                        completedAt: this.currentJob.completedAt
+                        completedAt: this.currentJob.completedAt,
+                        plan: this.currentJob.plan,
+                        result: this.currentJob.result
                     }
                 });
             } catch {
@@ -157,15 +169,25 @@ export class BackgroundJobRunner {
             dateSortOrder,
             schemaSortOrder,
             inferCategories = true,
-            autoImport = true
+            autoImport = true,
+            reviewFolders = false
         } = config;
         this.persistJobState = flatDateSort || !inferCategories;
+
+        // A review still waiting for the previous job would hold its organizer forever.
+        if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
 
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.remove(['organizedData']);
+            } catch {}
+        }
+        // Edits saved for an earlier run's review must not leak into this one.
+        if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+            try {
+                chrome.storage.session.remove(['reviewDraft']);
             } catch {}
         }
         this.currentJob = {
@@ -178,7 +200,9 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null,
+            result: null
         };
 
         this.startKeepAlive();
@@ -272,11 +296,25 @@ export class BackgroundJobRunner {
             parsedBookmarks ? () => {} : inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
+        if (reviewFolders && !flatDateSort) {
+            this.organizer.planReviewer = (schema, error) => this.awaitReview('plan', jobId, {
+                categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] })),
+                ...(error ? { error } : {})
+            });
+            this.organizer.resultReviewer = (rows, error) => this.awaitReview('result', jobId, {
+                rows,
+                ...(error ? { error } : {})
+            });
+        }
 
+        const organizer = this.organizer;
         try {
-            const results = await this.organizer.start(parsedBookmarks);
+            const results = await organizer.start(parsedBookmarks);
 
-            if (this.organizer.isCancelled || !results) {
+            // A newer job replaced this one while it waited (its review was released): leave the new job alone.
+            if (this.organizer !== organizer) return null;
+
+            if (organizer.isCancelled || !results) {
                 this.currentJob.status = 'idle';
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
@@ -344,7 +382,8 @@ export class BackgroundJobRunner {
 
             return results;
         } catch (err) {
-            if (this.organizer?.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
+            if (this.organizer !== organizer) return null;
+            if (organizer.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
                 this.currentJob.status = 'idle';
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
@@ -363,7 +402,47 @@ export class BackgroundJobRunner {
         }
     }
 
+    // Review gates (plan, result): publish what to review on `currentJob[kind]` and wait for the
+    // panel's decision. The job stays 'processing' while waiting, so every existing panel path
+    // (restore, cancel, handshake) keeps working; a non-null `plan` / `result` marks the wait.
+    awaitReview(kind, jobId, payload) {
+        return new Promise((resolve) => {
+            this.pendingReview = { kind, jobId, resolve };
+            this.currentJob[kind] = payload;
+            this.currentJob.backgroundNotice = '';
+            this.addLog(kind === 'plan'
+                ? 'Folder plan ready — review it, then approve to start organizing.'
+                : 'Organized folders ready — review them, then save the results.');
+            this.flushState();
+            this.notify('review', { kind });
+        });
+    }
+
+    resolveReview(kind, decision, data = {}) {
+        const pending = this.pendingReview;
+        if (!['approve', 'regenerate', 'cancel'].includes(decision)) return;
+        if (!pending || pending.kind !== kind || pending.jobId !== this.currentJob.id) return;
+        if (kind === 'result' && decision === 'regenerate') return;
+        this.pendingReview = null;
+        this.currentJob[kind] = null;
+        const label = kind === 'plan' ? 'Plan' : 'Result review';
+        this.addLog(decision === 'regenerate'
+            ? 'Plan rejected — generating a new one.'
+            : decision === 'approve' ? `${label} approved.` : `${label} cancelled.`);
+        this.flushState();
+        pending.resolve({ decision, ...data });
+    }
+
+    resolvePlan(decision, plan) {
+        this.resolveReview('plan', decision, plan ? { plan } : {});
+    }
+
+    resolveResult(decision, ops) {
+        this.resolveReview('result', decision, Array.isArray(ops) ? { ops } : {});
+    }
+
     cancelJob() {
+        if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
         if (this.organizer) {
             this.organizer.cancel();
         }
@@ -389,7 +468,9 @@ export class BackgroundJobRunner {
             errorMsg: '',
             stats: null,
             count: null,
-            completedAt: null
+            completedAt: null,
+            plan: null,
+            result: null
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
