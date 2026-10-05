@@ -3,7 +3,7 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
-import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET } from '../services/ai'
+import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET, detectProvider } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
@@ -144,7 +144,7 @@ export default function Organizer({ theme = 'light' }) {
     })
 
     // Auto-detect provider from key format
-    const provider = useMemo(() => (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter', [apiKey])
+    const provider = useMemo(() => detectProvider(apiKey), [apiKey])
 
     // Models supported for Google Gemini
     const models = useMemo(() => [
@@ -981,7 +981,7 @@ export default function Organizer({ theme = 'light' }) {
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;
         if (requiresApiKey && !apiKey) {
-            setErrorMsg(`Please enter your Google AI Studio or OpenRouter API Key.`);
+            setErrorMsg(`Please enter your Google Gemini / AI Studio or OpenRouter API Key.`);
             return;
         }
         if (!flatDateSort && !inferCategories && categories.length === 0) {
@@ -1274,12 +1274,12 @@ export default function Organizer({ theme = 'light' }) {
                 <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
                     API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
                     <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google AI Studio or OpenRouter'}
+                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google Gemini (AI Studio) or OpenRouter'}
                     </span>
                 </label>
                 <input
                     type="password"
-                    placeholder="AIza... (Google AI Studio) or sk-or-... (OpenRouter)"
+                    placeholder="AIza... or AQ... (Google AI Studio / Gemini) or sk-or-... (OpenRouter)"
                     value={apiKey}
                     onChange={(e) => handleApiKeyChange(e.target.value)}
                     style={{
@@ -1323,7 +1323,7 @@ export default function Organizer({ theme = 'light' }) {
                         onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
                         onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
                     >
-                        <span>Get Google AI Studio Key (Free)</span>
+                        <span>Get Gemini API Key (Google AI Studio - Free)</span>
                         <ExternalLink size={11} />
                     </a>
                     <a
@@ -1360,9 +1360,9 @@ export default function Organizer({ theme = 'light' }) {
                         <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
                         <span>
                             Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
-                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
+                            <strong>Google AI Studio / Gemini</strong> (free, starts with <code>AIza</code> or <code>AQ</code>) or{' '}
                             <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
-                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.
+                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}` : ''}.
                         </span>
                     </p>
                 </div>

@@ -268,10 +268,20 @@ function parseModelResponse(data, { salvageTruncated = false } = {}) {
 }
 
 // The same single API-key field accepts keys from either provider. Google AI
-// Studio keys start with "AIza"; everything else (OpenRouter "sk-or-...",
-// OpenAI-style "sk-...") is treated as OpenRouter.
+// Studio / Gemini keys start with "AIza" (standard) or "AQ" (authorization keys);
+// everything else (OpenRouter "sk-or-...", OpenAI-style "sk-...") is treated as OpenRouter.
 export function detectProvider(apiKey) {
-    return (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter';
+    const key = (apiKey || '').trim();
+    if (
+        key.startsWith('AIza') ||
+        key.startsWith('aiza') ||
+        key.startsWith('AQ') ||
+        key.startsWith('aq') ||
+        key.toLowerCase().startsWith('gemini')
+    ) {
+        return 'gemini';
+    }
+    return 'openrouter';
 }
 
 // Model ids in the UI are OpenRouter-namespaced ("google/gemini-3.1-flash-lite").
@@ -378,11 +388,15 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
 // parsed JSON object. Throws errors tagged with statusCode/retryable so the
 // shared withRetry wrapper can decide whether to back off and try again.
 async function callModel(apiKey, model, systemContent, userContent, { temperature, maxTokens, salvageTruncated = false }, isCancelled = null) {
-    if (detectProvider(apiKey) === 'gemini') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const key = (apiKey || '').trim();
+    if (detectProvider(key) === 'gemini') {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent?key=${encodeURIComponent(key)}`;
         const data = await fetchWithTimeout(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": key
+            },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemContent }] },
                 contents: [{ role: "user", parts: [{ text: userContent }] }],
@@ -399,7 +413,7 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
 
     const data = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-        headers: OR_HEADERS(apiKey),
+        headers: OR_HEADERS(key),
         body: JSON.stringify({
             model,
             temperature,

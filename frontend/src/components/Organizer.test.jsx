@@ -77,7 +77,7 @@ describe('Organizer Component UI Tests', () => {
         render(<Organizer />)
 
         expect(screen.getByText(/Gemini AI/i)).toBeDefined()
-        expect(screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
+        expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
     it('defaults new installs to inferred categories with no manual selection', () => {
@@ -219,7 +219,7 @@ describe('Organizer Component UI Tests', () => {
 
         fireEvent.click(organizeButton)
 
-        expect(screen.getByText(/Please enter your Google AI Studio or OpenRouter API Key/i)).toBeDefined()
+        expect(screen.getByText(/Please enter your Google Gemini \/ AI Studio or OpenRouter API Key/i)).toBeDefined()
     })
 
     it('shows the matching hierarchy illustration for each subfolder setting', () => {
@@ -251,10 +251,34 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByRole('img', { name: /category and nested subfolder hierarchy/i }).getAttribute('src')).toContain('subfolder-hierarchy.png')
     })
 
+    it('detects and displays provider for both modern AQ and AIza Gemini keys as well as OpenRouter keys', () => {
+        render(<Organizer />)
+
+        const input = screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        
+        // Modern Gemini Auth Key (AQ...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'AQ.TestKey123' } })
+        })
+        expect(screen.getByText(/: Google Gemini/i)).toBeDefined()
+
+        // Standard Gemini Key (AIza...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'AIzaSyTestKey123' } })
+        })
+        expect(screen.getByText(/: Google Gemini/i)).toBeDefined()
+
+        // OpenRouter Key (sk-or-...)
+        act(() => {
+            fireEvent.change(input, { target: { value: 'sk-or-test-12345' } })
+        })
+        expect(screen.getByText(/: OpenRouter/i)).toBeDefined()
+    })
+
     it('allows entering API key and persists to localStorage', () => {
         render(<Organizer />)
 
-        const input = screen.getByPlaceholderText(/AIza\.\.\. \(Google AI Studio\) or sk-or-\.\.\. \(OpenRouter\)/i)
+        const input = screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)
         act(() => {
             fireEvent.change(input, { target: { value: 'sk-or-test-12345' } })
         })
