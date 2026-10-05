@@ -42,7 +42,7 @@ Let the user edit the structure in a small editor window at two points, so what 
 5. `OrganizerService.reviewPlan` returns that schema; `classifyAll`, `reconcile`, `rehomeLoose` and placement use it. In
    manual-categories mode the edited schema replaces the "selected categories are authoritative" wrap, which runs before the
    review step; the saved category list is untouched.
-6. The in-panel fallback path (no worker) resolves the same `{ decision, schema }` shape directly.
+6. The in-panel fallback path (no worker) resolves the same `{ decision, plan }` shape directly.
 
 ### Units
 - `services/planEditor.js` (new, pure): `checkName`, `summarize`, `renameCategory`, `renameSubfolder`, `addCategory`,
@@ -106,11 +106,14 @@ shown as a count on that parent.
 ## Editor behaviour (shared)
 - Dialog: `role="dialog"`, `aria-modal`, focus trapped, focus returns to the button that opened it. Header: title, live
   count ("5 categories · 14 subfolders"), **Discard**, **Save**. Body: expandable rows.
-- Rename: click the name or pencil, inline; Enter commits, Escape cancels.
+- Rename: the **Rename** button opens an inline field (clicking the name only expands the row); Enter commits, Escape cancels.
 - Add (plan review only): **+** on a category adds a subfolder; **+ Add category** adds a top-level one; the new row opens in
   rename mode.
-- Delete: trash icon; on a folder with children, an inline confirm states the count ("Delete Travel and its 3 subfolders?").
-- Move: **Move to…** lists valid destinations. Merge: **Merge into…** lists the other folders at the same level.
+- Delete: **Delete** button; on a folder with children, an inline confirm states what happens. In the result review it reads
+  "Its N bookmarks move up into <parent>; its third-level folders are removed." (or "move up one level" without children).
+- Move: **Move to…** lists valid destinations. Merge: **Merge into…** lists the other folders at the same level. Choosing a
+  target only selects it; an explicit **Move** / **Merge** button next to the select commits (arrowing through a closed
+  select fires `change` on some platforms, and these actions have no undo). Escape cancels.
 - Rules, shown inline and never fixed silently: name not empty; unique among siblings; a subfolder cannot be named like its
   parent; filler names (General, Other, Misc, Miscellaneous, Uncategorized, None, Various) are refused with a reason because
   unfiled bookmarks already go to a General fallback; a plan needs at least one category (Save disabled otherwise).
@@ -121,8 +124,17 @@ shown as a count on that parent.
   plan it was made against; reopening restores it onto the card, and an edit that does not match the plan on screen (a
   regenerated plan, an earlier run) is ignored. The worker clears the draft when a new job starts. An unsaved draft in an open
   overlay is lost if the panel closes.
-- Result review: the op list is mirrored as above.
-- Unrecognised decisions, stale job ids and cancel behave as in the prototype.
+- Result review: the op list is mirrored as above. A list the worker rejects comes back with the reason; the editor starts
+  clean with a notice if saved edits no longer apply, and the card has **Clear edits** to drop a rejected list without
+  cancelling the run.
+- The draft holds generated folder names in `chrome.storage.session` (session storage only, same class as the saved runs);
+  this is accepted, and removed when a job ends or a new one starts.
+- Unrecognised decisions, stale job ids and cancel behave as in the prototype. Fail closed: a missing or unrecognised answer
+  from a reviewer cancels the run instead of approving. Malformed operations are rejected as a whole with a reason.
+- A run waiting at either review with no panel connected raises a desktop notification (`organizer-job-review`); clicking it
+  opens the panel. A decision that cannot be handed to the worker keeps the card and logs why.
+- Renamed or merged categories keep their place in the sort order (the worker maps result-review renames back to the
+  original category's rank).
 
 ## Settings
 - One setting, `reviewFolders` (default `false`), labelled **Review folders before saving**, hidden in the no-AI date mode.

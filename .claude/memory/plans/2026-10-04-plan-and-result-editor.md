@@ -8,6 +8,8 @@
 
 **Tech Stack:** React 19 (function components, plain JSX), Vite, Vitest 4 + Testing Library + jsdom, Chrome MV3 service worker (`chrome.storage.session`), Playwright-core with Chrome for Testing for the real-browser checks.
 
+> **Executed.** The repo is authoritative: review fixes after the plan was written changed `resultEditor.js` (canonical records, hardening), `EditorDialog`/`FolderTree` (document-level focus trap, explicit Move/Merge confirm), `ReviewPanel` (draft clearing, Clear edits), `jobRunner` (terminal draft removal, review notification, stale-review release) and `organizer.js` (fail-closed gates, category aliases). See `.claude/memory/sessions/2026-10-05-plan-and-result-editor.md` for the list; code blocks below show the plan as first written.
+
 **Spec:** `.claude/memory/specs/2026-10-04-plan-editor-design.md` (read it first). Two refinements made while planning, both already folded into the spec: (1) a user-edited plan is validated in `OrganizerService.reviewPlan`, not in the job runner, so the worker path and the in-panel fallback share it; (2) the result review sends `rows` (distinct folder paths with counts) to the panel instead of a prebuilt tree, and both sides build the tree from the same rows with `buildTree`.
 
 ## Global Constraints
