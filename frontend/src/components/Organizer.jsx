@@ -1279,7 +1279,7 @@ export default function Organizer({ theme = 'light' }) {
                 </label>
                 <input
                     type="password"
-                    placeholder="AIza... (Google AI Studio) or sk-or-... (OpenRouter)"
+                    placeholder="AIza... or AQ.... (Google AI Studio) or sk-or-... (OpenRouter)"
                     value={apiKey}
                     onChange={(e) => handleApiKeyChange(e.target.value)}
                     style={{
