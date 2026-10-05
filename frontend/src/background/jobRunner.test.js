@@ -501,10 +501,23 @@ describe('BackgroundJobRunner', () => {
             const first = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
             await vi.advanceTimersByTimeAsync(0);
 
-            await runner.startJob({ apiKey: 'k' }, null);
+            const events = [];
+            runner.subscribe((event) => events.push(event));
+            const fresh = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(fresh));
+            const second = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
             await first;
 
             expect(stale.answer).toEqual({ decision: 'cancel' });
+            // The released job must not touch the job that replaced it.
+            expect(runner.getState().status).toBe('processing');
+            expect(runner.getState().plan).not.toBeNull();
+            expect(events).not.toContain('cancelled');
+
+            runner.resolvePlan('approve');
+            await second;
+            expect(runner.getState().status).toBe('complete');
         });
     });
 

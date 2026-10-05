@@ -307,10 +307,14 @@ export class BackgroundJobRunner {
             });
         }
 
+        const organizer = this.organizer;
         try {
-            const results = await this.organizer.start(parsedBookmarks);
+            const results = await organizer.start(parsedBookmarks);
 
-            if (this.organizer.isCancelled || !results) {
+            // A newer job replaced this one while it waited (its review was released): leave the new job alone.
+            if (this.organizer !== organizer) return null;
+
+            if (organizer.isCancelled || !results) {
                 this.currentJob.status = 'idle';
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
@@ -378,7 +382,8 @@ export class BackgroundJobRunner {
 
             return results;
         } catch (err) {
-            if (this.organizer?.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
+            if (this.organizer !== organizer) return null;
+            if (organizer.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
                 this.currentJob.status = 'idle';
                 this.currentJob.progress = 0;
                 this.currentJob.backgroundNotice = '';
