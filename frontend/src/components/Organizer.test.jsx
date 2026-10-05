@@ -1870,3 +1870,116 @@ describe('Saved runs', () => {
         expect(removed).not.toContain('organizedData')
     })
 })
+
+describe('Review folders (two-phase)', () => {
+    const connectedPanel = (sessionData = {}) => {
+        const listeners = []
+        const mockPort = {
+            postMessage: vi.fn((msg) => {
+                if (msg?.type === 'START_JOB') listeners.forEach((fn) => fn({ type: 'JOB_ACK', payload: {} }))
+            }),
+            onMessage: { addListener: vi.fn((fn) => listeners.push(fn)), removeListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() },
+            disconnect: vi.fn()
+        }
+        global.chrome = {
+            runtime: { connect: vi.fn(() => mockPort) },
+            storage: {
+                local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                session: { get: vi.fn((keys, cb) => cb(sessionData)), set: vi.fn() }
+            }
+        }
+        return { listeners, mockPort }
+    }
+    const planState = (extra = {}) => ({
+        id: 'job_1',
+        status: 'processing',
+        progress: 14,
+        logs: [],
+        plan: { categories: [{ name: 'Tech', sub_categories: ['Web', 'Data'] }, { name: 'Travel', sub_categories: ['Flights'] }] },
+        ...extra
+    })
+
+    beforeEach(() => {
+        localStorage.clear()
+        vi.clearAllMocks()
+    })
+
+    afterEach(() => {
+        cleanup()
+        delete global.chrome
+    })
+
+    it('has a Review folders before saving switch that is off by default and remembers being turned on', () => {
+        connectedPanel()
+        render(<Organizer />)
+
+        const toggle = screen.getByRole('switch', { name: 'Review folders before saving' })
+        expect(toggle.getAttribute('aria-checked')).toBe('false')
+
+        fireEvent.click(toggle)
+
+        expect(toggle.getAttribute('aria-checked')).toBe('true')
+        expect(localStorage.getItem('reviewFolders')).toBe('true')
+    })
+
+    it('sends the switch to the worker with START_JOB', async () => {
+        localStorage.setItem('apiKey', 'sk-or-test-port')
+        localStorage.setItem('reviewFolders', 'true')
+        const { mockPort } = connectedPanel()
+        render(<Organizer />)
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+        })
+
+        expect(mockPort.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'START_JOB',
+            payload: expect.objectContaining({ config: expect.objectContaining({ reviewFolders: true }) })
+        }))
+    })
+
+    it('shows the proposed plan from the worker and relays the decision', async () => {
+        const { listeners, mockPort } = connectedPanel()
+        render(<Organizer />)
+
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: planState() })) })
+
+        const card = await screen.findByRole('region', { name: 'Proposed folder plan' })
+        expect(card.textContent).toMatch(/Web, Data/)
+        expect(screen.getByText('Waiting for your approval')).toBeDefined()
+        fireEvent.click(screen.getByRole('button', { name: /Approve & organize/ }))
+
+        expect(mockPort.postMessage).toHaveBeenCalledWith({ type: 'PLAN_DECISION', payload: { decision: 'approve' } })
+        expect(screen.queryByRole('region', { name: 'Proposed folder plan' })).toBeNull()
+    })
+
+    it('sends the edited plan with the decision', async () => {
+        const { listeners, mockPort } = connectedPanel()
+        render(<Organizer />)
+        act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: planState() })) })
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Edit plan' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Web' }))
+        const input = screen.getByRole('textbox', { name: 'New name for Web' })
+        fireEvent.change(input, { target: { value: 'Frontend' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+        fireEvent.click(screen.getByRole('button', { name: /Approve & organize/ }))
+
+        expect(mockPort.postMessage).toHaveBeenCalledWith({
+            type: 'PLAN_DECISION',
+            payload: {
+                decision: 'approve',
+                plan: { categories: [{ name: 'Tech', sub_categories: ['Frontend', 'Data'] }, { name: 'Travel', sub_categories: ['Flights'] }] }
+            }
+        })
+    })
+
+    it('restores the plan card from the session snapshot after the panel is reopened', async () => {
+        connectedPanel({ activeJobState: planState() })
+        render(<Organizer />)
+
+        expect(await screen.findByRole('region', { name: 'Proposed folder plan' })).toBeDefined()
+    })
+})
