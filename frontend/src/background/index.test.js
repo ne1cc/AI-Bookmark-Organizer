@@ -137,6 +137,30 @@ describe('Background Service Worker Entry Point', () => {
         startSpy.mockRestore();
     });
 
+    it('routes PLAN_DECISION to the job runner with the edited plan', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        const port = {
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        };
+        onConnectHandler(port);
+        const handler = port.onMessage.addListener.mock.calls[0][0];
+        const planSpy = vi.spyOn(freshRunner, 'resolvePlan').mockImplementation(() => {});
+
+        handler({ type: 'PLAN_DECISION', payload: { decision: 'approve', plan: { categories: [] } } });
+        handler({ type: 'PLAN_DECISION', payload: { decision: 'regenerate' } });
+
+        expect(planSpy).toHaveBeenNthCalledWith(1, 'approve', { categories: [] });
+        expect(planSpy).toHaveBeenNthCalledWith(2, 'regenerate', undefined);
+    });
+
     it('GET_RESULTS returns completed results with optional detail assignments without writing them to storage', async () => {
         vi.resetModules();
         let onConnectHandler = null;

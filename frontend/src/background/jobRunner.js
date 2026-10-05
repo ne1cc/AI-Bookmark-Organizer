@@ -33,7 +33,7 @@ export class BackgroundJobRunner {
         this.cachedResults = null;
         this.persistJobState = true;
         this.stateFlushTimer = null;
-        this.pendingPlan = null;
+        this.pendingReview = null;
     }
 
     getState() {
@@ -161,7 +161,7 @@ export class BackgroundJobRunner {
             schemaSortOrder,
             inferCategories = true,
             autoImport = true,
-            reviewPlan = false
+            reviewFolders = false
         } = config;
         this.persistJobState = flatDateSort || !inferCategories;
 
@@ -170,6 +170,12 @@ export class BackgroundJobRunner {
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.remove(['organizedData']);
+            } catch {}
+        }
+        // Edits saved for an earlier run's review must not leak into this one.
+        if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+            try {
+                chrome.storage.session.remove(['reviewDraft']);
             } catch {}
         }
         this.currentJob = {
@@ -277,8 +283,11 @@ export class BackgroundJobRunner {
             parsedBookmarks ? () => {} : inferCategories
         );
         this.organizer.snapshotProvider = createStorageSnapshotProvider((msg) => this.addLog(msg));
-        if (reviewPlan && !flatDateSort) {
-            this.organizer.planReviewer = (schema) => this.awaitPlanDecision(jobId, schema);
+        if (reviewFolders && !flatDateSort) {
+            this.organizer.planReviewer = (schema, error) => this.awaitReview('plan', jobId, {
+                categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] })),
+                ...(error ? { error } : {})
+            });
         }
 
         try {
@@ -371,34 +380,42 @@ export class BackgroundJobRunner {
         }
     }
 
-    // Phase 1 -> 2 gate: publishes the proposed folders to the panel and waits for
-    // PLAN_DECISION. The job stays 'processing' so every existing panel path still
-    // treats it as a running job; `plan` is what marks it as waiting for the user.
-    awaitPlanDecision(jobId, schema) {
+    // Review gates (plan, result): publish what to review on `currentJob[kind]` and wait for the
+    // panel's decision. The job stays 'processing' while waiting, so every existing panel path
+    // (restore, cancel, handshake) keeps working; a non-null `plan` / `result` marks the wait.
+    awaitReview(kind, jobId, payload) {
         return new Promise((resolve) => {
-            this.pendingPlan = { jobId, resolve };
-            this.currentJob.plan = {
-                categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] }))
-            };
+            this.pendingReview = { kind, jobId, resolve };
+            this.currentJob[kind] = payload;
             this.currentJob.backgroundNotice = '';
-            this.addLog('Folder plan ready — review it, then approve to start organizing.');
+            this.addLog(kind === 'plan'
+                ? 'Folder plan ready — review it, then approve to start organizing.'
+                : 'Organized folders ready — review them, then save the results.');
             this.flushState();
         });
     }
 
-    resolvePlan(decision) {
-        const pending = this.pendingPlan;
+    resolveReview(kind, decision, data = {}) {
+        const pending = this.pendingReview;
         if (!['approve', 'regenerate', 'cancel'].includes(decision)) return;
-        if (!pending || pending.jobId !== this.currentJob.id) return;
-        this.pendingPlan = null;
-        this.currentJob.plan = null;
-        this.addLog(decision === 'regenerate' ? 'Plan rejected — generating a new one.' : decision === 'approve' ? 'Plan approved — organizing bookmarks.' : 'Plan review cancelled.');
+        if (!pending || pending.kind !== kind || pending.jobId !== this.currentJob.id) return;
+        if (kind === 'result' && decision === 'regenerate') return;
+        this.pendingReview = null;
+        this.currentJob[kind] = null;
+        const label = kind === 'plan' ? 'Plan' : 'Result review';
+        this.addLog(decision === 'regenerate'
+            ? 'Plan rejected — generating a new one.'
+            : decision === 'approve' ? `${label} approved.` : `${label} cancelled.`);
         this.flushState();
-        pending.resolve(decision);
+        pending.resolve({ decision, ...data });
+    }
+
+    resolvePlan(decision, plan) {
+        this.resolveReview('plan', decision, plan ? { plan } : {});
     }
 
     cancelJob() {
-        if (this.pendingPlan) this.resolvePlan('cancel');
+        if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
         if (this.organizer) {
             this.organizer.cancel();
         }
