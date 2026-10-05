@@ -25,7 +25,8 @@ export class BackgroundJobRunner {
             stats: null,
             count: null,
             completedAt: null,
-            plan: null
+            plan: null,
+            result: null
         };
         this.organizer = null;
         this.keepAliveTimer = null;
@@ -136,7 +137,8 @@ export class BackgroundJobRunner {
                         stats: this.currentJob.stats,
                         count: this.currentJob.count,
                         completedAt: this.currentJob.completedAt,
-                        plan: this.currentJob.plan
+                        plan: this.currentJob.plan,
+                        result: this.currentJob.result
                     }
                 });
             } catch {
@@ -196,7 +198,8 @@ export class BackgroundJobRunner {
             stats: null,
             count: null,
             completedAt: null,
-            plan: null
+            plan: null,
+            result: null
         };
 
         this.startKeepAlive();
@@ -293,6 +296,10 @@ export class BackgroundJobRunner {
         if (reviewFolders && !flatDateSort) {
             this.organizer.planReviewer = (schema, error) => this.awaitReview('plan', jobId, {
                 categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] })),
+                ...(error ? { error } : {})
+            });
+            this.organizer.resultReviewer = (rows, error) => this.awaitReview('result', jobId, {
+                rows,
                 ...(error ? { error } : {})
             });
         }
@@ -421,6 +428,10 @@ export class BackgroundJobRunner {
         this.resolveReview('plan', decision, plan ? { plan } : {});
     }
 
+    resolveResult(decision, ops) {
+        this.resolveReview('result', decision, Array.isArray(ops) ? { ops } : {});
+    }
+
     cancelJob() {
         if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
         if (this.organizer) {
@@ -449,7 +460,8 @@ export class BackgroundJobRunner {
             stats: null,
             count: null,
             completedAt: null,
-            plan: null
+            plan: null,
+            result: null
         };
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {

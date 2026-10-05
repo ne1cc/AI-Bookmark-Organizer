@@ -109,6 +109,10 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
                     jobRunner.resolvePlan(msg.payload?.decision, msg.payload?.plan);
                     break;
 
+                case 'RESULT_DECISION':
+                    jobRunner.resolveResult(msg.payload?.decision, msg.payload?.ops);
+                    break;
+
                 case 'CANCEL_JOB':
                     jobRunner.cancelJob();
                     break;

@@ -481,6 +481,126 @@ describe('BackgroundJobRunner', () => {
         });
     });
 
+    describe('result review (second pause)', () => {
+        const rows = [
+            { category: 'Tech', sub_category: 'Web', detail_category: 'Frameworks', count: 2 },
+            { category: 'Travel', sub_category: 'Flights', detail_category: null, count: 3 }
+        ];
+        // Both gates are installed by the one flag; this stand-in pauses at each, like the real service.
+        const twoGateOrganizer = (record) => function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = null;
+            this.start = vi.fn(async () => {
+                record.plan = this.planReviewer ? await this.planReviewer({ categories: [{ name: 'Tech', sub_categories: ['Web'] }] }, null) : null;
+                record.result = this.resultReviewer ? await this.resultReviewer(rows, record.error ?? null) : { decision: 'no-reviewer' };
+                return record.result.decision === 'cancel' ? null : [{ title: 'A', url: 'https://example.com/a' }];
+            });
+        };
+
+        it('pauses for the plan, then for the result, with the folder rows published to the panel', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(runner.getState().plan).not.toBeNull();
+            expect(runner.getState().result).toBeNull();
+
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+            expect(runner.getState().plan).toBeNull();
+            expect(runner.getState().result).toEqual({ rows });
+            expect(runner.getState().status).toBe('processing');
+
+            const ops = [{ op: 'rename', path: ['Travel'], to: 'Trips' }];
+            runner.resolveResult('approve', ops);
+            await job;
+
+            expect(record.result).toEqual({ decision: 'approve', ops });
+            expect(runner.getState().result).toBeNull();
+            expect(runner.getState().status).toBe('complete');
+        });
+
+        it('approves without operations when nothing was edited', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolveResult('approve');
+            await job;
+
+            expect(record.result).toEqual({ decision: 'approve' });
+        });
+
+        it('hands the reason a previous answer was rejected to the panel', async () => {
+            const record = { error: 'The folder "Nope" no longer exists.' };
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(runner.getState().result.error).toBe('The folder "Nope" no longer exists.');
+            runner.resolveResult('cancel');
+            await job;
+        });
+
+        it('ignores a regenerate for the result, a plan decision while the result waits, and bogus decisions', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+
+            runner.resolveResult('regenerate');
+            runner.resolvePlan('approve');
+            runner.resolveResult('bogus');
+            expect(runner.getState().result).not.toBeNull();
+
+            runner.resolveResult('approve');
+            await job;
+        });
+
+        it('cancelling while the result waits ends the job', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+            runner.cancelJob();
+            await job;
+
+            expect(record.result.decision).toBe('cancel');
+            expect(runner.getState().status).toBe('idle');
+            expect(runner.getState().result).toBeNull();
+        });
+
+        it('includes the waiting result in the session snapshot when job state is persisted', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(twoGateOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', inferCategories: false, categories: ['Tech'], reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.resolvePlan('approve');
+            await vi.advanceTimersByTimeAsync(0);
+
+            const snapshots = globalThis.chrome.storage.session.set.mock.calls.map(([data]) => data.activeJobState).filter(Boolean);
+            expect(snapshots.at(-1).result).toEqual({ rows });
+
+            runner.resolveResult('approve');
+            await job;
+        });
+    });
+
     it('cancels an active job cleanly', async () => {
         const cancelSpy = vi.fn();
         runner.organizer = { cancel: cancelSpy };
