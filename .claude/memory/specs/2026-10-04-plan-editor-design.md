@@ -35,17 +35,18 @@ Let the user edit the structure in a small editor window at two points, so what 
 1. The AI proposes a plan; the review card shows it (existing prototype behaviour).
 2. **Edit plan** opens the overlay on a draft copy. **Save** closes it and updates the card; **Discard** drops the draft.
 3. **Approve & organize** sends `PLAN_DECISION { decision: 'approve', plan }`; `plan` is present only if the user edited.
-4. `jobRunner.resolvePlan(decision, plan)` runs `normalizeSchema(plan)`. Invalid: the job keeps waiting, `currentJob.plan.error`
-   carries the reason and the card shows it. Valid: the schema gets `binding: true` and the reviewer resolves
-   `{ decision: 'approve', schema }`.
+4. `OrganizerService.reviewPlan` runs `normalizeSchema(plan)` on an edited plan (so the worker path and the in-panel fallback
+   share one check). Invalid (no usable category): it asks the reviewer again with the last good plan and the reason, the job
+   keeps waiting, `currentJob.plan.error` carries the reason and the card shows it. Valid: the schema gets `binding: true`.
+   The reviewer contract is `planReviewer(schema, error | null)` resolving `{ decision, plan? }`.
 5. `OrganizerService.reviewPlan` returns that schema; `classifyAll`, `reconcile`, `rehomeLoose` and placement use it. In
    manual-categories mode the edited schema replaces the "selected categories are authoritative" wrap, which runs before the
    review step; the saved category list is untouched.
 6. The in-panel fallback path (no worker) resolves the same `{ decision, schema }` shape directly.
 
 ### Units
-- `services/planEditor.js` (new, pure): `renameNode`, `addCategory`, `addSubfolder`, `removeCategory`, `removeSubfolder`,
-  `moveSubfolder`, `mergeSubfolders`, `mergeCategories`. Each takes a plan and returns `{ plan }` or `{ error }` and never
+- `services/planEditor.js` (new, pure): `checkName`, `summarize`, `renameCategory`, `renameSubfolder`, `addCategory`,
+  `addSubfolder`, `removeCategory`, `removeSubfolder`, `moveSubfolder`, `mergeSubfolders`, `mergeCategories`. Each takes a plan and returns `{ plan }` or `{ error }` and never
   mutates its input. Depends on `canonicalKey` and the filler-name check only.
 - `services/ai.js`: extract `normalizeSchema(schema)` (trim, dedupe, drop parent-echo and filler subfolders) out of
   `validateSchema`, and export the filler-name check. `validateSchema` calls `normalizeSchema`; behaviour and tests are
@@ -54,7 +55,8 @@ Let the user edit the structure in a small editor window at two points, so what 
   and the per-category cap. Spelling merges still apply. Classifier-invented folders are cleaned up as today. Runs without
   review never carry the flag and behave exactly as before.
 - `background/jobRunner.js`, `background/index.js`, `services/organizer.js`: `PLAN_DECISION` carries `plan`; the reviewer
-  contract changes from a string to `{ decision, schema? }`; the prototype's tests are updated in the same change.
+  contract changes from a string to `(schema, error)` resolving `{ decision, plan? }`; the prototype's tests are updated in
+  the same change.
 
 ## Part 2 — Result review (levels 2 and 3, after all the data is in)
 
@@ -77,21 +79,27 @@ shown as a count on that parent.
   bookmark-level moves). Follow-up.
 
 ### Data flow
-1. `OrganizerService.reviewResult(classified)` builds a tree with counts (`buildTree`) and calls `resultReviewer(tree)`.
-2. `jobRunner` publishes it as `currentJob.result = { tree }` (small; safe for the session snapshot and port) and waits.
-   The bookmark list never crosses the port.
-3. The panel opens the same overlay on that tree. Edits are an operation list: `{ op: 'rename' | 'delete' | 'move' | 'merge',
-   path, to? }`. The panel applies each op to its own tree (pure functions) so counts update instantly.
-4. **Save results** sends `RESULT_DECISION { decision: 'approve', ops }`. The worker re-applies the same ops to the classified
-   items with `resultEditor.js`, validating each (a bad op rejects the whole list with a reason and the job keeps waiting).
+1. `OrganizerService.reviewResult(classified)` groups the bookmarks into `rows` (one per distinct folder path, with a count;
+   `buildRows`) and calls `resultReviewer(rows, error | null)`.
+2. `jobRunner` publishes them as `currentJob.result = { rows, error? }` (small; safe for the session snapshot and port) and
+   waits. The bookmark list never crosses the port. Both sides build the tree from the same rows with `buildTree`.
+3. The panel opens the same overlay on those rows. Edits are an operation list: `{ op: 'rename' | 'delete' | 'move' | 'merge',
+   path, to? }`. The panel runs `applyOps` on the rows so counts update instantly.
+4. **Save results** sends `RESULT_DECISION { decision: 'approve', ops }`. The organizer runs the same `applyOps` on the
+   classified bookmarks (a bad op rejects the whole list: the reviewer is asked again with the reason and the job keeps
+   waiting). `applyOps` works on bookmarks and on grouped rows alike, so both sides always agree.
 5. The edited items continue into `sortAndStrip` and placement. **Cancel** ends the run as in the plan review.
-6. The op list is mirrored to `chrome.storage.session` keyed by job id and re-applied on reopen; cleared on every decision.
+6. The op list is mirrored to `chrome.storage.session` (`reviewDraft`) with the rows it was made against and re-applied on
+   reopen only if they still match.
 
 ### Units
-- `services/resultEditor.js` (new, pure): `buildTree(items)`, `applyOps(items, ops)` returning `{ items }` or `{ error }`.
-  Never mutates its input. The panel reuses the tree-level half so both sides agree.
-- `components/FolderTree.jsx` (new): the shared tree view (rows, counts, inline rename, action menus). `PlanEditor` and
-  `ResultEditor` are thin wrappers that supply a tree and an operations adapter.
+- `services/resultEditor.js` (new, pure): `recordPath`, `buildRows(items)`, `buildTree(records)`, `detailStats(records)`,
+  `applyOps(records, ops)` returning `{ records }` or `{ error }`. Never mutates its input. A record is a bookmark or a
+  grouped row, which is why the panel and the worker agree.
+- `components/EditorDialog.jsx` (new): the modal shell. `components/FolderTree.jsx` (new): the shared tree view (expand,
+  inline rename/add, delete confirm, move/merge menus). `PlanEditor` and `ResultEditor` are thin wrappers that supply nodes and
+  operations. `components/ReviewPanel.jsx` (new) renders the two review cards, owns the saved edits (mirrored to
+  `chrome.storage.session` as `reviewDraft`, each tied to the exact plan or rows it was made against) and lazy-loads the editors.
 - `services/organizer.js`: `resultReviewer` hook and `reviewResult`, called between `enrichDetails` and `sortAndStrip`.
 - `background/*`: `RESULT_DECISION` message; `resolveResult(decision, ops)`.
 
@@ -109,8 +117,10 @@ shown as a count on that parent.
 - Unsaved changes: Escape or Discard asks once. Errors go through a live region; every icon button has a text label.
 
 ## Persistence and errors
-- Plan review: **Save** mirrors the edited plan into `chrome.storage.session` keyed by job id; reopening restores it onto the
-  card. Cleared on approve, regenerate and cancel. An unsaved draft in an open overlay is lost if the panel closes.
+- Plan review: **Save** mirrors the edited plan into `chrome.storage.session` (`reviewDraft`), recorded together with the exact
+  plan it was made against; reopening restores it onto the card, and an edit that does not match the plan on screen (a
+  regenerated plan, an earlier run) is ignored. The worker clears the draft when a new job starts. An unsaved draft in an open
+  overlay is lost if the panel closes.
 - Result review: the op list is mirrored as above.
 - Unrecognised decisions, stale job ids and cancel behave as in the prototype.
 
