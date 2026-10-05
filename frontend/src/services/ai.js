@@ -10,6 +10,34 @@ const OR_HEADERS = (apiKey) => ({
 
 // Robustly pull a JSON object out of a model response that may include
 // markdown fences, leading prose, or trailing junk. Throws if no object found.
+/**
+ * Strips sensitive data from URLs before passing them to external AI APIs.
+ * Removes basic-auth credentials, search/query strings, and hash fragments,
+ * preserving only scheme, host, and path to give the model semantic context
+ * without leaking tokens, session IDs, or private query parameters.
+ */
+export function scrubUrlForAi(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return '';
+    const trimmed = rawUrl.trim();
+    try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'ftp:') {
+            parsed.username = '';
+            parsed.password = '';
+            parsed.search = '';
+            parsed.hash = '';
+            let cleaned = parsed.toString();
+            if (!trimmed.endsWith('/') && cleaned.endsWith('/') && parsed.pathname === '/') {
+                cleaned = cleaned.slice(0, -1);
+            }
+            return cleaned;
+        }
+        return trimmed.split('?')[0].split('#')[0];
+    } catch {
+        return trimmed.split('?')[0].split('#')[0];
+    }
+}
+
 function extractJson(content) {
     let text = (content || "").trim();
 
@@ -382,7 +410,7 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
 async function callModel(apiKey, model, systemContent, userContent, { temperature, maxTokens, salvageTruncated = false }, isCancelled = null) {
     const key = (apiKey || '').trim();
     if (detectProvider(key) === 'gemini') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent?key=${encodeURIComponent(key)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent`;
         const data = await fetchWithTimeout(url, {
             method: "POST",
             headers: {
@@ -651,7 +679,7 @@ export async function censusShares(sample, categories, apiKey, model = "google/g
     { "assignments": [0, 2, 1] }
 
     BOOKMARKS (in order):
-    ${JSON.stringify(sample.map(b => ({ title: b.title, url: b.url })))}
+    ${JSON.stringify(sample.map(b => ({ title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 
     try {
@@ -940,7 +968,7 @@ function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, subfol
     }
 
     BOOKMARKS TO ANALYZE:
-    ${JSON.stringify(schemaSource.map(b => ({ title: b.title, url: b.url })))}
+    ${JSON.stringify(schemaSource.map(b => ({ title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 }
 
@@ -1194,7 +1222,7 @@ export function buildDetailSchemaPrompt(groups, issues = null) {
         bookmarks: sampleForSchema(group.records, DETAIL_SCHEMA_SAMPLE_LIMIT).map((bookmark, i) => ({
             i,
             title: bookmark?.title || '',
-            url: bookmark?.url || ''
+            url: scrubUrlForAi(bookmark?.url || '')
         }))
     }));
     const correction = issues?.length
@@ -1402,7 +1430,7 @@ export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model
     Return JSON only: { "classified": [{ "i": 0, "detail_category": "..." }] }
     Use only an approved name; use null when none fits. Every bookmark appears exactly once.
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
     return withRetry(async () => {
         const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
@@ -1422,7 +1450,7 @@ export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, 
     Return JSON only: { "classified": [{ "i": 0, "sub_category": "..." }] }
     Use only a name approved for that bookmark's category, written exactly as above. A loose fit is better than none: pick the nearest topic, and use null only when the bookmark has nothing in common with any of them. Every bookmark appears exactly once.
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, category: b.category, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, category: b.category, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
     return withRetry(async () => {
         const parsed = await callModel(apiKey, model, 'You are a precise JSON classification engine. Output only valid JSON.', prompt, { temperature: 0.1, maxTokens: 4000 }, isCancelled);
@@ -1463,7 +1491,7 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
     Return JSON object: ${returnSchema}
 
     BOOKMARKS (each with its index "i"):
-    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: b.url })))}
+    ${JSON.stringify(bookmarks.map((b, i) => ({ i, title: b.title, url: scrubUrlForAi(b.url) })))}
     `;
 
     const systemContent = "You are a precise classification engine and JSON generator. Output only valid JSON. Do not use Markdown blocks.";

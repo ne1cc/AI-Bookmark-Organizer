@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, getInputBookmarkFile, removeInputBookmarkFile, downloadInputBookmarkFile, INPUT_MAX_BYTES } from './input_bookmarks'
+import {
+    saveInputBookmarkFile,
+    getInputBookmarkMeta,
+    getInputBookmarkHtml,
+    getInputBookmarkFile,
+    listInputBookmarkFiles,
+    removeInputBookmarkFile,
+    clearAllInputBookmarkFiles,
+    downloadInputBookmarkFile,
+    INPUT_MAX_BYTES
+} from './input_bookmarks'
 
 const htmlOf = (n) => `<!DOCTYPE NETSCAPE-Bookmark-file-1>${'<DT><A HREF="https://x.com">x</A>'.repeat(n)}`
 
@@ -22,14 +32,68 @@ describe('input bookmarks cache', () => {
             size: html.length
         }))
         expect(payload.inputBookmarksMeta.html).toBeUndefined()
+        expect(payload.inputBookmarksList).toHaveLength(1)
+        expect(payload[`inputBookmarkHtml:${res.entry.id}`]).toBe(html)
         expect(removeSpy).toHaveBeenCalledWith(['inputBookmarks'], expect.any(Function))
     })
 
-    it('refuses entries above INPUT_MAX_BYTES without throwing', async () => {
-        global.chrome = { runtime: {}, storage: { local: { set: vi.fn(), get: vi.fn((k, cb) => cb({})), remove: vi.fn() } } }
-        const res = await saveInputBookmarkFile({ filename: 'huge.html', html: 'x'.repeat(INPUT_MAX_BYTES + 1), count: 1, dateSpan: null })
-        expect(res.saved).toBe(false)
-        expect(res.reason).toBe('too-large')
+    it('allows unlimited input bookmark files and large file sizes without refusal', async () => {
+        const store = {}
+        global.chrome = { runtime: {}, storage: { local: {
+            set: vi.fn((p, cb) => { Object.assign(store, p); cb() }),
+            get: vi.fn((keys, cb) => {
+                const res = {}
+                for (const k of [].concat(keys)) if (k in store) res[k] = store[k]
+                cb(res)
+            }),
+            remove: vi.fn((keys, cb) => {
+                for (const k of [].concat(keys)) delete store[k]
+                cb()
+            })
+        } } }
+        // 30MB file size simulation
+        const largeHtml = 'x'.repeat(30 * 1024 * 1024)
+        const res = await saveInputBookmarkFile({ filename: 'large_bookmarks.html', html: largeHtml, count: 50000, dateSpan: null })
+        expect(res.saved).toBe(true)
+        expect(res.entry.size).toBe(30 * 1024 * 1024)
+    })
+
+    it('supports multiple input bookmark files and individual deletion', async () => {
+        const store = {}
+        global.chrome = { runtime: {}, storage: { local: {
+            set: vi.fn((p, cb) => { Object.assign(store, p); cb() }),
+            get: vi.fn((keys, cb) => {
+                const res = {}
+                for (const k of [].concat(keys)) if (k in store) res[k] = store[k]
+                cb(res)
+            }),
+            remove: vi.fn((keys, cb) => {
+                for (const k of [].concat(keys)) delete store[k]
+                cb()
+            })
+        } } }
+
+        const file1 = await saveInputBookmarkFile({ filename: 'first.html', html: '<first/>', count: 10, dateSpan: '2023' })
+        const file2 = await saveInputBookmarkFile({ filename: 'second.html', html: '<second/>', count: 20, dateSpan: '2024' })
+
+        const list = await listInputBookmarkFiles()
+        expect(list).toHaveLength(2)
+        expect(list[0].filename).toBe('second.html')
+        expect(list[1].filename).toBe('first.html')
+
+        expect(await getInputBookmarkHtml(file1.entry.id)).toBe('<first/>')
+        expect(await getInputBookmarkHtml(file2.entry.id)).toBe('<second/>')
+
+        // Remove only the first file
+        const afterDelete = await removeInputBookmarkFile(file1.entry.id)
+        expect(afterDelete).toHaveLength(1)
+        expect(afterDelete[0].filename).toBe('second.html')
+        expect(await getInputBookmarkHtml(file1.entry.id)).toBeNull()
+        expect(await getInputBookmarkHtml(file2.entry.id)).toBe('<second/>')
+
+        // Clear all files
+        await clearAllInputBookmarkFiles()
+        expect(await listInputBookmarkFiles()).toEqual([])
     })
 
     it('round-trips metadata and HTML through storage', async () => {

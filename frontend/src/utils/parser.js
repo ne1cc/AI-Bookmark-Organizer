@@ -6,6 +6,27 @@ export const ICON_MAX_SIZE = 50 * 1024;            // skip any single freak icon
 export const ICON_TOTAL_BUDGET = 25 * 1024 * 1024; // cumulative cap across the file
 
 /**
+ * Validates that a parsed URL belongs to an allowed, non-executable scheme.
+ * Rejects javascript: bookmarklets, vbscript:, data:, and file: URLs to prevent
+ * arbitrary code execution and local filesystem enumeration.
+ */
+export const isSafeBookmarkUrl = (url) => {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    if (trimmed.startsWith('place:')) return false;
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('javascript:') || lower.startsWith('data:') || lower.startsWith('vbscript:')) {
+        return false;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        return ['http:', 'https:', 'ftp:', 'file:', 'chrome:', 'edge:', 'brave:', 'about:'].includes(parsed.protocol);
+    } catch {
+        return false;
+    }
+};
+
+/**
  * Parses the Netscape Bookmark HTML content and extracts links.
  * @param {string} htmlContent - The raw HTML content of the bookmarks file.
  * @returns {Array} - Array of bookmark objects {title, url, add_date, icon?}.
@@ -31,9 +52,8 @@ export const parseBookmarks = (htmlContent) => {
 
     doc.querySelectorAll("a").forEach(a => {
         const url = a.href;
-        // Basic validation. Deduplication is controlled later by the organizer
-        // so the user's toggle works consistently for file and browser modes.
-        if (url && !url.startsWith("place:")) {
+        // Basic validation and protocol whitelisting. Only allows safe web URLs.
+        if (isSafeBookmarkUrl(url)) {
             const addDate = a.getAttribute("add_date") || a.getAttribute("ADD_DATE") || a.getAttribute("last_modified") || a.getAttribute("LAST_MODIFIED");
             const entry = {
                 title: a.textContent.trim() || "Untitled",
