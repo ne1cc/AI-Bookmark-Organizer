@@ -180,3 +180,54 @@ describe('ReviewPanel: result review', () => {
         expect(screen.getByRole('alert').textContent).toMatch(/no longer exists/i)
     })
 })
+
+describe('ReviewPanel: draft persistence and recovery', () => {
+    it('confirmed regenerate clears the edit and updates storage', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
+        const onDecide = vi.fn()
+        const { rerender } = render(<ReviewPanel plan={plan()} result={null} onDecide={onDecide} />)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit plan' }))
+        await renamePlanFolder('Web', 'Frontend')
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+        global.chrome.storage.session.set.mockClear()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Regenerate plan' }))
+
+        expect(global.chrome.storage.session.set).toHaveBeenCalledWith({ reviewDraft: expect.objectContaining({ planEdit: null }) })
+        expect(onDecide).toHaveBeenCalledWith('plan', 'regenerate')
+
+        rerender(<ReviewPanel plan={plan()} result={null} onDecide={onDecide} />)
+
+        expect(screen.queryByText('Edited')).toBeNull()
+    })
+
+    it('ignores a draft from session storage whose base does not match the current plan', () => {
+        session.data.reviewDraft = {
+            planEdit: { base: '[]', plan: { categories: [{ name: 'Old', sub_categories: [] }] } },
+            resultEdit: null
+        }
+        render(<ReviewPanel plan={plan()} result={null} onDecide={() => {}} />)
+
+        expect(screen.queryByText('Edited')).toBeNull()
+        expect(screen.getByText('Tech')).toBeDefined()
+    })
+
+    it('restores and persists resultEdit across unmount and remount', async () => {
+        const first = render(<ReviewPanel plan={null} result={{ rows: rows() }} onDecide={() => {}} />)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit folders' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
+        const input = screen.getByRole('textbox', { name: 'New name for Travel' })
+        fireEvent.change(input, { target: { value: 'Trips' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+
+        expect(global.chrome.storage.session.set).toHaveBeenCalledWith({ reviewDraft: expect.objectContaining({ resultEdit: expect.objectContaining({ ops: expect.arrayContaining([expect.anything()]) }) }) })
+        first.unmount()
+
+        render(<ReviewPanel plan={null} result={{ rows: rows() }} onDecide={() => {}} />)
+
+        expect(await screen.findByText('1 edit')).toBeDefined()
+    })
+})

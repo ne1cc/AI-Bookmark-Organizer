@@ -86,6 +86,13 @@ export class BackgroundJobRunner {
             this.stateFlushTimer = null;
         }
         this.persistSessionSnapshot();
+        if (TERMINAL_STATUSES.has(this.currentJob.status)) {
+            if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+                try {
+                    chrome.storage.session.remove(['reviewDraft']);
+                } catch {}
+            }
+        }
         this.notify('status', this.getState());
     }
 

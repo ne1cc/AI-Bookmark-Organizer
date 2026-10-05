@@ -451,6 +451,34 @@ describe('BackgroundJobRunner', () => {
 
             expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['reviewDraft']);
         });
+
+        it('removes the saved draft when a job reaches a terminal status (complete or cancelled)', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+
+            globalThis.chrome.storage.session.remove.mockClear();
+            runner.resolvePlan('approve');
+            await job;
+
+            expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['reviewDraft']);
+            expect(runner.getState().status).toBe('complete');
+
+            // Test with cancelled job
+            const cancelRecord = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(cancelRecord));
+            globalThis.chrome.storage.session.remove.mockClear();
+
+            const cancelJob = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            runner.cancelJob();
+            await cancelJob;
+
+            expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['reviewDraft']);
+            expect(runner.getState().status).toBe('idle');
+        });
     });
 
     it('cancels an active job cleanly', async () => {

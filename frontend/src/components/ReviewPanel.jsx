@@ -39,7 +39,7 @@ export default function ReviewPanel({ plan, result, onDecide }) {
     const activeOps = resultEdit && resultEdit.base === resultBase ? resultEdit.ops : []
 
     const persist = (next) => {
-        try { chrome.storage?.session?.set({ [DRAFT_KEY]: next }) } catch { /* the edit still works in memory */ }
+        try { Promise.resolve(chrome.storage?.session?.set({ [DRAFT_KEY]: next })).catch(() => {}) } catch { /* the edit still works in memory */ }
     }
 
     const savePlan = (edited) => {
@@ -58,6 +58,8 @@ export default function ReviewPanel({ plan, result, onDecide }) {
 
     const regenerate = () => {
         if (activePlan && !window.confirm('Regenerating throws away your edits to this plan. Continue?')) return
+        setPlanEdit(null)
+        persist({ planEdit: null, resultEdit })
         onDecide('plan', 'regenerate')
     }
 
