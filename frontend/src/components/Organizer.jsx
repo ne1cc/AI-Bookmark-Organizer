@@ -149,6 +149,14 @@ export default function Organizer({ theme = 'light' }) {
     // Models supported for Google Gemini
     const models = useMemo(() => [
         {
+            id: 'google/gemini-3.5-flash-lite',
+            name: '3.5 Flash Lite',
+            label: '3.5 Flash Lite',
+            badge: 'Fast',
+            desc: 'Fast, cost-efficient model for high-volume bookmark collections.',
+            description: 'Fast, cost-efficient model for high-volume bookmark collections.'
+        },
+        {
             id: 'google/gemini-3.1-flash-lite',
             name: '3.1 Flash Lite',
             label: '3.1 Flash Lite',
@@ -177,7 +185,7 @@ export default function Organizer({ theme = 'light' }) {
     const [selectedModel, setSelectedModel] = useState(() => {
         try {
             const m = localStorage.getItem('selectedModel')
-            return m && ['google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(m)
+            return m && ['google/gemini-3.5-flash-lite', 'google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(m)
                 ? m
                 : 'google/gemini-3.1-flash-lite'
         } catch {
@@ -544,7 +552,7 @@ export default function Organizer({ theme = 'light' }) {
                     setSelectedModel('google/gemini-3.1-pro-preview')
                     try { localStorage.setItem('selectedModel', 'google/gemini-3.1-pro-preview') } catch {}
                     chrome.storage.local.set({ selectedModel: 'google/gemini-3.1-pro-preview' })
-                } else if (result.selectedModel && ['google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(result.selectedModel)) {
+                } else if (result.selectedModel && ['google/gemini-3.5-flash-lite', 'google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(result.selectedModel)) {
                     setSelectedModel(result.selectedModel)
                     try { localStorage.setItem('selectedModel', result.selectedModel) } catch {}
                 }

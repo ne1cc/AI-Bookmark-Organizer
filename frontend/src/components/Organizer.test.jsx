@@ -82,6 +82,16 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('allows selecting Gemini 3.5 Flash Lite', () => {
+        render(<Organizer />)
+
+        const modelButton = screen.getByRole('button', { name: /3\.5 Flash Lite/i })
+        fireEvent.click(modelButton)
+
+        expect(modelButton.className).toContain('active')
+        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ selectedModel: 'google/gemini-3.5-flash-lite' })
+    })
+
     it('defaults new installs to inferred categories with no manual selection', () => {
         render(<Organizer />)
 
