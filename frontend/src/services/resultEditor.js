@@ -87,7 +87,7 @@ function siblingNames(records, parentPath, leaveOut = null) {
     return [...names];
 }
 
-const missing = (path) => ({ error: `The folder "${path.join(' / ')}" no longer exists.` });
+const missing = (path) => ({ error: `The folder "${Array.isArray(path) ? path.join(' / ') : ''}" no longer exists.` });
 
 function rename(records, { path, to }) {
     if (!Array.isArray(path) || path.length === 0 || within(records, path).length === 0) return missing(path || []);
@@ -184,14 +184,24 @@ function merge(records, { path, to }) {
 
 const OPERATIONS = { rename, delete: remove, move, merge };
 
+const isNames = (value) => Array.isArray(value) && value.every(name => typeof name === 'string');
+
+// Edits can arrive from outside (the panel through the worker), so check their shape first.
+function isWellFormed(op) {
+    if (!isNames(op.path) || op.path.length < 1 || op.path.length > 3) return false;
+    if (op.to === undefined) return true;
+    return op.op === 'rename' ? typeof op.to === 'string' : op.op === 'delete' || isNames(op.to);
+}
+
 // ops: [{ op: 'rename' | 'delete' | 'move' | 'merge', path: [...], to?: ... }]
 // Returns { records } with every op applied in order, or { error } with none applied.
 export function applyOps(records, ops) {
     let current = records.map(canonical);
     for (const op of Array.isArray(ops) ? ops : []) {
-        const apply = OPERATIONS[op?.op];
-        if (!apply) return { error: `Unknown edit "${op?.op}".` };
-        const result = apply(current, op);
+        if (op === null || typeof op !== 'object') return { error: 'That edit is not valid.' };
+        if (!Object.hasOwn(OPERATIONS, op.op)) return { error: `Unknown edit "${op.op}".` };
+        if (!isWellFormed(op)) return { error: 'That edit is not valid.' };
+        const result = OPERATIONS[op.op](current, op);
         if (result.error) return { error: result.error };
         current = result.records.map(canonical);
     }

@@ -63,6 +63,20 @@ describe('reviewPlan (phase 1 gate)', () => {
         expect(fake.cancelled).toHaveBeenCalled()
     })
 
+    it.each([
+        ['no answer', undefined],
+        ['null', null],
+        ['a bare string', 'approve'],
+        ['an unknown decision', { decision: 'save' }],
+        ['a missing decision', { plan: plan('Reading') }]
+    ])('fails closed and cancels on %s', async (_label, answer) => {
+        const { fake, review } = harness([answer])
+
+        expect(await review(plan('Tech'))).toBeNull()
+        expect(fake.cancelled).toHaveBeenCalled()
+        expect(fake.designSchema).not.toHaveBeenCalled()
+    })
+
     it('stops when the design pass is cancelled while regenerating', async () => {
         const { review } = harness([{ decision: 'regenerate' }], [null])
 

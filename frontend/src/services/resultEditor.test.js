@@ -178,6 +178,46 @@ describe('applyOps', () => {
         expect(applyOps(items(), [{ op: 'explode', path: ['Tech'] }]).error).toMatch(/unknown edit/i)
     })
 
+    it('rejects operation names that only exist on the object prototype', () => {
+        for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+            const out = applyOps(items(), [{ op: name, path: ['Tech'], to: 'X' }])
+            expect(out.error).toMatch(/unknown edit/i)
+            expect(out.records).toBeUndefined()
+        }
+    })
+
+    it('rejects malformed edits without throwing', () => {
+        const hostile = [
+            null,
+            undefined,
+            'rename',
+            42,
+            { op: 'rename', path: 'Tech', to: 'X' },
+            { op: 'rename', path: { 0: 'Tech', length: 1 }, to: 'X' },
+            { op: 'rename', path: [], to: 'X' },
+            { op: 'rename', path: ['Tech', 'Web', 'Frameworks', 'More'], to: 'X' },
+            { op: 'rename', path: ['Tech', 7], to: 'X' },
+            { op: 'delete' },
+            { op: 'rename', path: ['Tech'], to: ['X'] },
+            { op: 'rename', path: ['Tech'], to: { name: 'X' } },
+            { op: 'move', path: ['Tech', 'Web'], to: 'Travel' },
+            { op: 'move', path: ['Tech', 'Web'], to: [{}] },
+            { op: 'merge', path: ['Tech', 'Web'], to: 'Tech/Data' },
+            { op: 'merge', path: ['Tech', 'Web'], to: ['Tech', null] }
+        ]
+        for (const op of hostile) {
+            let out
+            expect(() => { out = applyOps(items(), [op]) }).not.toThrow()
+            expect(out.error).toBe('That edit is not valid.')
+            expect(out.records).toBeUndefined()
+        }
+    })
+
+    it('rejects a sparse op list without throwing', () => {
+        // eslint-disable-next-line no-sparse-arrays
+        expect(applyOps(items(), [, { op: 'rename', path: ['Tech'], to: 'X' }]).error).toBe('That edit is not valid.')
+    })
+
     it('never mutates the input and keeps every other field', () => {
         const input = items()
         const frozen = JSON.parse(JSON.stringify(input))
