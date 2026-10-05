@@ -469,15 +469,42 @@ describe('BackgroundJobRunner', () => {
             // Test with cancelled job
             const cancelRecord = {};
             OrganizerService.mockImplementationOnce(pausingOrganizer(cancelRecord));
-            globalThis.chrome.storage.session.remove.mockClear();
 
             const cancelJob = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
             await vi.advanceTimersByTimeAsync(0);
+            // startJob itself clears the draft, so only what happens after it counts.
+            globalThis.chrome.storage.session.remove.mockClear();
             runner.cancelJob();
             await cancelJob;
 
             expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['reviewDraft']);
             expect(runner.getState().status).toBe('idle');
+        });
+
+        it('announces a waiting review so a closed panel can be notified', async () => {
+            const record = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(record));
+            const events = [];
+            runner.subscribe((event, payload) => { if (event === 'review') events.push(payload); });
+
+            const job = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+
+            expect(events).toEqual([{ kind: 'plan' }]);
+            runner.resolvePlan('approve');
+            await job;
+        });
+
+        it('releases a review left waiting by the previous job when a new job starts', async () => {
+            const stale = {};
+            OrganizerService.mockImplementationOnce(pausingOrganizer(stale));
+            const first = runner.startJob({ apiKey: 'k', reviewFolders: true }, null);
+            await vi.advanceTimersByTimeAsync(0);
+
+            await runner.startJob({ apiKey: 'k' }, null);
+            await first;
+
+            expect(stale.answer).toEqual({ decision: 'cancel' });
         });
     });
 

@@ -177,6 +177,20 @@ jobRunner.subscribe((event, payload) => {
                 message: `Organization halted: ${payload?.message || 'Unexpected error'}.`,
                 priority: 2
             }, () => {});
+        } else if (event === 'review') {
+            chrome.notifications.create('organizer-job-review', {
+                type: 'basic',
+                iconUrl: 'icon128.png',
+                title: 'AI Bookmark Organizer',
+                message: payload?.kind === 'result'
+                    ? 'Your organized folders are ready to review.'
+                    : 'Your folder plan is ready for review.',
+                priority: 2
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Background] Notification error:', chrome.runtime.lastError.message);
+                }
+            });
         }
     }
 });

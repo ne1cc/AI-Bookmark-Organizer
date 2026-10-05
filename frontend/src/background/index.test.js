@@ -74,6 +74,44 @@ describe('Background Service Worker Entry Point', () => {
         );
     });
 
+    it('notifies when a review is waiting and the side panel is closed', () => {
+        expect(getConnectedPortCount()).toBe(0);
+
+        jobRunner.notify('review', { kind: 'plan' });
+        jobRunner.notify('review', { kind: 'result' });
+
+        expect(globalThis.chrome.notifications.create).toHaveBeenNthCalledWith(
+            1,
+            'organizer-job-review',
+            expect.objectContaining({ title: 'AI Bookmark Organizer', message: 'Your folder plan is ready for review.', priority: 2 }),
+            expect.any(Function)
+        );
+        expect(globalThis.chrome.notifications.create).toHaveBeenNthCalledWith(
+            2,
+            'organizer-job-review',
+            expect.objectContaining({ message: 'Your organized folders are ready to review.' }),
+            expect.any(Function)
+        );
+    });
+
+    it('does not notify about a waiting review while a side panel is connected', async () => {
+        vi.resetModules();
+        let onConnectHandler = null;
+        globalThis.chrome.runtime.onConnect.addListener = vi.fn((fn) => { onConnectHandler = fn; });
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        onConnectHandler({
+            name: 'organizer-channel',
+            postMessage: vi.fn(),
+            onMessage: { addListener: vi.fn() },
+            onDisconnect: { addListener: vi.fn() }
+        });
+
+        freshRunner.notify('review', { kind: 'plan' });
+
+        expect(globalThis.chrome.notifications.create).not.toHaveBeenCalled();
+    });
+
     it('opens side panel when organizer notification is clicked', () => {
         // Re-trigger notification click handler logic
         if (typeof globalThis.chrome.notifications.onClicked.addListener === 'function') {

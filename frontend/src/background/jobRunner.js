@@ -174,6 +174,9 @@ export class BackgroundJobRunner {
         } = config;
         this.persistJobState = flatDateSort || !inferCategories;
 
+        // A review still waiting for the previous job would hold its organizer forever.
+        if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
+
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
@@ -406,6 +409,7 @@ export class BackgroundJobRunner {
                 ? 'Folder plan ready — review it, then approve to start organizing.'
                 : 'Organized folders ready — review them, then save the results.');
             this.flushState();
+            this.notify('review', { kind });
         });
     }
 
