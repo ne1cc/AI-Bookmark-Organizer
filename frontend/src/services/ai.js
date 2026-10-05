@@ -267,11 +267,13 @@ function parseModelResponse(data, { salvageTruncated = false } = {}) {
     }
 }
 
-// The same single API-key field accepts keys from either provider. Google AI
-// Studio keys start with "AIza"; everything else (OpenRouter "sk-or-...",
-// OpenAI-style "sk-...") is treated as OpenRouter.
+// The same single API-key field accepts keys from either provider. OpenRouter
+// keys are "sk-or-..." (OpenAI-style "sk-..." included); Google AI Studio keys
+// have changed format over time ("AIza..." then "AQ....") so anything else is
+// treated as Gemini rather than matching on Google's prefix.
 export function detectProvider(apiKey) {
-    return (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter';
+    const key = (apiKey || '').trim();
+    return key && !key.startsWith('sk-') ? 'gemini' : 'openrouter';
 }
 
 // Model ids in the UI are OpenRouter-namespaced ("google/gemini-3.1-flash-lite").

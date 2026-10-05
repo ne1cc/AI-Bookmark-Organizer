@@ -3,7 +3,7 @@ import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock,
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, getInputBookmarkHtml, removeInputBookmarkFile, downloadInputBookmarkFile } from '../services/input_bookmarks'
-import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET } from '../services/ai'
+import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET, detectProvider } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
@@ -144,7 +144,7 @@ export default function Organizer({ theme = 'light' }) {
     })
 
     // Auto-detect provider from key format
-    const provider = useMemo(() => (apiKey || '').trim().startsWith('AIza') ? 'gemini' : 'openrouter', [apiKey])
+    const provider = useMemo(() => detectProvider(apiKey), [apiKey])
 
     // Models supported for Google Gemini
     const models = useMemo(() => [
@@ -1360,7 +1360,7 @@ export default function Organizer({ theme = 'light' }) {
                         <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
                         <span>
                             Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
-                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code>) or{' '}
+                            <strong>Google AI Studio</strong> (free, starts with <code>AIza</code> or <code>AQ.</code>) or{' '}
                             <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
                             automatically{apiKey ? `: ${provider === 'gemini' ? 'Google AI Studio' : 'OpenRouter'}` : ''}.
                         </span>
