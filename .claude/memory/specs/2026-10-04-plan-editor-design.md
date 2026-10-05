@@ -17,7 +17,8 @@ Let the user edit the structure in a small editor window at two points, so what 
 | Where does the editor live? | An overlay (dialog) inside the side panel. No new extension page, no popup window. |
 | Architecture | Pure editing models + one shared tree view; edits are sent with the decision, not applied in the panel alone. |
 | When can level 3 be edited? | In a **second review after filing**, where the third-level folders actually exist. Not guessed up front. |
-| Switches | **Two independent switches**: *Review plan before organizing* (existing) and *Review result before saving* (new). Both off by default. |
+| Why two reviews, not one? | Folders are generated at three points: the up-front plan, extra subfolders the classifier proposes batch by batch, and third-level folders built from the classified bookmarks. The final tree does not exist until the end, so the plan alone cannot show it; a result-only review would make a bad plan cost a full run. Kept both. |
+| Switches | **One switch**, *Review folders before saving*, turns on both pauses (plan, then result). Off by default. At the plan pause, a quick Approve is enough if the plan looks fine. |
 
 ## Assumptions
 - The plan review shows two levels (category, subfolder). Level 3 is produced by `enrichDetails` and can only be edited in
@@ -26,7 +27,7 @@ Let the user edit the structure in a small editor window at two points, so what 
 - Regenerate (plan review) discards saved edits, with one confirm if there are any.
 - An approved folder that receives zero bookmarks is not created (empty folders cannot be placed).
 - At plan time no bookmark is filed, so delete/move/merge change the plan only.
-- Either review can be on without the other. With only the result review on, there is no first pause.
+- The two reviews are not separately switchable: one switch enables both.
 
 ## Part 1 — Plan review
 
@@ -114,8 +115,8 @@ shown as a count on that parent.
 - Unrecognised decisions, stale job ids and cancel behave as in the prototype.
 
 ## Settings
-- `reviewPlan` (existing prototype setting) and `reviewResult` (new), stored like other settings, both default `false`,
-  both hidden in the no-AI date mode.
+- One setting, `reviewFolders` (default `false`), labelled **Review folders before saving**, hidden in the no-AI date mode.
+  It replaces the prototype's `reviewPlan` key; the prototype was never released, so there is nothing to migrate.
 
 ## Testing
 - `planEditor`: every action; empty name, sibling duplicate, parent echo, filler names, deleting the last category,
@@ -128,15 +129,15 @@ shown as a count on that parent.
 - Background: approve with an edited plan resolves a normalized schema with `binding: true`; an invalid plan keeps the job
   waiting; result ops are validated and applied, or rejected as a whole; session mirrors are written and cleared.
 - Components: `FolderTree`, `PlanEditor`, `ResultEditor` (rename, delete with confirm, move, merge, inline errors, Save disabled
-  with zero categories, discard prompt, Escape, focus trap and return, labels). `Organizer`: both switches independent;
-  Approve sends the plan; Save results sends ops.
+  with zero categories, discard prompt, Escape, focus trap and return, labels). `Organizer`: one switch enables both
+  pauses; Approve sends the plan; Save results sends ops.
 - Real Chrome with the AI mocked: plan review edits and approval (including a 1-bookmark approved folder surviving); result
   review with third-level folders present (rename, move, merge, delete) and the saved run matching the edited tree; reopening
   the panel restores both kinds of edits; invalid plan/ops are rejected without ending the run.
 
 ## Rollout
-Two switches, off by default, built on the prototype branch and draft PR #99 in two stages: plan review first (smaller),
-result review second. One README note. Version bump and release are separate decisions.
+One switch, off by default, built on the prototype branch and draft PR #99 in two stages: plan review first (smaller),
+result review second. Until stage two lands, the switch enables only the plan pause. One README note. Version bump and release are separate decisions.
 
 ## Out of scope
 Reorder, undo/redo, drag and drop, reusable plan templates, per-folder counts in the plan review (none exist yet), adding
