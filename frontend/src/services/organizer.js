@@ -2,6 +2,7 @@ import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFold
 import { generateSchema, generateInferredSchema, normalizeSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey, isExemptCategory } from './reconcile';
+import { buildRows, applyOps, detailStats } from './resultEditor';
 import { buildAuthoritativeSchema, buildFallbackSchema } from './defaultSchema';
 import { shouldCreateDetailFolder } from './subcategoryIdentity';
 import { isAlphaOrder, isAlphaDescOrder, sortFlat, sortWithinFolders } from './sorting';
@@ -1520,6 +1521,30 @@ export class OrganizerService {
         }
     }
 
+    // Phase 2 ends here: every folder (all three levels) now exists, and the user can edit them,
+    // with their bookmarks, before anything is sorted and written.
+    async reviewResult(classified) {
+        if (!this.resultReviewer) return classified;
+        let error = null;
+        for (;;) {
+            const answer = await this.resultReviewer(buildRows(classified), error);
+            error = null;
+            if (this.isCancelled || answer?.decision === 'cancel') return this.cancelled();
+            const ops = Array.isArray(answer?.ops) ? answer.ops : [];
+            if (ops.length === 0) return classified;
+            const applied = applyOps(classified, ops);
+            if (applied.error) {
+                error = applied.error;
+                continue;
+            }
+            const { detailFolders, detailedSubcategories } = detailStats(applied.records);
+            this.stats.detailFoldersCount = detailFolders;
+            this.stats.detailedSubcategories = detailedSubcategories;
+            this.onProgress({ status: 'info', message: `Applied ${ops.length} edit${ops.length === 1 ? '' : 's'} to the folder structure.` });
+            return applied.records;
+        }
+    }
+
     async runAI({ links, duplicatesRemoved, isBrowserMode }) {
         let schema = await this.designSchema(links);
         // null means cancelled; an undefined schema from a mocked generator must flow through.
@@ -1537,6 +1562,8 @@ export class OrganizerService {
         classified = await this.rehomeLoose(classified);
         if (!classified) return null;
         classified = await this.enrichDetails(classified);
+        if (!classified) return null;
+        classified = await this.reviewResult(classified);
         if (!classified) return null;
 
         // Creation order determines display order in Chrome, so sorting the
