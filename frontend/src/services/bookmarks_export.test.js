@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { generateNetscapeHTML, downloadBookmarks } from './bookmarks_export'
+import { generateNetscapeHTML, downloadBookmarks, sanitizeFilename, sanitizeAddDate, escapeHtml, sanitizeUrl } from './bookmarks_export'
 
 // Folder and link names are HTML-escaped in the output; decode them so the
 // assertions read as the folder names a user would actually see.
@@ -233,3 +233,59 @@ describe('downloadBookmarks Save As', () => {
         )
     })
 })
+
+describe('bookmarks_export security hardening (SEC-01, SEC-07, SEC-08)', () => {
+    it('escapes quotes and HTML tags across titles, categories, and attributes', () => {
+        const payload = [
+            {
+                title: '"><script>alert(1)</script><a href="',
+                url: 'https://example.com/safe',
+                category: '"><img src=x onerror=alert(1)>',
+                sub_category: '"><svg onload=alert(1)>',
+                add_date: '1700000000" onclick="alert(1)'
+            }
+        ];
+        const html = generateNetscapeHTML(payload);
+        expect(html).not.toContain('<script>');
+        expect(html).not.toContain('<img src=x');
+        expect(html).not.toContain('<svg onload');
+        expect(html).not.toContain('onclick="alert(1)"');
+        expect(html).toContain('&quot;&gt;&lt;script&gt;');
+    });
+
+    it('sanitizeFilename strips path traversal and invalid characters', () => {
+        expect(sanitizeFilename('../../../evil.html')).toBe('evil.html');
+        expect(sanitizeFilename('..\\..\\evil.html')).toBe('evil.html');
+        expect(sanitizeFilename('bad:name*?.html')).toBe('bad_name__.html');
+        expect(sanitizeFilename('../')).toBe('organized_bookmarks.html');
+        expect(sanitizeFilename('')).toBe('organized_bookmarks.html');
+    });
+
+    it('sanitizeAddDate constrains timestamps strictly to non-negative integers', () => {
+        expect(sanitizeAddDate(1700000000.85, 0)).toBe(1700000000);
+        expect(sanitizeAddDate('1700000000', 0)).toBe(1700000000);
+        expect(sanitizeAddDate(-500, 0)).toBe(0);
+        expect(sanitizeAddDate('invalid', 0)).toBe(0);
+        expect(sanitizeAddDate('1700000000" onclick="alert(1)', 123)).toBe(123);
+    });
+
+    it('escapeHtml preserves numeric zero and empty falsy values correctly', () => {
+        expect(escapeHtml(0)).toBe('0');
+        expect(escapeHtml('0')).toBe('0');
+        expect(escapeHtml('')).toBe('');
+        expect(escapeHtml(null)).toBe('');
+        expect(escapeHtml(undefined)).toBe('');
+    });
+
+    it('sanitizeUrl supports valid browser schemes and rejects dangerous schemes', () => {
+        expect(sanitizeUrl('https://example.com')).toBe('https://example.com');
+        expect(sanitizeUrl('http://example.com')).toBe('http://example.com');
+        expect(sanitizeUrl('chrome://bookmarks/')).toBe('chrome://bookmarks/');
+        expect(sanitizeUrl('edge://settings/')).toBe('edge://settings/');
+        expect(sanitizeUrl('about:blank')).toBe('about:blank');
+        expect(sanitizeUrl('file:///path/to/doc.pdf')).toBe('file:///path/to/doc.pdf');
+        expect(sanitizeUrl('javascript:alert(1)')).toBe('');
+        expect(sanitizeUrl('data:text/html,bad')).toBe('');
+        expect(sanitizeUrl('vbscript:msgbox(1)')).toBe('');
+    });
+});

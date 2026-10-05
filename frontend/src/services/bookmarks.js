@@ -7,6 +7,21 @@ function getBookmarksApi() {
     return (typeof chrome !== 'undefined' && chrome.bookmarks) || (typeof browser !== 'undefined' && browser.bookmarks);
 }
 
+export function isSafeBrowserUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith('javascript:') || lower.startsWith('data:') || lower.startsWith('vbscript:')) {
+        return false;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        return ['http:', 'https:', 'ftp:', 'file:', 'chrome:', 'edge:', 'brave:', 'about:'].includes(parsed.protocol);
+    } catch {
+        return false;
+    }
+}
+
 export function detectOtherBookmarksFolderId(tree) {
     if (!tree || !Array.isArray(tree) || tree.length === 0) return '2';
     const rootNode = tree[0];
@@ -148,6 +163,9 @@ export async function createFolder(parentId, title, index) {
 }
 
 export async function createBookmark(parentId, title, url, index) {
+    if (url && !isSafeBrowserUrl(url)) {
+        throw new Error(`Unsafe bookmark URL protocol rejected: ${url}`);
+    }
     return new Promise((resolve, reject) => {
         const createData = { parentId: parentId, title: title, url: url };
         if (typeof index === 'number') {

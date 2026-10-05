@@ -12,7 +12,8 @@ import {
     importBookmarksToBrowser,
     clearFolderCache,
     findDuplicateBookmarks,
-    removeDuplicateBookmarksFromBrowser
+    removeDuplicateBookmarksFromBrowser,
+    isSafeBrowserUrl
 } from './bookmarks';
 
 describe('bookmarks service', () => {
@@ -336,3 +337,25 @@ describe('bookmarks write wrappers', () => {
     })
 
 })
+
+describe('bookmarks protocol security (SEC-02)', () => {
+    it('validates safe browser URLs and rejects unsafe protocols', () => {
+        expect(isSafeBrowserUrl('https://example.com')).toBe(true);
+        expect(isSafeBrowserUrl('http://example.com/path')).toBe(true);
+        expect(isSafeBrowserUrl('ftp://example.com')).toBe(true);
+        expect(isSafeBrowserUrl('chrome://bookmarks/')).toBe(true);
+        expect(isSafeBrowserUrl('edge://history/')).toBe(true);
+        expect(isSafeBrowserUrl('about:blank')).toBe(true);
+        expect(isSafeBrowserUrl('file:///path/doc.pdf')).toBe(true);
+        expect(isSafeBrowserUrl('javascript:alert(1)')).toBe(false);
+        expect(isSafeBrowserUrl('data:text/html,bad')).toBe(false);
+        expect(isSafeBrowserUrl('vbscript:msgbox(1)')).toBe(false);
+        expect(isSafeBrowserUrl('')).toBe(false);
+        expect(isSafeBrowserUrl(null)).toBe(false);
+    });
+
+    it('createBookmark throws when given an unsafe protocol', async () => {
+        await expect(createBookmark('2', 'Unsafe', 'javascript:alert(1)', 0))
+            .rejects.toThrow('Unsafe bookmark URL protocol rejected');
+    });
+});

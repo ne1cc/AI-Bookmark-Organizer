@@ -73,3 +73,33 @@ describe('parseBookmarks — add_date extraction from the original file', () => 
         expect(links[0]).toMatchObject({ url: 'https://real.example.com/', add_date: '1650000000' })
     })
 })
+
+describe("parseBookmarks security hardening (SEC-02)", () => {
+    it("discards javascript: bookmarklets, data: URLs, and vbscript: URLs", () => {
+        const links = parseBookmarks(netscapeFile(`
+            <DT><A HREF="javascript:alert('pwned')">Exploit</A>
+            <DT><A HREF="data:text/html,<script>alert(1)</script>">Data URI</A>
+            <DT><A HREF="vbscript:msgbox(1)">VBScript</A>
+            <DT><A HREF="https://legit.example.com">Legit</A>
+        `));
+
+        expect(links).toHaveLength(1);
+        expect(links[0].url).toBe("https://legit.example.com/");
+    });
+
+    it("retains valid browser and local file schemes while rejecting dangerous ones", () => {
+        const links = parseBookmarks(netscapeFile(`
+            <DT><A HREF="chrome://bookmarks/">Chrome Bookmarks</A>
+            <DT><A HREF="about:config">Firefox Config</A>
+            <DT><A HREF="file:///Users/docs/guide.pdf">Local PDF</A>
+            <DT><A HREF="javascript:void(0)">JS Void</A>
+        `));
+
+        expect(links).toHaveLength(3);
+        expect(links.map(l => l.url)).toEqual([
+            'chrome://bookmarks/',
+            'about:config',
+            'file:///Users/docs/guide.pdf'
+        ]);
+    });
+});

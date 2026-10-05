@@ -34,6 +34,21 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
     chrome.runtime.onConnect.addListener((port) => {
         if (port.name !== 'organizer-channel') return;
 
+        // Security: Ensure port connections originate only from this extension's trusted contexts.
+        // Rejects foreign extension IDs and untrusted web page origins.
+        if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
+            if (port.sender) {
+                if (port.sender.id && port.sender.id !== chrome.runtime.id) {
+                    try { port.disconnect(); } catch {}
+                    return;
+                }
+                if (port.sender.url && !port.sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`) && !port.sender.url.startsWith('moz-extension://')) {
+                    try { port.disconnect(); } catch {}
+                    return;
+                }
+            }
+        }
+
         connectedPorts.add(port);
 
         // Immediately send current state on connection
@@ -201,7 +216,7 @@ if (typeof chrome !== 'undefined' && chrome.notifications?.onClicked) {
 // Configure session storage access level for side panel contexts if supported
 if (typeof chrome !== 'undefined' && chrome.storage?.session?.setAccessLevel) {
     try {
-        chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' }).catch(() => {});
+        chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
     } catch {}
 }
 
