@@ -105,6 +105,7 @@ describe('PlanEditor', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Move Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Move Web to' }), { target: { value: JSON.stringify(['Travel']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Web to Travel' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
         expect(onSave.mock.calls[0][0].categories).toEqual([
@@ -118,8 +119,10 @@ describe('PlanEditor', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Merge Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Web into' }), { target: { value: JSON.stringify(['Travel', 'Flights']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Web into Travel / Flights' }))
         fireEvent.click(screen.getByRole('button', { name: 'Merge Travel' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Travel into' }), { target: { value: JSON.stringify(['Tech']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Travel into Tech' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
         expect(onSave.mock.calls[0][0]).toEqual({ categories: [{ name: 'Tech', sub_categories: ['Data', 'Flights'] }] })

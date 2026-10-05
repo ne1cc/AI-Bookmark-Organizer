@@ -20,7 +20,7 @@ export default function FolderTree({
 }) {
     const [expanded, setExpanded] = useState(() => new Set())
     const [editing, setEditing] = useState(null) // { key, mode: 'rename' | 'add' | 'root', value }
-    const [menu, setMenu] = useState(null) // { key, kind: 'move' | 'merge' }
+    const [menu, setMenu] = useState(null) // { key, kind: 'move' | 'merge', target?: chosen path key }
     const [confirming, setConfirming] = useState(null)
     const [rowError, setRowError] = useState({}) // key -> message
 
@@ -59,6 +59,46 @@ export default function FolderTree({
         />
     )
 
+    // Choosing a target only selects it: arrowing through a closed select fires change on some
+    // platforms, so the move or merge happens on the explicit confirm button.
+    const renderMenu = (node) => {
+        const moving = menu.kind === 'move'
+        const targets = moving ? moveTargets(node) : mergeTargets(node)
+        const chosen = targets.find(target => keyOf(target.path) === menu.target)
+        return (
+            <div
+                onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null) } }}
+                style={{ paddingLeft: `${node.path.length * 1.1}rem`, padding: '0.2rem 0 0.2rem 1.5rem', display: 'flex', gap: '0.4rem', alignItems: 'center' }}
+            >
+                <select
+                    autoFocus
+                    aria-label={`${moving ? 'Move' : 'Merge'} ${node.name} ${moving ? 'to' : 'into'}`}
+                    value={chosen ? menu.target : ''}
+                    onChange={(event) => setMenu({ ...menu, target: event.target.value || null })}
+                >
+                    <option value="">{moving ? 'Move to…' : 'Merge into…'}</option>
+                    {targets.map(target => (
+                        <option key={keyOf(target.path)} value={keyOf(target.path)}>{target.label}</option>
+                    ))}
+                </select>
+                {chosen && (
+                    <button
+                        type="button"
+                        style={smallButton}
+                        aria-label={moving ? `Confirm move of ${node.name} to ${chosen.label}` : `Confirm merge of ${node.name} into ${chosen.label}`}
+                        onClick={() => {
+                            setMenu(null)
+                            if (moving) onMove(node, chosen.path)
+                            else onMerge(node, chosen.path)
+                        }}
+                    >
+                        {moving ? 'Move' : 'Merge'}
+                    </button>
+                )}
+            </div>
+        )
+    }
+
     const renderNode = (node) => {
         const key = keyOf(node.path)
         const actions = actionsFor(node)
@@ -80,27 +120,7 @@ export default function FolderTree({
                     {actions.includes('delete') && <button type="button" style={smallButton} aria-label={`Delete ${node.name}`} onClick={() => (node.children.length > 0 ? setConfirming(key) : onDelete(node))}>Delete</button>}
                 </div>
                 {adding && <div style={{ paddingLeft: `${node.path.length * 1.1}rem`, padding: '0.2rem 0 0.2rem 1.5rem' }}>{nameInput(node, `Name for the new subfolder in ${node.name}`)}</div>}
-                {menu?.key === key && (
-                    <div style={{ paddingLeft: `${node.path.length * 1.1}rem`, padding: '0.2rem 0 0.2rem 1.5rem' }}>
-                        <select
-                            autoFocus
-                            aria-label={`${menu.kind === 'move' ? 'Move' : 'Merge'} ${node.name} ${menu.kind === 'move' ? 'to' : 'into'}`}
-                            defaultValue=""
-                            onChange={(event) => {
-                                const target = JSON.parse(event.target.value)
-                                setMenu(null)
-                                if (menu.kind === 'move') onMove(node, target)
-                                else onMerge(node, target)
-                            }}
-                            onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null) } }}
-                        >
-                            <option value="" disabled>{menu.kind === 'move' ? 'Move to…' : 'Merge into…'}</option>
-                            {(menu.kind === 'move' ? moveTargets(node) : mergeTargets(node)).map(target => (
-                                <option key={keyOf(target.path)} value={keyOf(target.path)}>{target.label}</option>
-                            ))}
-                        </select>
-                    </div>
-                )}
+                {menu?.key === key && renderMenu(node)}
                 {confirming === key && (
                     <div role="alertdialog" aria-label={`Confirm delete ${node.name}`} style={{ padding: '0.3rem 0 0.3rem 1.5rem', fontSize: '0.8rem', color: 'var(--error)' }}>
                         {deleteMessage(node)}{' '}

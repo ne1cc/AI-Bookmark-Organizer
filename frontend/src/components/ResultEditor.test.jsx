@@ -80,7 +80,7 @@ describe('ResultEditor', () => {
         expand('Tech')
 
         fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
-        expect(screen.getByRole('alertdialog').textContent).toMatch(/Delete Web\? Its 3 bookmarks move up one level\./)
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/Delete Web\? Its 3 bookmarks move up into Tech; its third-level folders are removed\./)
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
@@ -94,11 +94,13 @@ describe('ResultEditor', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Move Data' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Move Data to' }), { target: { value: JSON.stringify(['Travel']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Data to Travel' }))
         fireEvent.click(screen.getByRole('button', { name: 'Move Tooling' }))
         const options = within(screen.getByRole('combobox', { name: 'Move Tooling to' })).getAllByRole('option').map(o => o.textContent)
         expect(options).not.toContain('Tech / Web')
         expect(options).toContain('Travel / Flights')
         fireEvent.change(screen.getByRole('combobox', { name: 'Move Tooling to' }), { target: { value: JSON.stringify(['Travel', 'Flights']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Tooling to Travel / Flights' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
         expect(onSave).toHaveBeenCalledWith([
@@ -114,6 +116,7 @@ describe('ResultEditor', () => {
         const options = within(screen.getByRole('combobox', { name: 'Merge Travel into' })).getAllByRole('option').map(o => o.textContent)
         expect(options).toEqual(['Merge into…', 'Tech'])
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Travel into' }), { target: { value: JSON.stringify(['Tech']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Travel into Tech' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
 
         expect(onSave).toHaveBeenCalledWith([{ op: 'merge', path: ['Travel'], to: ['Tech'] }])
@@ -124,6 +127,29 @@ describe('ResultEditor', () => {
 
         expect(screen.getByText('Trips')).toBeDefined()
         expect(screen.getByText(/1 edit$/)).toBeDefined()
+    })
+
+    it('starts clean, with a notice, when the earlier edits no longer apply', () => {
+        const { onSave } = setup({ initialOps: [{ op: 'rename', path: ['Nope'], to: 'Trips' }] })
+
+        expect(screen.getByText('9 bookmarks · 2 categories · 0 edits')).toBeDefined()
+        expect(screen.getByRole('status').textContent).toBe('Your earlier edits no longer apply and were cleared.')
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Travel' }))
+        const input = screen.getByRole('textbox', { name: 'New name for Travel' })
+        fireEvent.change(input, { target: { value: 'Trips' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+
+        expect(onSave).toHaveBeenCalledWith([{ op: 'rename', path: ['Travel'], to: 'Trips' }])
+    })
+
+    it('says "bookmark" for one, in the summary and the delete confirm', () => {
+        setup({ rows: [{ category: 'Travel', sub_category: 'Hotels', detail_category: 'Inns', count: 1 }] })
+
+        expect(screen.getByText('1 bookmark · 1 category · 0 edits')).toBeDefined()
+        expand('Travel')
+        fireEvent.click(screen.getByRole('button', { name: 'Delete Hotels' }))
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/Delete Hotels\? Its 1 bookmark moves up into Travel; its third-level folders are removed\./)
     })
 
     it('asks before discarding edits', () => {

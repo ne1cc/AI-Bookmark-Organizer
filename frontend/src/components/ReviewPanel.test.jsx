@@ -179,6 +179,29 @@ describe('ReviewPanel: result review', () => {
 
         expect(screen.getByRole('alert').textContent).toMatch(/no longer exists/i)
     })
+
+    it('clears rejected edits without cancelling the run, and saves without them', async () => {
+        const onDecide = vi.fn()
+        const { rerender } = render(<ReviewPanel plan={null} result={{ rows: rows() }} onDecide={onDecide} />)
+        expect(screen.queryByRole('button', { name: 'Clear edits' })).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Edit folders' }))
+        fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
+        const input = screen.getByRole('textbox', { name: 'New name for Travel' })
+        fireEvent.change(input, { target: { value: 'Trips' } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+        fireEvent.click(screen.getByRole('button', { name: 'Save edits' }))
+        rerender(<ReviewPanel plan={null} result={{ rows: rows(), error: 'The folder "Travel" no longer exists.' }} onDecide={onDecide} />)
+        global.chrome.storage.session.set.mockClear()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Clear edits' }))
+
+        expect(screen.queryByText('1 edit')).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Clear edits' })).toBeNull()
+        expect(global.chrome.storage.session.set).toHaveBeenCalledWith({ reviewDraft: expect.objectContaining({ resultEdit: null }) })
+        fireEvent.click(screen.getByRole('button', { name: 'Save results' }))
+        expect(onDecide).toHaveBeenCalledWith('result', 'approve', {})
+    })
 })
 
 describe('ReviewPanel: draft persistence and recovery', () => {

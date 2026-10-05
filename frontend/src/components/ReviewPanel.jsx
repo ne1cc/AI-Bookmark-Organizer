@@ -56,6 +56,12 @@ export default function ReviewPanel({ plan, result, onDecide }) {
         setEditor(null)
     }
 
+    // Always lets the user drop an edit list the worker rejected without cancelling the run.
+    const clearOps = () => {
+        setResultEdit(null)
+        persist({ planEdit, resultEdit: null })
+    }
+
     const regenerate = () => {
         if (activePlan && !window.confirm('Regenerating throws away your edits to this plan. Continue?')) return
         setPlanEdit(null)
@@ -113,6 +119,7 @@ export default function ReviewPanel({ plan, result, onDecide }) {
                     <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
                         <button type="button" className="btn-primary" onClick={() => onDecide('result', 'approve', activeOps.length > 0 ? { ops: activeOps } : {})}>Save results</button>
                         <button type="button" style={secondary} onClick={() => setEditor('result')}>Edit folders</button>
+                        {activeOps.length > 0 && <button type="button" style={secondary} onClick={clearOps}>Clear edits</button>}
                     </div>
                 </div>
             )}
