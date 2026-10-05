@@ -12,6 +12,12 @@ const SINK = 'General';
 const weight = (record) => (Number.isFinite(record.count) ? record.count : 1);
 const startsWith = (path, prefix) => path.length >= prefix.length && prefix.every((name, i) => path[i] === name);
 
+// Ensure a record's fields match its path (fixes echoing folder names like [Tech, Tech] or [Tech, Web, Web]).
+const canonical = (record) => {
+    const path = recordPath(record);
+    return { ...record, sub_category: path[1] ?? SINK, detail_category: path[2] ?? null };
+};
+
 // [category], [category, sub] or [category, sub, detail]: the folders a record is written into.
 export function recordPath(record) {
     const { category, sub_category: sub, detail_category: detail } = record;
@@ -90,6 +96,9 @@ function rename(records, { path, to }) {
     const error = checkName(to, siblingNames(records, path.slice(0, -1), name), depth === 1 ? null : path[depth - 2]);
     if (error) return { error };
     if (depth === 3 && canonicalKey(to) === canonicalKey(path[0])) return { error: 'A folder cannot be named like its category.' };
+    if (depth === 1 && siblingNames(records, path).some(sibling => canonicalKey(sibling) === canonicalKey(to))) {
+        return { error: 'A subfolder in this category already has that name.' };
+    }
     const trimmed = to.trim();
     return {
         records: records.map(record => {
@@ -123,7 +132,7 @@ function move(records, { path, to }) {
     if (siblingNames(records, to).some(sibling => canonicalKey(sibling) === canonicalKey(name))) {
         return { error: `"${name}" already exists there.` };
     }
-    if (path.length === 3 && to.some(parent => canonicalKey(parent) === canonicalKey(name))) {
+    if (to.some(parent => canonicalKey(parent) === canonicalKey(name))) {
         return { error: 'A folder cannot be named like its parent.' };
     }
     return {
@@ -178,13 +187,13 @@ const OPERATIONS = { rename, delete: remove, move, merge };
 // ops: [{ op: 'rename' | 'delete' | 'move' | 'merge', path: [...], to?: ... }]
 // Returns { records } with every op applied in order, or { error } with none applied.
 export function applyOps(records, ops) {
-    let current = records.map(record => ({ ...record }));
+    let current = records.map(canonical);
     for (const op of Array.isArray(ops) ? ops : []) {
         const apply = OPERATIONS[op?.op];
         if (!apply) return { error: `Unknown edit "${op?.op}".` };
         const result = apply(current, op);
         if (result.error) return { error: result.error };
-        current = result.records;
+        current = result.records.map(canonical);
     }
     return { records: current };
 }

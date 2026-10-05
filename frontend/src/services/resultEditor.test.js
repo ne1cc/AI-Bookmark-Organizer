@@ -199,4 +199,30 @@ describe('applyOps', () => {
         expect(fromItems.error).toBeUndefined()
         expect(buildTree(fromRows.records)).toEqual(buildTree(fromItems.records))
     })
+
+    it('canonicalizes echoing folder names so rows and bookmarks stay in parity', () => {
+        const data = [...items(), bm(10, 'Tech', 'Tech'), bm(11, 'Tech', 'Web', 'Web')]
+        const ops = [
+            { op: 'rename', path: ['Tech'], to: 'Technology' },
+            { op: 'rename', path: ['Technology', 'Web'], to: 'Frontend' }
+        ]
+        const fromItems = applyOps(data, ops)
+        const fromRows = applyOps(buildRows(data), ops)
+        expect(fromItems.error).toBeUndefined()
+        expect(fromRows.error).toBeUndefined()
+        const treeItems = buildTree(fromItems.records)
+        const treeRows = buildTree(fromRows.records)
+        expect(treeRows).toEqual(treeItems)
+        expect(find(treeItems, 'Technology', 'Tech')).toBeUndefined()
+        expect(find(treeItems, 'Technology', 'Frontend', 'Web')).toBeUndefined()
+    })
+
+    it('refuses to move a subfolder into a category with that name', () => {
+        const data = [...items(), bm(12, 'Data', 'Misc')]
+        expect(applyOps(data, [{ op: 'move', path: ['Tech', 'Data'], to: ['Data'] }]).error).toMatch(/like its parent/i)
+    })
+
+    it('refuses to rename a category to match an existing subfolder name', () => {
+        expect(applyOps(items(), [{ op: 'rename', path: ['Tech'], to: 'Web' }]).error).toMatch(/subfolder/i)
+    })
 })
