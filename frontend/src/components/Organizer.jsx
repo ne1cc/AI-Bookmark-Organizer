@@ -296,6 +296,8 @@ export default function Organizer({ theme = 'light' }) {
     // (idle), which must not reset the run state mid-handshake.
     const awaitingAckRef = useRef(false)
     useEffect(() => { statusRef.current = status }, [status])
+    const cancellingRef = useRef(false)
+    useEffect(() => { cancellingRef.current = isCancelling }, [isCancelling])
     useEffect(() => { logsRef.current = logs }, [logs])
     useEffect(() => () => {
         if (endPanelRunRef.current) {
@@ -332,6 +334,17 @@ export default function Organizer({ theme = 'light' }) {
     // progress and terminal updates are broadcast into a port nobody hears.
     const wirePort = useCallback((port) => {
         if (!port) return;
+
+        // The worker's job lived only in its memory, so once the worker is gone the run cannot resume.
+        const showInterrupted = () => {
+            resultsRequestPendingRef.current = false
+            setIsCancelling(false);
+            setStatus('idle');
+            setProgress(0);
+            setBackgroundNotice(INTERRUPTED_RUN_NOTICE);
+            if (!planResolverRef.current) setPlanForReview(null);
+            if (!resultResolverRef.current) setResultForReview(null);
+        };
 
         port.onMessage.addListener((msg) => {
             if (!msg || !msg.type) return;
@@ -388,20 +401,26 @@ export default function Organizer({ theme = 'light' }) {
                     setStatus('error');
                     setErrorMsg(state.errorMsg || 'Failed to complete background organization.');
                     setBackgroundNotice('');
+                } else if (state.status === 'interrupted') {
+                    showInterrupted();
                 } else if (state.status === 'idle') {
                     resultsRequestPendingRef.current = false
                     setIsCancelling(false);
-                    // A stale session snapshot can leave the panel in a
-                    // zombie "In Progress" state with no worker behind
-                    // it. If the worker has no job and nothing is
-                    // running in this panel, return to the main menu.
+                    // The panel shows a worker run in progress but the worker has
+                    // no job: it was killed mid-run (the watchdog's reconnect wakes a
+                    // fresh worker), so say the run was interrupted rather than
+                    // silently returning to the menu — unless the user cancelled it.
                     // Skipped during the ACK handshake: a freshly reconnected
                     // port receives the worker's connect-time idle snapshot
                     // before the job we are starting has been seen.
                     if (!awaitingAckRef.current && statusRef.current === 'processing' && !organizerRef.current) {
-                        setStatus('idle');
-                        setProgress(0);
-                        setBackgroundNotice('');
+                        if (cancellingRef.current) {
+                            setStatus('idle');
+                            setProgress(0);
+                            setBackgroundNotice('');
+                        } else {
+                            showInterrupted();
+                        }
                     }
                 }
             } else if (msg.type === 'JOB_RESULTS') {
