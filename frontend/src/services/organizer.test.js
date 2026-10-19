@@ -933,6 +933,47 @@ describe('withRetry resilient retry and cancellation', () => {
         expect(onRetry).not.toHaveBeenCalled()
     })
 
+    it('retries JSON-parse errors whose message contains "position 404" instead of misreading it as a permanent HTTP 404', async () => {
+        const parseError = new Error('model returned invalid JSON (Unexpected token } in JSON at position 404)')
+        parseError.retryable = true
+
+        const fn = vi.fn()
+            .mockRejectedValueOnce(parseError)
+            .mockResolvedValueOnce({ success: true })
+
+        const promise = withRetry(fn, 5, 1500, null)
+        await vi.runAllTimersAsync()
+        const result = await promise
+
+        expect(result).toEqual({ success: true })
+        expect(fn).toHaveBeenCalledTimes(2)
+    })
+
+    it('treats a genuine HTTP 404 (statusCode) as permanent and throws without retrying', async () => {
+        const notFoundError = new Error('model not found')
+        notFoundError.statusCode = 404
+
+        const fn = vi.fn().mockRejectedValue(notFoundError)
+
+        await expect(withRetry(fn, 5, 1500, null)).rejects.toThrow('model not found')
+        expect(fn).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not sniff HTTP status codes out of message text when statusCode is absent', async () => {
+        // A JSON position offset in an error message is not an HTTP status:
+        // without statusCode the error is network-classified, which this message
+        // does not match, so it must not be retried.
+        const parseError = new Error('Unexpected end of JSON input at position 503')
+
+        const fn = vi.fn().mockRejectedValue(parseError)
+
+        const promise = withRetry(fn, 5, 1500, null)
+        const rejection = expect(promise).rejects.toThrow('Unexpected end of JSON input at position 503')
+        await vi.runAllTimersAsync()
+        await rejection
+        expect(fn).toHaveBeenCalledTimes(1)
+    })
+
     it('aborts backoff sleep immediately when isCancelled returns true', async () => {
         const error = new Error('Temporary gateway error')
         error.statusCode = 502
@@ -1063,6 +1104,18 @@ describe('isNetworkError, isRateLimitError, and isRetryableError helpers', () =>
         const err400 = new Error('Bad Request')
         err400.statusCode = 400
         expect(isRetryableError(err400, 400)).toBe(false)
+
+        const err404 = new Error('model not found')
+        err404.statusCode = 404
+        expect(isRetryableError(err404, 404)).toBe(false)
+
+        // A JSON-parse error whose message merely contains "position 404"
+        // carries no HTTP status: with the explicit retryable flag it retries,
+        // and without statusCode the message text never conjures a 404.
+        const parseError = new Error('model returned invalid JSON (Unexpected token } in JSON at position 404)')
+        parseError.retryable = true
+        expect(isRetryableError(parseError)).toBe(true)
+        expect(isRetryableError(new SyntaxError('Unexpected token } in JSON at position 404'))).toBe(false)
     })
 })
 

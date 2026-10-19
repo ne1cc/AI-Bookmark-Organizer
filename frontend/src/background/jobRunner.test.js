@@ -49,6 +49,10 @@ describe('BackgroundJobRunner', () => {
             downloads: {
                 download: vi.fn()
             },
+            alarms: {
+                create: vi.fn(),
+                clear: vi.fn()
+            },
             storage: {
                 session: {
                     get: vi.fn((keys, cb) => cb && cb({})),
@@ -349,6 +353,68 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('complete');
     });
 
+    it('persists the session snapshot for the default AI-inferred config', async () => {
+        await runner.startJob({
+            apiKey: 'AIzaSyFakeKey',
+            categories: ['Tech'],
+            inferCategories: true,
+            flatDateSort: false
+        }, null);
+
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                activeJobState: expect.objectContaining({
+                    status: 'complete',
+                    progress: 100
+                })
+            })
+        );
+    });
+
+    it('creates the fallback keepalive alarm when a job starts', async () => {
+        const jobPromise = runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: false }, null);
+        expect(globalThis.chrome.alarms.create).toHaveBeenCalledWith('organizer-keepalive', { periodInMinutes: 1 });
+        await jobPromise;
+    });
+
+    it('stops the keepalive alarm and flushes a terminal snapshot for a zero-result run', async () => {
+        OrganizerService.mockImplementationOnce(function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.start = vi.fn(async () => {
+                onProgress({ status: 'done', message: 'No bookmarks to organize.' });
+                return [];
+            });
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = null;
+        });
+        runner.subscribe((event) => { if (event === 'cancelled') throw new Error('unexpected cancelled event'); });
+
+        const results = await runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: false }, null);
+
+        expect(results).toEqual([]);
+        expect(runner.keepAliveTimer).toBeNull();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+        expect(runner.getState().status).toBe('complete');
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                activeJobState: expect.objectContaining({ status: 'complete', progress: 100, count: 0 })
+            })
+        );
+    });
+
+    it('clears the keepalive alarm on cancel and reset', () => {
+        runner.organizer = { cancel: vi.fn() };
+        runner.currentJob.status = 'processing';
+
+        runner.cancelJob();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+
+        globalThis.chrome.alarms.clear.mockClear();
+        runner.resetJob();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+    });
+
     it('cancels an active job cleanly', async () => {
         const cancelSpy = vi.fn();
         runner.organizer = { cancel: cancelSpy };
@@ -374,7 +440,7 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('idle');
         expect(runner.getState().progress).toBe(0);
         expect(runner.getResults()).toBeNull();
-        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
+        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['organizedData']);
         // Saved runs survive a reset: "Organize another" must not delete earlier results.
         expect(globalThis.chrome.storage.local.remove).not.toHaveBeenCalled();
     });
