@@ -53,7 +53,7 @@ npm run lint
   - **Theme Toggle**: Switch between Light, Dark, and System themes. Verify high-contrast text readability and that Subfolder Hierarchy diagrams switch to dark artwork in dark mode.
 - **API Key Configuration**: Enter your Google Gemini / AI Studio key (`AIza...` or `AQ...`) or OpenRouter key (`sk-or-...`). Verify that it is saved locally (it stays populated when you close and reopen the side panel). Direct links are provided below the input field.
 - **Model & Sorting Selection**:
-  - Select from the 3 Gemini tiers (**3.1 Flash Lite**, **3.8 Flash**, or **3.1 Pro Preview**).
+  - Select from the Gemini models (**3.5 Flash Lite**, **3.1 Flash Lite**, **3.8 Flash**, or **3.1 Pro Preview**).
   - Choose an intra-folder sorting option (Alphabetical A–Z, Date Added Newest/Oldest First, Website / Domain A–Z, Reverse Alphabetical).
 - **Subfolder Hierarchy Settings**:
   - Cycle through **Compact**, **Balanced**, and **Detailed** subfolder depth options. Verify that the illustrative diagram updates to match the selection and theme.

@@ -49,6 +49,10 @@ describe('BackgroundJobRunner', () => {
             downloads: {
                 download: vi.fn()
             },
+            alarms: {
+                create: vi.fn(),
+                clear: vi.fn()
+            },
             storage: {
                 session: {
                     get: vi.fn((keys, cb) => cb && cb({})),
@@ -639,6 +643,7 @@ describe('BackgroundJobRunner', () => {
             runner.resolveResult('approve');
             await job;
         });
+
     });
 
     it('cancels an active job cleanly', async () => {
@@ -666,7 +671,7 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('idle');
         expect(runner.getState().progress).toBe(0);
         expect(runner.getResults()).toBeNull();
-        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
+        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['organizedData']);
         // Saved runs survive a reset: "Organize another" must not delete earlier results.
         expect(globalThis.chrome.storage.local.remove).not.toHaveBeenCalled();
     });

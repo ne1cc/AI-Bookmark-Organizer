@@ -32,7 +32,6 @@ export class BackgroundJobRunner {
         this.keepAliveTimer = null;
         this.subscribers = new Set();
         this.cachedResults = null;
-        this.persistJobState = true;
         this.stateFlushTimer = null;
         this.pendingReview = null;
     }
@@ -99,6 +98,17 @@ export class BackgroundJobRunner {
 
     startKeepAlive() {
         this.stopKeepAlive();
+        // Fallback liveness signal that survives the service worker being
+        // killed: the 15 s interval below only runs while the worker lives,
+        // but chrome.alarms wakes it and onAlarm can then detect an
+        // interrupted run. The interval stays the primary keepalive.
+        if (typeof chrome !== 'undefined' && chrome.alarms?.create) {
+            try {
+                chrome.alarms.create('organizer-keepalive', { periodInMinutes: 1 });
+            } catch {
+                // Ignore alarm creation failure
+            }
+        }
         if (typeof setInterval !== 'undefined') {
             this.keepAliveTimer = setInterval(() => {
                 try {
@@ -119,10 +129,16 @@ export class BackgroundJobRunner {
             clearInterval(this.keepAliveTimer);
             this.keepAliveTimer = null;
         }
+        if (typeof chrome !== 'undefined' && chrome.alarms?.clear) {
+            try {
+                chrome.alarms.clear('organizer-keepalive');
+            } catch {
+                // Ignore alarm clear failure
+            }
+        }
     }
 
     persistSessionSnapshot() {
-        if (!this.persistJobState) return;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.set({
@@ -172,7 +188,6 @@ export class BackgroundJobRunner {
             autoImport = true,
             reviewFolders = false
         } = config;
-        this.persistJobState = flatDateSort || !inferCategories;
 
         // A review still waiting for the previous job would hold its organizer forever.
         if (this.pendingReview) this.resolveReview(this.pendingReview.kind, 'cancel');
@@ -380,6 +395,15 @@ export class BackgroundJobRunner {
                 return results;
             }
 
+            // An empty result set still ends the run: stop the keepalive alarm
+            // and flush a terminal snapshot so the interrupted-run alarm cannot
+            // keep waking the worker for a run that already finished.
+            this.currentJob.status = 'complete';
+            this.currentJob.progress = 100;
+            this.currentJob.count = 0;
+            this.currentJob.completedAt = Date.now();
+            this.stopKeepAlive();
+            this.flushState();
             return results;
         } catch (err) {
             if (this.organizer !== organizer) return null;
@@ -472,9 +496,11 @@ export class BackgroundJobRunner {
             plan: null,
             result: null
         };
+        // The idle snapshot flushState() writes below replaces activeJobState,
+        // so only the cached results need an explicit removal here.
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.remove(['activeJobState', 'organizedData']);
+                chrome.storage.session.remove(['organizedData']);
             } catch {
                 // Ignore removal error
             }

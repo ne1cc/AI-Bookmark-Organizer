@@ -32,8 +32,15 @@ describe('Background Service Worker Entry Point', () => {
                     addListener: vi.fn()
                 }
             },
+            alarms: {
+                onAlarm: {
+                    addListener: vi.fn()
+                },
+                clear: vi.fn()
+            },
             storage: {
                 session: {
+                    get: vi.fn((keys, cb) => cb && cb({})),
                     set: vi.fn(),
                     remove: vi.fn()
                 },
@@ -357,6 +364,78 @@ describe('Background Service Worker Entry Point', () => {
             payload: { message: 'No saved organized bookmarks were found. Run organization again.' }
         });
         expect(globalThis.chrome.storage.session.set).not.toHaveBeenCalled();
+    });
+
+    it('keepalive alarm with an active job in memory touches the session snapshot', async () => {
+        vi.resetModules();
+        let alarmHandler = null;
+        globalThis.chrome.alarms.onAlarm.addListener = vi.fn((fn) => { alarmHandler = fn; });
+
+        await import('./index');
+        const { jobRunner: freshRunner } = await import('./jobRunner');
+        freshRunner.currentJob.id = 'job_live';
+        freshRunner.currentJob.status = 'processing';
+        freshRunner.currentJob.progress = 42;
+
+        alarmHandler({ name: 'organizer-keepalive' });
+        alarmHandler({ name: 'unrelated-alarm' });
+
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledTimes(1);
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith({
+            activeJobState: expect.objectContaining({ id: 'job_live', status: 'processing', progress: 42 })
+        });
+        // The run is still live: the fallback alarm must keep firing.
+        expect(globalThis.chrome.alarms.clear).not.toHaveBeenCalled();
+    });
+
+    it('flags a stale processing snapshot as interrupted when no job is in memory', async () => {
+        vi.resetModules();
+        let alarmHandler = null;
+        globalThis.chrome.alarms.onAlarm.addListener = vi.fn((fn) => { alarmHandler = fn; });
+        globalThis.chrome.storage.session.get = vi.fn((keys, cb) => cb && cb({
+            activeJobState: {
+                id: 'job_dead',
+                status: 'processing',
+                progress: 63,
+                logs: [{ message: 'Batch 5', timestamp: 1 }],
+                errorMsg: ''
+            }
+        }));
+
+        const freshIndex = await import('./index');
+        expect(freshIndex.getConnectedPortCount()).toBe(0);
+
+        alarmHandler({ name: 'organizer-keepalive' });
+
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith({
+            activeJobState: expect.objectContaining({
+                id: 'job_dead',
+                status: 'interrupted',
+                progress: 63,
+                logs: [{ message: 'Batch 5', timestamp: 1 }]
+            })
+        });
+        // The stale run is terminal: the alarm must not wake the worker forever.
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+    });
+
+    it('broadcasts the interrupted snapshot over connected ports', async () => {
+        let alarmHandler = null;
+        globalThis.chrome.alarms.onAlarm.addListener = vi.fn((fn) => { alarmHandler = fn; });
+        globalThis.chrome.storage.session.get = vi.fn((keys, cb) => cb && cb({
+            activeJobState: { id: 'job_dead', status: 'processing', progress: 10, logs: [] }
+        }));
+        const { port } = await connectFreshPort();
+
+        alarmHandler({ name: 'organizer-keepalive' });
+
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith({
+            activeJobState: expect.objectContaining({ id: 'job_dead', status: 'interrupted' })
+        });
+        expect(port.postMessage).toHaveBeenCalledWith({
+            type: 'STATUS_UPDATE',
+            payload: expect.objectContaining({ id: 'job_dead', status: 'interrupted' })
+        });
     });
 
     describe('port sender verification (SEC-03)', () => {

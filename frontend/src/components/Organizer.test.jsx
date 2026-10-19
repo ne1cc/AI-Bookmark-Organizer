@@ -82,6 +82,16 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
+    it('allows selecting Gemini 3.5 Flash Lite', () => {
+        render(<Organizer />)
+
+        const modelButton = screen.getByRole('button', { name: /3\.5 Flash Lite/i })
+        fireEvent.click(modelButton)
+
+        expect(modelButton.className).toContain('active')
+        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ selectedModel: 'google/gemini-3.5-flash-lite' })
+    })
+
     it('defaults new installs to inferred categories with no manual selection', () => {
         render(<Organizer />)
 
@@ -870,6 +880,44 @@ describe('In-process and completion date range display', () => {
             })
         })
 
+        it('surfaces an interrupted-run notice when the panel reopens with an interrupted snapshot', async () => {
+            global.chrome = {
+                storage: {
+                    local: {
+                        get: vi.fn((keys, cb) => cb({})),
+                        set: vi.fn(),
+                        remove: vi.fn()
+                    },
+                    session: {
+                        get: vi.fn((keys, cb) => {
+                            if (keys.includes('activeJobState')) {
+                                cb({
+                                    activeJobState: {
+                                        id: 'panel_123',
+                                        status: 'interrupted',
+                                        progress: 40,
+                                        logs: []
+                                    }
+                                })
+                            } else {
+                                cb({})
+                            }
+                        }),
+                        set: vi.fn()
+                    }
+                }
+            }
+
+            render(<Organizer />)
+
+            await waitFor(() => {
+                expect(screen.getByText(/interrupted before it could complete/i)).toBeDefined()
+                expect(screen.getByText(/results may be incomplete/i)).toBeDefined()
+                expect(screen.getByText(/Re-run to continue/i)).toBeDefined()
+            })
+            expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+        })
+
         it('requests and downloads completed inferred results from background memory after reconnecting', async () => {
             const listeners = []
             const mockPort = {
@@ -1504,6 +1552,181 @@ describe('In-process and completion date range display', () => {
                 expect(screen.getByText(/did not acknowledge the job/i)).toBeDefined()
                 expect(screen.getByText(/Organization complete!/i)).toBeDefined()
                 expect(disconnectedPort.disconnect).toHaveBeenCalled()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it('persists a processing session snapshot when an in-panel fallback run starts and a complete one when it finishes', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-panel-snapshot')
+            vi.useFakeTimers()
+
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'progress', message: 'Classifying batch 1/2...', percent: 40 }) })
+                        act(() => { onProgress({ status: 'done', message: 'Organization complete!' }) })
+                        return [{ title: 'Item 1', url: 'https://example.com/1' }]
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                const snapshots = global.chrome.storage.session.set.mock.calls.map(([payload]) => payload.activeJobState)
+                expect(snapshots.some((snapshot) => snapshot?.status === 'processing')).toBe(true)
+                expect(snapshots.at(-1)).toEqual(expect.objectContaining({
+                    id: expect.stringMatching(/^panel_/),
+                    status: 'complete',
+                    progress: 100,
+                    count: 1,
+                    completedAt: expect.any(Number)
+                }))
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it('rewrites the session snapshot as interrupted on pagehide mid-run and stops once the run terminates', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-panel-pagehide')
+            vi.useFakeTimers()
+
+            try {
+                let resolveStart
+                OrganizerService.mockImplementation(function () {
+                    this.start = vi.fn(() => new Promise((resolve) => { resolveStart = resolve }))
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                const snapshots = () => global.chrome.storage.session.set.mock.calls.map(([payload]) => payload.activeJobState)
+                expect(snapshots().at(-1)?.status).toBe('processing')
+
+                await act(async () => {
+                    window.dispatchEvent(new Event('pagehide'))
+                    await Promise.resolve()
+                })
+                expect(snapshots().at(-1)).toEqual(expect.objectContaining({ status: 'interrupted', progress: 0 }))
+
+                vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+                const writesBeforeVisibility = global.chrome.storage.session.set.mock.calls.length
+                await act(async () => {
+                    document.dispatchEvent(new Event('visibilitychange'))
+                    await Promise.resolve()
+                })
+                expect(global.chrome.storage.session.set.mock.calls.length).toBe(writesBeforeVisibility + 1)
+                expect(snapshots().at(-1)?.status).toBe('interrupted')
+
+                await act(async () => {
+                    resolveStart([{ title: 'Item 1', url: 'https://example.com/1' }])
+                })
+                expect(snapshots().at(-1)?.status).toBe('complete')
+
+                const writesAfterTerminal = global.chrome.storage.session.set.mock.calls.length
+                await act(async () => {
+                    window.dispatchEvent(new Event('pagehide'))
+                    document.dispatchEvent(new Event('visibilitychange'))
+                    await Promise.resolve()
+                })
+                expect(global.chrome.storage.session.set.mock.calls.length).toBe(writesAfterTerminal)
+            } finally {
+                vi.useRealTimers()
+                vi.restoreAllMocks()
+            }
+        })
+
+        it('terminates tracking with a complete zero-count snapshot when an in-panel run finishes with no results', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-panel-empty')
+            vi.useFakeTimers()
+
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'done', message: 'No bookmarks to organize.' }) })
+                        return []
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                const snapshots = () => global.chrome.storage.session.set.mock.calls.map(([payload]) => payload.activeJobState)
+                expect(snapshots().at(-1)).toEqual(expect.objectContaining({
+                    id: expect.stringMatching(/^panel_/),
+                    status: 'complete',
+                    count: 0,
+                    completedAt: expect.any(Number)
+                }))
+
+                const writesAfterTerminal = global.chrome.storage.session.set.mock.calls.length
+                await act(async () => {
+                    window.dispatchEvent(new Event('pagehide'))
+                    document.dispatchEvent(new Event('visibilitychange'))
+                    await Promise.resolve()
+                })
+                expect(global.chrome.storage.session.set.mock.calls.length).toBe(writesAfterTerminal)
+                expect(snapshots().at(-1)?.status).toBe('complete')
             } finally {
                 vi.useRealTimers()
             }
