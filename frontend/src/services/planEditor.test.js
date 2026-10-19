@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder,
-    removeCategory, removeSubfolder, renameCategory, renameSubfolder, summarize
+    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, nestPreview, promoteSubfolder,
+    removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from './planEditor'
 
 const plan = () => ({
@@ -148,5 +148,92 @@ describe('immutability', () => {
         mergeSubfolders(original, { category: 'Travel', name: 'Hotels' }, { category: 'Tech', name: 'Web' })
         mergeCategories(original, 'Travel', 'Tech')
         expect(original).toEqual(frozen)
+    })
+})
+
+describe('reorderCategory', () => {
+    it('moves a category to a new index and keeps the rest in order', () => {
+        const { plan: next } = reorderCategory(plan(), 0, 2)
+        expect(next.categories.map(c => c.name)).toEqual(['Travel', 'Finance', 'Tech'])
+        expect(next.categories[2].sub_categories).toEqual(['Web', 'Data'])
+    })
+
+    it('returns an error for out-of-range indices and never mutates the input', () => {
+        const original = plan()
+        expect(reorderCategory(original, 0, 5).error).toBeTruthy()
+        expect(reorderCategory(original, -1, 0).error).toBeTruthy()
+        expect(original.categories.map(c => c.name)).toEqual(['Tech', 'Travel', 'Finance'])
+    })
+})
+
+describe('reorderSubfolder', () => {
+    it('moves a subfolder within its category and keeps the rest in order', () => {
+        const { plan: next } = reorderSubfolder(plan(), 'Tech', 1, 0)
+        expect(next.categories[0].sub_categories).toEqual(['Data', 'Web'])
+        expect(next.categories[1].sub_categories).toEqual(['Flights', 'Hotels'])
+    })
+
+    it('returns an error for an unknown category or bad indices', () => {
+        expect(reorderSubfolder(plan(), 'Nope', 0, 1).error).toBeTruthy()
+        expect(reorderSubfolder(plan(), 'Tech', 0, 9).error).toBeTruthy()
+        expect(reorderSubfolder(plan(), 'Tech', 4, 0).error).toBeTruthy()
+    })
+})
+
+describe('nestCategory', () => {
+    it('turns an empty category into a subfolder of the target', () => {
+        const { plan: next } = nestCategory(plan(), 'Finance', 'Tech')
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Travel'])
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'Finance'])
+    })
+
+    it('flattens the source subfolders in after it, skipping names the target already has', () => {
+        const start = addSubfolder(plan(), 'Travel', 'Web').plan
+        const { plan: next } = nestCategory(start, 'Travel', 'Tech')
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'Travel', 'Flights', 'Hotels'])
+    })
+
+    it('refuses a name clash, a reserved name, itself, and unknown categories without mutating', () => {
+        const original = addSubfolder(plan(), 'Tech', 'Finance').plan
+        expect(nestCategory(original, 'Finance', 'Tech').error).toMatch(/already exists/)
+        expect(nestCategory(addCategory(plan(), 'Other').plan, 'Other', 'Tech').error).toMatch(/reserved/)
+        expect(nestCategory(original, 'Tech', 'Tech').error).toBeTruthy()
+        expect(nestCategory(original, 'Nope', 'Tech').error).toBeTruthy()
+        expect(nestCategory(original, 'Tech', 'Nope').error).toBeTruthy()
+        expect(original.categories).toHaveLength(3)
+    })
+})
+
+describe('nestCategory with combine', () => {
+    it('folds the source into a same-named subfolder and still flattens the rest in', () => {
+        const start = addSubfolder(plan(), 'Tech', 'travel').plan
+        const { plan: next } = nestCategory(start, 'Travel', 'Tech', { combine: true })
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Finance'])
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'travel', 'Flights', 'Hotels'])
+    })
+})
+
+describe('nestPreview', () => {
+    it('reports a name clash and the subfolders that would be combined', () => {
+        const start = addSubfolder(addSubfolder(plan(), 'Tech', 'Travel').plan, 'Tech', 'Hotels').plan
+        expect(nestPreview(start, 'Travel', 'Tech')).toEqual({ clash: 'Travel', combined: ['Hotels'] })
+        expect(nestPreview(plan(), 'Finance', 'Tech')).toEqual({ clash: null, combined: [] })
+        expect(nestPreview(plan(), 'Nope', 'Tech')).toEqual({ clash: null, combined: [] })
+    })
+})
+
+describe('promoteSubfolder', () => {
+    it('makes a subfolder an empty category at the given position', () => {
+        const { plan: next } = promoteSubfolder(plan(), 'Tech', 'Data', 1)
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Data', 'Travel', 'Finance'])
+        expect(next.categories[0].sub_categories).toEqual(['Web'])
+        expect(next.categories[1].sub_categories).toEqual([])
+    })
+
+    it('refuses a clash with an existing category, unknown folders and bad positions', () => {
+        const clash = addSubfolder(plan(), 'Tech', 'Finance').plan
+        expect(promoteSubfolder(clash, 'Tech', 'Finance', 0).error).toMatch(/already exists/)
+        expect(promoteSubfolder(plan(), 'Tech', 'Nope', 0).error).toBeTruthy()
+        expect(promoteSubfolder(plan(), 'Tech', 'Web', 9).error).toBeTruthy()
     })
 })

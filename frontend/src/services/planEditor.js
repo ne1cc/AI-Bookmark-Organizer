@@ -135,3 +135,79 @@ export function mergeCategories(plan, sourceName, targetName) {
     next.categories = next.categories.filter(category => category.name !== sourceName);
     return { plan: next };
 }
+
+// The source becomes a subfolder of the target. Plans are two levels deep, so the source's own
+// subfolders land beside it (names the target already has are dropped). With `combine`, a
+// subfolder already named like the source absorbs it instead of refusing the clash.
+export function nestCategory(plan, sourceName, targetName, { combine = false } = {}) {
+    const source = findCategory(plan, sourceName);
+    const target = findCategory(plan, targetName);
+    if (!source) return { error: `Category "${sourceName}" was not found.` };
+    if (!target) return { error: `Category "${targetName}" was not found.` };
+    if (source === target) return { error: 'Choose a different category to nest inside.' };
+    const error = checkName(source.name, combine ? [] : target.sub_categories, target.name);
+    if (error) return { error };
+    const next = copy(plan);
+    const into = findCategory(next, targetName);
+    const known = new Set([...into.sub_categories, into.name].map(canonicalKey));
+    for (const sub of [source.name, ...source.sub_categories]) {
+        if (known.has(canonicalKey(sub))) continue;
+        known.add(canonicalKey(sub));
+        into.sub_categories.push(sub);
+    }
+    next.categories = next.categories.filter(category => category.name !== sourceName);
+    return { plan: next };
+}
+
+// What nesting would fold together, so the UI can say so first: `clash` is the target subfolder
+// already named like the source (or null); `combined` lists source subfolders the target already has.
+export function nestPreview(plan, sourceName, targetName) {
+    const source = findCategory(plan, sourceName);
+    const target = findCategory(plan, targetName);
+    if (!source || !target) return { clash: null, combined: [] };
+    const existing = new Set(target.sub_categories.map(canonicalKey));
+    return {
+        clash: target.sub_categories.find(sub => canonicalKey(sub) === canonicalKey(source.name)) ?? null,
+        combined: source.sub_categories.filter(sub => existing.has(canonicalKey(sub)))
+    };
+}
+
+// The subfolder becomes an empty category at `index` in the category list.
+export function promoteSubfolder(plan, categoryName, name, index) {
+    const category = findCategory(plan, categoryName);
+    if (!category || !category.sub_categories.includes(name)) return { error: `Subfolder "${name}" was not found.` };
+    if (!Number.isInteger(index) || index < 0 || index > plan.categories.length) return { error: 'That position is outside the plan.' };
+    const error = checkName(name, plan.categories.map(c => c.name));
+    if (error) return { error };
+    const next = copy(plan);
+    const from = findCategory(next, categoryName);
+    from.sub_categories = from.sub_categories.filter(sub => sub !== name);
+    next.categories.splice(index, 0, { name, sub_categories: [] });
+    return { plan: next };
+}
+
+// Folder order follows the array order, so reordering is a plain index move.
+export function reorderCategory(plan, from, to) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0
+        || from >= plan.categories.length || to >= plan.categories.length) {
+        return { error: 'That position is outside the plan.' };
+    }
+    const next = copy(plan);
+    const [moved] = next.categories.splice(from, 1);
+    next.categories.splice(to, 0, moved);
+    return { plan: next };
+}
+
+export function reorderSubfolder(plan, categoryName, from, to) {
+    const category = findCategory(plan, categoryName);
+    if (!category) return { error: `Category "${categoryName}" was not found.` };
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0
+        || from >= category.sub_categories.length || to >= category.sub_categories.length) {
+        return { error: 'That position is outside the category.' };
+    }
+    const next = copy(plan);
+    const subs = findCategory(next, categoryName).sub_categories;
+    const [moved] = subs.splice(from, 1);
+    subs.splice(to, 0, moved);
+    return { plan: next };
+}

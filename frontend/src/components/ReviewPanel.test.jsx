@@ -33,7 +33,9 @@ beforeEach(() => {
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); delete global.chrome })
 
+const openActions = async (name) => fireEvent.click(await screen.findByRole('button', { name: `Actions for ${name}` }))
 const renamePlanFolder = async (from, to) => {
+    await openActions(from)
     fireEvent.click(await screen.findByRole('button', { name: `Rename ${from}` }))
     const input = screen.getByRole('textbox', { name: `New name for ${from}` })
     fireEvent.change(input, { target: { value: to } })
@@ -161,6 +163,7 @@ describe('ReviewPanel: result review', () => {
         render(<ReviewPanel plan={null} result={{ rows: rows() }} onDecide={onDecide} />)
 
         fireEvent.click(screen.getByRole('button', { name: 'Edit folders' }))
+        await openActions('Travel')
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
         const input = screen.getByRole('textbox', { name: 'New name for Travel' })
         fireEvent.change(input, { target: { value: 'Trips' } })
@@ -186,6 +189,7 @@ describe('ReviewPanel: result review', () => {
         expect(screen.queryByRole('button', { name: 'Clear edits' })).toBeNull()
 
         fireEvent.click(screen.getByRole('button', { name: 'Edit folders' }))
+        await openActions('Travel')
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
         const input = screen.getByRole('textbox', { name: 'New name for Travel' })
         fireEvent.change(input, { target: { value: 'Trips' } })
@@ -240,6 +244,7 @@ describe('ReviewPanel: draft persistence and recovery', () => {
         const first = render(<ReviewPanel plan={null} result={{ rows: rows() }} onDecide={() => {}} />)
 
         fireEvent.click(screen.getByRole('button', { name: 'Edit folders' }))
+        await openActions('Travel')
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
         const input = screen.getByRole('textbox', { name: 'New name for Travel' })
         fireEvent.change(input, { target: { value: 'Trips' } })

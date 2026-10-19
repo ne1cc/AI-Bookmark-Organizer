@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import PlanEditor from './PlanEditor'
 
@@ -16,14 +16,34 @@ const setup = () => {
     return { onSave, onDiscard }
 }
 
+const openActions = (name) => fireEvent.click(screen.getByRole('button', { name: `Actions for ${name}` }))
+
 const rename = (from, to) => {
+    openActions(from)
     fireEvent.click(screen.getByRole('button', { name: `Rename ${from}` }))
     const input = screen.getByRole('textbox', { name: `New name for ${from}` })
     fireEvent.change(input, { target: { value: to } })
     fireEvent.keyDown(input, { key: 'Enter' })
 }
 
+// clientY 10 / 90 hit the top / bottom edge of a 100px row; omitted means the middle (drop onto).
+const dragTo = (from, to, clientY) => {
+    const tree = screen.getByRole('tree', { name: 'Folder structure' })
+    const row = (name) => within(tree).getByRole('treeitem', { name }).querySelector('div[tabindex]')
+    fireEvent.dragStart(row(from))
+    const evt = new Event('dragover', { bubbles: true, cancelable: true })
+    if (clientY !== undefined) Object.defineProperty(evt, 'clientY', { value: clientY })
+    fireEvent(row(to), evt)
+    fireEvent.drop(row(to))
+}
+
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+beforeEach(() => {
+    // jsdom reports zero-height boxes; give rows a stable height so edge drops (before/after) work.
+    // Re-created each test because afterEach restores all mocks.
+    vi.spyOn(window.HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 0, left: 0, width: 100, height: 100 })
+})
 
 describe('PlanEditor', () => {
     it('is a labelled modal dialog that shows the live counts', () => {
@@ -32,6 +52,14 @@ describe('PlanEditor', () => {
         const dialog = screen.getByRole('dialog', { name: 'Edit folder plan' })
         expect(dialog.getAttribute('aria-modal')).toBe('true')
         expect(within(dialog).getByText('2 categories · 3 subfolders')).toBeDefined()
+    })
+
+    it('renders outside its host so app button rules cannot squash the rows', () => {
+        // Organizer mounts the review inside .action-button-container, whose `button { width: 100% }` hid every name.
+        const { container } = render(<div className="action-button-container"><PlanEditor plan={plan()} onSave={vi.fn()} onDiscard={vi.fn()} /></div>)
+        const dialog = screen.getByRole('dialog', { name: 'Edit folder plan' })
+        expect(container.contains(dialog)).toBe(false)
+        expect(dialog.closest('.action-button-container')).toBeNull()
     })
 
     it('renames a subfolder and saves the edited plan', () => {
@@ -66,6 +94,7 @@ describe('PlanEditor', () => {
         const root = screen.getByRole('textbox', { name: /new category/i })
         fireEvent.change(root, { target: { value: 'Reading' } })
         fireEvent.keyDown(root, { key: 'Enter' })
+        openActions('Reading')
         fireEvent.click(screen.getByRole('button', { name: 'Add subfolder to Reading' }))
         const sub = screen.getByRole('textbox', { name: 'Name for the new subfolder in Reading' })
         fireEvent.change(sub, { target: { value: 'Blogs' } })
@@ -78,6 +107,7 @@ describe('PlanEditor', () => {
     it('asks before deleting a category that has subfolders, with the count', () => {
         const { onSave } = setup()
 
+        openActions('Tech')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Tech' }))
         expect(screen.getByRole('alertdialog').textContent).toMatch(/Delete Tech and its 2 subfolders\?/)
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
@@ -89,9 +119,12 @@ describe('PlanEditor', () => {
     it('deletes a subfolder without asking, and refuses to delete the last category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
+        openActions('Travel')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Travel' }))
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
+        openActions('Tech')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Tech' }))
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
 
@@ -103,6 +136,7 @@ describe('PlanEditor', () => {
     it('moves a subfolder to another category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Move Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Move Web to' }), { target: { value: JSON.stringify(['Travel']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Web to Travel' }))
@@ -117,15 +151,183 @@ describe('PlanEditor', () => {
     it('merges a subfolder into another folder and a category into another category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Merge Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Web into' }), { target: { value: JSON.stringify(['Travel', 'Flights']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Web into Travel / Flights' }))
+        openActions('Travel')
         fireEvent.click(screen.getByRole('button', { name: 'Merge Travel' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Travel into' }), { target: { value: JSON.stringify(['Tech']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Travel into Tech' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
         expect(onSave.mock.calls[0][0]).toEqual({ categories: [{ name: 'Tech', sub_categories: ['Data', 'Flights'] }] })
+    })
+
+
+    it('reorders categories by dropping between rows', () => {
+        const { onSave } = setup()
+
+        const tree = screen.getByRole('tree', { name: 'Folder structure' })
+        fireEvent.dragStart(within(tree).getByRole('treeitem', { name: 'Travel' }).querySelector('div[tabindex]'))
+        const evt = new Event('dragover', { bubbles: true, cancelable: true })
+        Object.defineProperty(evt, 'clientY', { value: 10 })
+        fireEvent(within(tree).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'), evt)
+        fireEvent.drop(within(tree).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => c.name)).toEqual(['Travel', 'Tech'])
+    })
+
+    it('reorders a subfolder into another category at a chosen position', () => {
+        const { onSave } = setup()
+
+        const tree = screen.getByRole('tree', { name: 'Folder structure' })
+        fireEvent.dragStart(within(tree).getByRole('treeitem', { name: 'Data' }).querySelector('div[tabindex]'))
+        const evt = new Event('dragover', { bubbles: true, cancelable: true })
+        Object.defineProperty(evt, 'clientY', { value: 10 })
+        fireEvent(within(tree).getByRole('treeitem', { name: 'Flights' }).querySelector('div[tabindex]'), evt)
+        fireEvent.drop(within(tree).getByRole('treeitem', { name: 'Flights' }).querySelector('div[tabindex]'))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web'] },
+            { name: 'Travel', sub_categories: ['Data', 'Flights'] }
+        ])
+    })
+
+    it('nests an empty category dropped on another one, without a merge prompt', () => {
+        const onSave = vi.fn()
+        render(<PlanEditor plan={{ categories: [...plan().categories, { name: 'Dogs', sub_categories: [] }] }} onSave={onSave} onDiscard={vi.fn()} />)
+
+        dragTo('Dogs', 'Travel')
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web', 'Data'] },
+            { name: 'Travel', sub_categories: ['Flights', 'Dogs'] }
+        ])
+    })
+
+    it('asks before nesting a category that has subfolders, then flattens them in beside it', () => {
+        const { onSave } = setup()
+
+        dragTo('Tech', 'Travel')
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/Nest “Tech” in “Travel”\? Its 2 subfolders move in alongside it\./)
+        fireEvent.click(screen.getByRole('button', { name: 'Nest' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Travel', sub_categories: ['Flights', 'Tech', 'Web', 'Data'] }
+        ])
+    })
+
+    it('promotes a subfolder dropped between categories', () => {
+        const { onSave } = setup()
+
+        dragTo('Data', 'Travel', 10)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => [c.name, c.sub_categories])).toEqual([
+            ['Tech', ['Web']], ['Data', []], ['Travel', ['Flights']]
+        ])
+    })
+
+    it('files a subfolder dropped just below an open category as its first child', () => {
+        const { onSave } = setup()
+
+        dragTo('Flights', 'Tech', 90)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Flights', 'Web', 'Data'] },
+            { name: 'Travel', sub_categories: [] }
+        ])
+    })
+
+    it('promotes and nests from the menu, so neither needs a drag', () => {
+        const { onSave } = setup()
+
+        openActions('Data')
+        fireEvent.click(screen.getByRole('button', { name: 'Move Data' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Move Data to' }), { target: { value: JSON.stringify([]) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Data to Top level (new category)' }))
+
+        openActions('Data')
+        fireEvent.click(screen.getByRole('button', { name: 'Nest Data' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Nest Data inside' }), { target: { value: JSON.stringify(['Travel']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm nest of Data inside Travel' }))
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+
+        openActions('Travel')
+        fireEvent.click(screen.getByRole('button', { name: 'Nest Travel' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Nest Travel inside' }), { target: { value: JSON.stringify(['Tech']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm nest of Travel inside Tech' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Nest' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web', 'Travel', 'Flights', 'Data'] }
+        ])
+    })
+
+    it('offers to combine when the target already has a subfolder of that name, and names folded subfolders', () => {
+        const onSave = vi.fn()
+        render(<PlanEditor plan={{ categories: [
+            { name: 'Pets', sub_categories: ['Dogs', 'Toys'] },
+            { name: 'Dogs', sub_categories: ['Toys', 'Breeds'] }
+        ] }} onSave={onSave} onDiscard={vi.fn()} />)
+
+        const dogsCategory = screen.getAllByRole('treeitem', { name: 'Dogs' }).find(item => item.getAttribute('aria-level') === '1')
+        fireEvent.dragStart(dogsCategory.querySelector('div[tabindex]'))
+        fireEvent.dragOver(screen.getByRole('treeitem', { name: 'Pets' }).querySelector('div[tabindex]'))
+        fireEvent.drop(screen.getByRole('treeitem', { name: 'Pets' }).querySelector('div[tabindex]'))
+        expect(screen.getByRole('alertdialog').textContent).toMatch(
+            /“Pets” already has a “Dogs” subfolder\. Combine them\? Its 2 subfolders move in too\. Toys already exists there and will be combined\./
+        )
+        fireEvent.click(screen.getByRole('button', { name: 'Combine' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([{ name: 'Pets', sub_categories: ['Dogs', 'Toys', 'Breeds'] }])
+    })
+
+    it('sends a folder dropped in the empty space below the tree to the end', () => {
+        const { onSave } = setup()
+        const zone = screen.getByRole('button', { name: '+ Add category' }).parentElement
+
+        fireEvent.dragStart(within(screen.getByRole('tree')).getByRole('treeitem', { name: 'Web' }).querySelector('div[tabindex]'))
+        fireEvent.dragOver(zone)
+        fireEvent.drop(zone)
+        fireEvent.dragStart(within(screen.getByRole('tree')).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'))
+        fireEvent.dragOver(zone)
+        fireEvent.drop(zone)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => c.name)).toEqual(['Travel', 'Web', 'Tech'])
+    })
+
+    it('undoes edits step by step from the button and Ctrl/⌘+Z, but leaves text fields their own undo', () => {
+        const { onSave } = setup()
+        const undoButton = screen.getByRole('button', { name: 'Undo' })
+        expect(undoButton.disabled).toBe(true)
+
+        rename('Web', 'Frontend')
+        dragTo('Data', 'Travel', 10)
+        fireEvent.keyDown(screen.getByRole('dialog'), { key: 'z', metaKey: true })
+        expect(screen.getByRole('treeitem', { name: 'Data' }).getAttribute('aria-level')).toBe('2')
+        expect(screen.getByRole('treeitem', { name: 'Frontend' })).toBeTruthy()
+
+        openActions('Tech')
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Tech' }))
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'New name for Tech' }), { key: 'z', ctrlKey: true })
+        expect(screen.getByRole('treeitem', { name: 'Frontend' })).toBeTruthy()
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'New name for Tech' }), { key: 'Escape' })
+
+        fireEvent.click(undoButton)
+        expect(undoButton.disabled).toBe(true)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+        expect(onSave.mock.calls[0][0]).toEqual(plan())
     })
 
     it('discards without asking when nothing changed, and asks once when something did', () => {
@@ -191,6 +393,7 @@ describe('PlanEditor', () => {
         setup()
         const dialog = screen.getByRole('dialog')
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
         document.activeElement.blur()
         expect(document.activeElement).toBe(document.body)
