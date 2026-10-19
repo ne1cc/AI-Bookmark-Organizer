@@ -137,14 +137,15 @@ export function mergeCategories(plan, sourceName, targetName) {
 }
 
 // The source becomes a subfolder of the target. Plans are two levels deep, so the source's own
-// subfolders land beside it (names the target already has are dropped).
-export function nestCategory(plan, sourceName, targetName) {
+// subfolders land beside it (names the target already has are dropped). With `combine`, a
+// subfolder already named like the source absorbs it instead of refusing the clash.
+export function nestCategory(plan, sourceName, targetName, { combine = false } = {}) {
     const source = findCategory(plan, sourceName);
     const target = findCategory(plan, targetName);
     if (!source) return { error: `Category "${sourceName}" was not found.` };
     if (!target) return { error: `Category "${targetName}" was not found.` };
     if (source === target) return { error: 'Choose a different category to nest inside.' };
-    const error = checkName(source.name, target.sub_categories, target.name);
+    const error = checkName(source.name, combine ? [] : target.sub_categories, target.name);
     if (error) return { error };
     const next = copy(plan);
     const into = findCategory(next, targetName);
@@ -156,6 +157,19 @@ export function nestCategory(plan, sourceName, targetName) {
     }
     next.categories = next.categories.filter(category => category.name !== sourceName);
     return { plan: next };
+}
+
+// What nesting would fold together, so the UI can say so first: `clash` is the target subfolder
+// already named like the source (or null); `combined` lists source subfolders the target already has.
+export function nestPreview(plan, sourceName, targetName) {
+    const source = findCategory(plan, sourceName);
+    const target = findCategory(plan, targetName);
+    if (!source || !target) return { clash: null, combined: [] };
+    const existing = new Set(target.sub_categories.map(canonicalKey));
+    return {
+        clash: target.sub_categories.find(sub => canonicalKey(sub) === canonicalKey(source.name)) ?? null,
+        combined: source.sub_categories.filter(sub => existing.has(canonicalKey(sub)))
+    };
 }
 
 // The subfolder becomes an empty category at `index` in the category list.

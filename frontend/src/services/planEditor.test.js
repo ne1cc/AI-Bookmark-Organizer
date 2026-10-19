@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, promoteSubfolder,
+    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, nestPreview, promoteSubfolder,
     removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from './planEditor'
 
@@ -201,6 +201,24 @@ describe('nestCategory', () => {
         expect(nestCategory(original, 'Nope', 'Tech').error).toBeTruthy()
         expect(nestCategory(original, 'Tech', 'Nope').error).toBeTruthy()
         expect(original.categories).toHaveLength(3)
+    })
+})
+
+describe('nestCategory with combine', () => {
+    it('folds the source into a same-named subfolder and still flattens the rest in', () => {
+        const start = addSubfolder(plan(), 'Tech', 'travel').plan
+        const { plan: next } = nestCategory(start, 'Travel', 'Tech', { combine: true })
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Finance'])
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'travel', 'Flights', 'Hotels'])
+    })
+})
+
+describe('nestPreview', () => {
+    it('reports a name clash and the subfolders that would be combined', () => {
+        const start = addSubfolder(addSubfolder(plan(), 'Tech', 'Travel').plan, 'Tech', 'Hotels').plan
+        expect(nestPreview(start, 'Travel', 'Tech')).toEqual({ clash: 'Travel', combined: ['Hotels'] })
+        expect(nestPreview(plan(), 'Finance', 'Tech')).toEqual({ clash: null, combined: [] })
+        expect(nestPreview(plan(), 'Nope', 'Tech')).toEqual({ clash: null, combined: [] })
     })
 })
 

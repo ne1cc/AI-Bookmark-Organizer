@@ -246,6 +246,67 @@ describe('PlanEditor', () => {
         ])
     })
 
+    it('promotes and nests from the menu, so neither needs a drag', () => {
+        const { onSave } = setup()
+
+        openActions('Data')
+        fireEvent.click(screen.getByRole('button', { name: 'Move Data' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Move Data to' }), { target: { value: JSON.stringify([]) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Data to Top level (new category)' }))
+
+        openActions('Data')
+        fireEvent.click(screen.getByRole('button', { name: 'Nest Data' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Nest Data inside' }), { target: { value: JSON.stringify(['Travel']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm nest of Data inside Travel' }))
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+
+        openActions('Travel')
+        fireEvent.click(screen.getByRole('button', { name: 'Nest Travel' }))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Nest Travel inside' }), { target: { value: JSON.stringify(['Tech']) } })
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm nest of Travel inside Tech' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Nest' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web', 'Travel', 'Flights', 'Data'] }
+        ])
+    })
+
+    it('offers to combine when the target already has a subfolder of that name, and names folded subfolders', () => {
+        const onSave = vi.fn()
+        render(<PlanEditor plan={{ categories: [
+            { name: 'Pets', sub_categories: ['Dogs', 'Toys'] },
+            { name: 'Dogs', sub_categories: ['Toys', 'Breeds'] }
+        ] }} onSave={onSave} onDiscard={vi.fn()} />)
+
+        const dogsCategory = screen.getAllByRole('treeitem', { name: 'Dogs' }).find(item => item.getAttribute('aria-level') === '1')
+        fireEvent.dragStart(dogsCategory.querySelector('div[tabindex]'))
+        fireEvent.dragOver(screen.getByRole('treeitem', { name: 'Pets' }).querySelector('div[tabindex]'))
+        fireEvent.drop(screen.getByRole('treeitem', { name: 'Pets' }).querySelector('div[tabindex]'))
+        expect(screen.getByRole('alertdialog').textContent).toMatch(
+            /“Pets” already has a “Dogs” subfolder\. Combine them\? Its 2 subfolders move in too\. Toys already exists there and will be combined\./
+        )
+        fireEvent.click(screen.getByRole('button', { name: 'Combine' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([{ name: 'Pets', sub_categories: ['Dogs', 'Toys', 'Breeds'] }])
+    })
+
+    it('sends a folder dropped in the empty space below the tree to the end', () => {
+        const { onSave } = setup()
+        const zone = screen.getByRole('button', { name: '+ Add category' }).parentElement
+
+        fireEvent.dragStart(within(screen.getByRole('tree')).getByRole('treeitem', { name: 'Web' }).querySelector('div[tabindex]'))
+        fireEvent.dragOver(zone)
+        fireEvent.drop(zone)
+        fireEvent.dragStart(within(screen.getByRole('tree')).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'))
+        fireEvent.dragOver(zone)
+        fireEvent.drop(zone)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => c.name)).toEqual(['Travel', 'Web', 'Tech'])
+    })
+
     it('undoes edits step by step from the button and Ctrl/⌘+Z, but leaves text fields their own undo', () => {
         const { onSave } = setup()
         const undoButton = screen.getByRole('button', { name: 'Undo' })

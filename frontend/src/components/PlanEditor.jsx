@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import EditorDialog from './EditorDialog'
 import FolderTree from './FolderTree'
 import {
-    addCategory, addSubfolder, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, promoteSubfolder,
+    addCategory, addSubfolder, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, nestPreview, promoteSubfolder,
     removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from '../services/planEditor'
 
@@ -82,8 +82,9 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
                 nodes={nodes}
                 defaultExpanded
                 onReorder={reorder}
-                onNest={(node, target) => apply(nestCategory(draft, node.path[0], target[0]))}
-                actionsFor={(node) => (node.path.length === 1 ? ['rename', 'add', 'delete', 'merge'] : ['rename', 'delete', 'move', 'merge'])}
+                onNest={(node, target, options) => apply(nestCategory(draft, node.path[0], target[0], options))}
+                nestPreview={(node, target) => nestPreview(draft, node.path[0], target[0])}
+                actionsFor={(node) => (node.path.length === 1 ? ['rename', 'add', 'nest', 'delete', 'merge'] : ['rename', 'delete', 'move', 'merge'])}
                 onRename={(node, name) => apply(node.path.length === 1
                     ? renameCategory(draft, node.path[0], name)
                     : renameSubfolder(draft, node.path[0], node.path[1], name))}
@@ -93,15 +94,20 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
                     ? removeCategory(draft, node.path[0])
                     : removeSubfolder(draft, node.path[0], node.path[1]))}
                 deleteMessage={(node) => `Delete ${node.name} and its ${node.children.length} subfolder${node.children.length === 1 ? '' : 's'}?`}
-                moveTargets={(node) => draft.categories
-                    .filter(category => category.name !== node.path[0])
-                    .map(category => ({ path: [category.name], label: category.name }))}
+                moveTargets={(node) => [
+                    ...(node.path.length === 2 ? [{ path: [], label: 'Top level (new category)' }] : []),
+                    ...draft.categories
+                        .filter(category => category.name !== node.path[0])
+                        .map(category => ({ path: [category.name], label: category.name }))
+                ]}
                 mergeTargets={(node) => (node.path.length === 1
                     ? draft.categories.filter(category => category.name !== node.path[0]).map(category => ({ path: [category.name], label: category.name }))
                     : draft.categories.flatMap(category => category.sub_categories
                         .filter(sub => !(category.name === node.path[0] && sub === node.path[1]))
                         .map(sub => ({ path: [category.name, sub], label: `${category.name} / ${sub}` }))))}
-                onMove={(node, target) => apply(moveSubfolder(draft, node.path[0], node.path[1], target[0]))}
+                onMove={(node, target) => apply(target.length === 0
+                    ? promoteSubfolder(draft, node.path[0], node.path[1], draft.categories.length)
+                    : moveSubfolder(draft, node.path[0], node.path[1], target[0]))}
                 onMerge={(node, target) => apply(node.path.length === 1
                     ? mergeCategories(draft, node.path[0], target[0])
                     : mergeSubfolders(draft, { category: node.path[0], name: node.path[1] }, { category: target[0], name: target[1] }))}
