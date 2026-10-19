@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder,
-    removeCategory, removeSubfolder, renameCategory, renameSubfolder, summarize
+    removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from './planEditor'
 
 const plan = () => ({
@@ -148,5 +148,34 @@ describe('immutability', () => {
         mergeSubfolders(original, { category: 'Travel', name: 'Hotels' }, { category: 'Tech', name: 'Web' })
         mergeCategories(original, 'Travel', 'Tech')
         expect(original).toEqual(frozen)
+    })
+})
+
+describe('reorderCategory', () => {
+    it('moves a category to a new index and keeps the rest in order', () => {
+        const { plan: next } = reorderCategory(plan(), 0, 2)
+        expect(next.categories.map(c => c.name)).toEqual(['Travel', 'Finance', 'Tech'])
+        expect(next.categories[2].sub_categories).toEqual(['Web', 'Data'])
+    })
+
+    it('returns an error for out-of-range indices and never mutates the input', () => {
+        const original = plan()
+        expect(reorderCategory(original, 0, 5).error).toBeTruthy()
+        expect(reorderCategory(original, -1, 0).error).toBeTruthy()
+        expect(original.categories.map(c => c.name)).toEqual(['Tech', 'Travel', 'Finance'])
+    })
+})
+
+describe('reorderSubfolder', () => {
+    it('moves a subfolder within its category and keeps the rest in order', () => {
+        const { plan: next } = reorderSubfolder(plan(), 'Tech', 1, 0)
+        expect(next.categories[0].sub_categories).toEqual(['Data', 'Web'])
+        expect(next.categories[1].sub_categories).toEqual(['Flights', 'Hotels'])
+    })
+
+    it('returns an error for an unknown category or bad indices', () => {
+        expect(reorderSubfolder(plan(), 'Nope', 0, 1).error).toBeTruthy()
+        expect(reorderSubfolder(plan(), 'Tech', 0, 9).error).toBeTruthy()
+        expect(reorderSubfolder(plan(), 'Tech', 4, 0).error).toBeTruthy()
     })
 })

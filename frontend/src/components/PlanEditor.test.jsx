@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import PlanEditor from './PlanEditor'
 
@@ -16,7 +16,10 @@ const setup = () => {
     return { onSave, onDiscard }
 }
 
+const openActions = (name) => fireEvent.click(screen.getByRole('button', { name: `Actions for ${name}` }))
+
 const rename = (from, to) => {
+    openActions(from)
     fireEvent.click(screen.getByRole('button', { name: `Rename ${from}` }))
     const input = screen.getByRole('textbox', { name: `New name for ${from}` })
     fireEvent.change(input, { target: { value: to } })
@@ -24,6 +27,12 @@ const rename = (from, to) => {
 }
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+beforeEach(() => {
+    // jsdom reports zero-height boxes; give rows a stable height so edge drops (before/after) work.
+    // Re-created each test because afterEach restores all mocks.
+    vi.spyOn(window.HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: 0, left: 0, width: 100, height: 100 })
+})
 
 describe('PlanEditor', () => {
     it('is a labelled modal dialog that shows the live counts', () => {
@@ -66,6 +75,7 @@ describe('PlanEditor', () => {
         const root = screen.getByRole('textbox', { name: /new category/i })
         fireEvent.change(root, { target: { value: 'Reading' } })
         fireEvent.keyDown(root, { key: 'Enter' })
+        openActions('Reading')
         fireEvent.click(screen.getByRole('button', { name: 'Add subfolder to Reading' }))
         const sub = screen.getByRole('textbox', { name: 'Name for the new subfolder in Reading' })
         fireEvent.change(sub, { target: { value: 'Blogs' } })
@@ -78,6 +88,7 @@ describe('PlanEditor', () => {
     it('asks before deleting a category that has subfolders, with the count', () => {
         const { onSave } = setup()
 
+        openActions('Tech')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Tech' }))
         expect(screen.getByRole('alertdialog').textContent).toMatch(/Delete Tech and its 2 subfolders\?/)
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
@@ -89,9 +100,12 @@ describe('PlanEditor', () => {
     it('deletes a subfolder without asking, and refuses to delete the last category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
+        openActions('Travel')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Travel' }))
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
+        openActions('Tech')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Tech' }))
         fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }))
 
@@ -103,6 +117,7 @@ describe('PlanEditor', () => {
     it('moves a subfolder to another category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Move Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Move Web to' }), { target: { value: JSON.stringify(['Travel']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm move of Web to Travel' }))
@@ -117,15 +132,49 @@ describe('PlanEditor', () => {
     it('merges a subfolder into another folder and a category into another category', () => {
         const { onSave } = setup()
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Merge Web' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Web into' }), { target: { value: JSON.stringify(['Travel', 'Flights']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Web into Travel / Flights' }))
+        openActions('Travel')
         fireEvent.click(screen.getByRole('button', { name: 'Merge Travel' }))
         fireEvent.change(screen.getByRole('combobox', { name: 'Merge Travel into' }), { target: { value: JSON.stringify(['Tech']) } })
         fireEvent.click(screen.getByRole('button', { name: 'Confirm merge of Travel into Tech' }))
         fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
         expect(onSave.mock.calls[0][0]).toEqual({ categories: [{ name: 'Tech', sub_categories: ['Data', 'Flights'] }] })
+    })
+
+
+    it('reorders categories by dropping between rows', () => {
+        const { onSave } = setup()
+
+        const tree = screen.getByRole('tree', { name: 'Folder structure' })
+        fireEvent.dragStart(within(tree).getByRole('treeitem', { name: 'Travel' }).querySelector('div[tabindex]'))
+        const evt = new Event('dragover', { bubbles: true, cancelable: true })
+        Object.defineProperty(evt, 'clientY', { value: 10 })
+        fireEvent(within(tree).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'), evt)
+        fireEvent.drop(within(tree).getByRole('treeitem', { name: 'Tech' }).querySelector('div[tabindex]'))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => c.name)).toEqual(['Travel', 'Tech'])
+    })
+
+    it('reorders a subfolder into another category at a chosen position', () => {
+        const { onSave } = setup()
+
+        const tree = screen.getByRole('tree', { name: 'Folder structure' })
+        fireEvent.dragStart(within(tree).getByRole('treeitem', { name: 'Data' }).querySelector('div[tabindex]'))
+        const evt = new Event('dragover', { bubbles: true, cancelable: true })
+        Object.defineProperty(evt, 'clientY', { value: 10 })
+        fireEvent(within(tree).getByRole('treeitem', { name: 'Flights' }).querySelector('div[tabindex]'), evt)
+        fireEvent.drop(within(tree).getByRole('treeitem', { name: 'Flights' }).querySelector('div[tabindex]'))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web'] },
+            { name: 'Travel', sub_categories: ['Data', 'Flights'] }
+        ])
     })
 
     it('discards without asking when nothing changed, and asks once when something did', () => {
@@ -191,6 +240,7 @@ describe('PlanEditor', () => {
         setup()
         const dialog = screen.getByRole('dialog')
 
+        openActions('Web')
         fireEvent.click(screen.getByRole('button', { name: 'Delete Web' }))
         document.activeElement.blur()
         expect(document.activeElement).toBe(document.body)

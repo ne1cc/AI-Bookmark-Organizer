@@ -135,3 +135,29 @@ export function mergeCategories(plan, sourceName, targetName) {
     next.categories = next.categories.filter(category => category.name !== sourceName);
     return { plan: next };
 }
+
+// Folder order follows the array order, so reordering is a plain index move.
+export function reorderCategory(plan, from, to) {
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0
+        || from >= plan.categories.length || to >= plan.categories.length) {
+        return { error: 'That position is outside the plan.' };
+    }
+    const next = copy(plan);
+    const [moved] = next.categories.splice(from, 1);
+    next.categories.splice(to, 0, moved);
+    return { plan: next };
+}
+
+export function reorderSubfolder(plan, categoryName, from, to) {
+    const category = findCategory(plan, categoryName);
+    if (!category) return { error: `Category "${categoryName}" was not found.` };
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0
+        || from >= category.sub_categories.length || to >= category.sub_categories.length) {
+        return { error: 'That position is outside the category.' };
+    }
+    const next = copy(plan);
+    const subs = findCategory(next, categoryName).sub_categories;
+    const [moved] = subs.splice(from, 1);
+    subs.splice(to, 0, moved);
+    return { plan: next };
+}

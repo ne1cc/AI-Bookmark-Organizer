@@ -5,6 +5,8 @@ import { OrganizerService } from '../services/organizer'
 import * as inputService from '../services/input_bookmarks'
 import * as bookmarksExport from '../services/bookmarks_export'
 
+const openActions = async (name) => fireEvent.click(await screen.findByRole('button', { name: `Actions for ${name}` }))
+
 vi.mock('../services/organizer', () => {
     return {
         OrganizerService: vi.fn(),
@@ -2319,6 +2321,7 @@ describe('Review folders (two-phase)', () => {
         act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: planState() })) })
 
         fireEvent.click(await screen.findByRole('button', { name: 'Edit plan' }))
+        await openActions('Web')
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Web' }))
         const input = screen.getByRole('textbox', { name: 'New name for Web' })
         fireEvent.change(input, { target: { value: 'Frontend' } })
@@ -2378,6 +2381,7 @@ describe('Review folders (two-phase)', () => {
         act(() => { listeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: resultState() })) })
 
         fireEvent.click(await screen.findByRole('button', { name: 'Edit folders' }))
+        await openActions('Travel')
         fireEvent.click(await screen.findByRole('button', { name: 'Rename Travel' }))
         const input = screen.getByRole('textbox', { name: 'New name for Travel' })
         fireEvent.change(input, { target: { value: 'Trips' } })

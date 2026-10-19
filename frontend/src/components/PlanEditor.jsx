@@ -3,7 +3,7 @@ import EditorDialog from './EditorDialog'
 import FolderTree from './FolderTree'
 import {
     addCategory, addSubfolder, mergeCategories, mergeSubfolders, moveSubfolder,
-    removeCategory, removeSubfolder, renameCategory, renameSubfolder, summarize
+    removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from '../services/planEditor'
 
 const toNodes = (plan) => plan.categories.map(category => ({
@@ -27,6 +27,31 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
         return null
     }
 
+    // Folder order follows the plan's array order, so a drop between rows reorders there.
+    // Dropping past a row of another category moves the subfolder first, then places it.
+    const reorder = (node, targetPath, position) => {
+        if (node.path.length === 1) {
+            const from = draft.categories.findIndex(c => c.name === node.path[0])
+            const to = draft.categories.findIndex(c => c.name === targetPath[0])
+            const shift = from < to ? (position === 'before' ? -1 : 0) : (position === 'before' ? 0 : 1)
+            return apply(reorderCategory(draft, from, to + shift))
+        }
+        const fromCategory = node.path[0]
+        if (fromCategory !== targetPath[0]) {
+            const moved = moveSubfolder(draft, fromCategory, node.path[1], targetPath[0])
+            if (moved.error) return apply(moved)
+            const target = moved.plan.categories.find(c => c.name === targetPath[0])
+            let to = target.sub_categories.indexOf(targetPath[1])
+            if (position === 'after') to += 1
+            return apply(reorderSubfolder(moved.plan, targetPath[0], target.sub_categories.length - 1, to))
+        }
+        const subs = draft.categories.find(c => c.name === fromCategory).sub_categories
+        const from = subs.indexOf(node.path[1])
+        const to = subs.indexOf(targetPath[1])
+        const shift = from < to ? (position === 'before' ? -1 : 0) : (position === 'before' ? 0 : 1)
+        return apply(reorderSubfolder(draft, fromCategory, from, to + shift))
+    }
+
     return (
         <EditorDialog
             title="Edit folder plan"
@@ -40,6 +65,7 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
             <FolderTree
                 nodes={nodes}
                 defaultExpanded
+                onReorder={reorder}
                 actionsFor={(node) => (node.path.length === 1 ? ['rename', 'add', 'delete', 'merge'] : ['rename', 'delete', 'move', 'merge'])}
                 onRename={(node, name) => apply(node.path.length === 1
                     ? renameCategory(draft, node.path[0], name)
