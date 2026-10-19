@@ -26,6 +26,17 @@ const rename = (from, to) => {
     fireEvent.keyDown(input, { key: 'Enter' })
 }
 
+// clientY 10 / 90 hit the top / bottom edge of a 100px row; omitted means the middle (drop onto).
+const dragTo = (from, to, clientY) => {
+    const tree = screen.getByRole('tree', { name: 'Folder structure' })
+    const row = (name) => within(tree).getByRole('treeitem', { name }).querySelector('div[tabindex]')
+    fireEvent.dragStart(row(from))
+    const evt = new Event('dragover', { bubbles: true, cancelable: true })
+    if (clientY !== undefined) Object.defineProperty(evt, 'clientY', { value: clientY })
+    fireEvent(row(to), evt)
+    fireEvent.drop(row(to))
+}
+
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 beforeEach(() => {
@@ -183,6 +194,79 @@ describe('PlanEditor', () => {
             { name: 'Tech', sub_categories: ['Web'] },
             { name: 'Travel', sub_categories: ['Data', 'Flights'] }
         ])
+    })
+
+    it('nests an empty category dropped on another one, without a merge prompt', () => {
+        const onSave = vi.fn()
+        render(<PlanEditor plan={{ categories: [...plan().categories, { name: 'Dogs', sub_categories: [] }] }} onSave={onSave} onDiscard={vi.fn()} />)
+
+        dragTo('Dogs', 'Travel')
+        expect(screen.queryByRole('alertdialog')).toBeNull()
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Web', 'Data'] },
+            { name: 'Travel', sub_categories: ['Flights', 'Dogs'] }
+        ])
+    })
+
+    it('asks before nesting a category that has subfolders, then flattens them in beside it', () => {
+        const { onSave } = setup()
+
+        dragTo('Tech', 'Travel')
+        expect(screen.getByRole('alertdialog').textContent).toMatch(/Nest “Tech” in “Travel”\? Its 2 subfolders move in alongside it\./)
+        fireEvent.click(screen.getByRole('button', { name: 'Nest' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Travel', sub_categories: ['Flights', 'Tech', 'Web', 'Data'] }
+        ])
+    })
+
+    it('promotes a subfolder dropped between categories', () => {
+        const { onSave } = setup()
+
+        dragTo('Data', 'Travel', 10)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories.map(c => [c.name, c.sub_categories])).toEqual([
+            ['Tech', ['Web']], ['Data', []], ['Travel', ['Flights']]
+        ])
+    })
+
+    it('files a subfolder dropped just below an open category as its first child', () => {
+        const { onSave } = setup()
+
+        dragTo('Flights', 'Tech', 90)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+        expect(onSave.mock.calls[0][0].categories).toEqual([
+            { name: 'Tech', sub_categories: ['Flights', 'Web', 'Data'] },
+            { name: 'Travel', sub_categories: [] }
+        ])
+    })
+
+    it('undoes edits step by step from the button and Ctrl/⌘+Z, but leaves text fields their own undo', () => {
+        const { onSave } = setup()
+        const undoButton = screen.getByRole('button', { name: 'Undo' })
+        expect(undoButton.disabled).toBe(true)
+
+        rename('Web', 'Frontend')
+        dragTo('Data', 'Travel', 10)
+        fireEvent.keyDown(screen.getByRole('dialog'), { key: 'z', metaKey: true })
+        expect(screen.getByRole('treeitem', { name: 'Data' }).getAttribute('aria-level')).toBe('2')
+        expect(screen.getByRole('treeitem', { name: 'Frontend' })).toBeTruthy()
+
+        openActions('Tech')
+        fireEvent.click(screen.getByRole('button', { name: 'Rename Tech' }))
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'New name for Tech' }), { key: 'z', ctrlKey: true })
+        expect(screen.getByRole('treeitem', { name: 'Frontend' })).toBeTruthy()
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'New name for Tech' }), { key: 'Escape' })
+
+        fireEvent.click(undoButton)
+        expect(undoButton.disabled).toBe(true)
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+        expect(onSave.mock.calls[0][0]).toEqual(plan())
     })
 
     it('discards without asking when nothing changed, and asks once when something did', () => {

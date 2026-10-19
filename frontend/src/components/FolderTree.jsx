@@ -14,8 +14,9 @@ const nameStyle = (depth) => ({
 const keyOf = (path) => JSON.stringify(path)
 
 // Shared folder tree for both editors, with Finder-style interactions: double-click a name to
-// rename it, drag a folder to move, merge into a sibling (with a confirm), and drag between rows
-// to reorder (only when `onReorder` is provided — the result editor's folder order is decided by
+// rename it, drag a folder to move, nest a category inside another (when `onNest` is provided;
+// otherwise that drop asks to merge), merge a subfolder into a sibling (with a confirm), and drag
+// between rows to reorder (only when `onReorder` is provided — the result editor's folder order is decided by
 // the run's sort settings, so it declines). Right-click or the row's ⋯ button opens the same
 // actions as a menu, so nothing is reachable only by dragging. It owns only transient UI state;
 // the editors own the data.
@@ -25,10 +26,11 @@ const keyOf = (path) => JSON.stringify(path)
 // onRename(node, name) / onAdd(node, name) / onAddRoot(name): return an error string, or null on success
 // onDelete(node), onMove(node, targetPath), onMerge(node, targetPath)
 // onReorder(node, targetPath, 'before' | 'after'): optional; omit when order is not editable
+// onNest(node, targetPath): optional; category dropped on category. Returns an error string, or null
 // moveTargets(node) / mergeTargets(node): [{ path, label }] for the menu path to move/merge
 // deleteMessage(node): confirm text, asked only for folders that have children
 export default function FolderTree({
-    nodes, actionsFor, onRename, onAdd, onAddRoot, onDelete, onMove, onMerge, onReorder,
+    nodes, actionsFor, onRename, onAdd, onAddRoot, onDelete, onMove, onMerge, onReorder, onNest,
     moveTargets = () => [], mergeTargets = () => [], deleteMessage = (node) => `Delete ${node.name}?`,
     rootAddLabel = 'Add category', defaultExpanded = false
 }) {
@@ -36,7 +38,7 @@ export default function FolderTree({
     const [editing, setEditing] = useState(null) // { key, mode: 'rename' | 'add' | 'root', value }
     const [menu, setMenu] = useState(null) // { key, kind: 'actions' | 'move' | 'merge', target?: chosen path key }
     const [confirming, setConfirming] = useState(null) // key of a row awaiting a delete confirm
-    const [mergeAsk, setMergeAsk] = useState(null) // { source, target } awaiting a merge confirm from a drop
+    const [dropAsk, setDropAsk] = useState(null) // { kind: 'merge' | 'nest', source, target } awaiting a confirm from a drop
     const [hover, setHover] = useState(null) // { key, mode: 'onto' | 'before' | 'after' }
     const [rowError, setRowError] = useState({}) // key -> message
     const dragged = useRef(null) // { path } of the row being dragged; dataTransfer is cosmetic only
@@ -138,13 +140,36 @@ export default function FolderTree({
         )
     }
 
+    const nest = (source, target) => {
+        const outcome = onNest(source, target.path)
+        if (outcome) fail(keyOf(source.path), outcome)
+    }
+
     // A merge only ever happens after an explicit confirm, whether it started from a drop or the menu.
-    const renderMergeAsk = () => (
-        <div role="alertdialog" aria-label={`Confirm merge of ${mergeAsk.source.name} into ${mergeAsk.target.name}`} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', padding: '0.3rem 0 0.3rem 1.5rem', fontSize: '0.8rem' }}>
-            <span>Merge “{mergeAsk.source.name}” into “{mergeAsk.target.name}”?</span>
-            <button type="button" style={{ ...smallButton, background: 'var(--accent, #4c8dff)', color: '#fff', borderColor: 'transparent' }} onClick={() => { const { source, target } = mergeAsk; setMergeAsk(null); onMerge(source, target.path) }}>Merge</button>
-            <button type="button" style={smallButton} onClick={() => setMergeAsk(null)}>Cancel</button>
-        </div>
+    // Nesting asks only when it flattens subfolders, since that reshapes more than the dragged row.
+    const renderDropAsk = () => {
+        const { kind, source, target } = dropAsk
+        const count = source.children.length
+        const merging = kind === 'merge'
+        return (
+            <div role="alertdialog" aria-label={`Confirm ${kind} of ${source.name} into ${target.name}`} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', padding: '0.3rem 0 0.3rem 1.5rem', fontSize: '0.8rem' }}>
+                <span>{merging
+                    ? <>Merge “{source.name}” into “{target.name}”?</>
+                    : <>Nest “{source.name}” in “{target.name}”? Its {count} subfolder{count === 1 ? ' moves' : 's move'} in alongside it.</>}</span>
+                <button type="button" style={{ ...smallButton, background: 'var(--accent, #4c8dff)', color: '#fff', borderColor: 'transparent' }} onClick={() => { setDropAsk(null); if (merging) onMerge(source, target.path); else nest(source, target) }}>{merging ? 'Merge' : 'Nest'}</button>
+                <button type="button" style={smallButton} onClick={() => setDropAsk(null)}>Cancel</button>
+            </div>
+        )
+    }
+
+    // The insertion line is indented to the level the folder will land at, so promoting reads as top level.
+    const gapLine = (depth) => <div aria-hidden="true" style={{ height: 0, borderTop: '2px solid var(--accent, #4c8dff)', marginLeft: `${(depth - 1) * 1.1}rem` }} />
+
+    // A subfolder dropped just below an open category lands as its first child, not as a new category.
+    const resolveGap = (draggedPath, node, mode) => (
+        mode === 'after' && draggedPath.length === 2 && node.path.length === 1 && node.children.length > 0 && isOpen(keyOf(node.path))
+            ? { path: node.children[0].path, mode: 'before' }
+            : { path: node.path, mode }
     )
 
     // Drop legality: categories accept merges and (when order is editable) reorders; subfolders
@@ -187,10 +212,16 @@ export default function FolderTree({
                 if (source.path[0] !== node.path[0]) onMove(source.node, node.path)
                 return
             }
-            setMergeAsk({ source: source.node, target: node })
+            if (onNest && node.path.length === 1) {
+                if (source.node.children.length > 0) setDropAsk({ kind: 'nest', source: source.node, target: node })
+                else nest(source.node, node)
+                return
+            }
+            setDropAsk({ kind: 'merge', source: source.node, target: node })
             return
         }
-        const outcome = onReorder(source.node, node.path, mode)
+        const gap = resolveGap(source.path, node, mode)
+        const outcome = onReorder(source.node, gap.path, gap.mode)
         if (outcome) fail(keyOf(source.path), outcome)
     }
 
@@ -204,9 +235,7 @@ export default function FolderTree({
         const rowVisual = hovered && hover.mode === 'onto' ? ontoStyle : rowStyle
         return (
             <li key={key} role="treeitem" aria-level={node.path.length} aria-expanded={node.children.length > 0 ? open : undefined} aria-label={node.name} style={{ listStyle: 'none', margin: 0 }}>
-                {hovered && (hover.mode === 'before' || hover.mode === 'after') && (
-                    <div aria-hidden="true" style={{ height: 0, borderTop: '2px solid var(--accent, #4c8dff)', marginLeft: `${(node.path.length - 1) * 1.1}rem` }} />
-                )}
+                {hovered && hover.mode === 'before' && gapLine(node.path.length)}
                 <div
                     tabIndex={0}
                     draggable={!renaming && !adding}
@@ -236,6 +265,7 @@ export default function FolderTree({
                         style={{ ...smallButton, border: 'none', background: 'transparent', color: 'var(--text-muted)', flexShrink: 0 }}
                     >⋯</button>
                 </div>
+                {hovered && hover.mode === 'after' && dragged.current && gapLine(resolveGap(dragged.current.path, node, 'after').path.length)}
                 {adding && <div style={{ paddingLeft: `${node.path.length * 1.1}rem`, padding: '0.2rem 0 0.2rem 1.5rem' }}>{nameInput(node, `Name for the new subfolder in ${node.name}`)}</div>}
                 {menu?.key === key && (menu.kind === 'actions' ? renderActions(node) : renderMenu(node))}
                 {confirming === key && (
@@ -245,7 +275,7 @@ export default function FolderTree({
                         <button type="button" style={smallButton} onClick={() => setConfirming(null)}>Keep</button>
                     </div>
                 )}
-                {mergeAsk?.target.path.join() === node.path.join() && renderMergeAsk()}
+                {dropAsk?.target.path.join() === node.path.join() && renderDropAsk()}
                 {rowError[key] && <div role="alert" style={{ paddingLeft: '1.5rem', color: 'var(--error)', fontSize: '0.78rem' }}>{rowError[key]}</div>}
                 {open && <ul role="group" style={{ margin: 0, padding: 0 }}>{node.children.map(renderNode)}</ul>}
             </li>

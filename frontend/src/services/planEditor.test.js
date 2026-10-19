@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder,
+    addCategory, addSubfolder, checkName, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, promoteSubfolder,
     removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from './planEditor'
 
@@ -177,5 +177,45 @@ describe('reorderSubfolder', () => {
         expect(reorderSubfolder(plan(), 'Nope', 0, 1).error).toBeTruthy()
         expect(reorderSubfolder(plan(), 'Tech', 0, 9).error).toBeTruthy()
         expect(reorderSubfolder(plan(), 'Tech', 4, 0).error).toBeTruthy()
+    })
+})
+
+describe('nestCategory', () => {
+    it('turns an empty category into a subfolder of the target', () => {
+        const { plan: next } = nestCategory(plan(), 'Finance', 'Tech')
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Travel'])
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'Finance'])
+    })
+
+    it('flattens the source subfolders in after it, skipping names the target already has', () => {
+        const start = addSubfolder(plan(), 'Travel', 'Web').plan
+        const { plan: next } = nestCategory(start, 'Travel', 'Tech')
+        expect(next.categories[0].sub_categories).toEqual(['Web', 'Data', 'Travel', 'Flights', 'Hotels'])
+    })
+
+    it('refuses a name clash, a reserved name, itself, and unknown categories without mutating', () => {
+        const original = addSubfolder(plan(), 'Tech', 'Finance').plan
+        expect(nestCategory(original, 'Finance', 'Tech').error).toMatch(/already exists/)
+        expect(nestCategory(addCategory(plan(), 'Other').plan, 'Other', 'Tech').error).toMatch(/reserved/)
+        expect(nestCategory(original, 'Tech', 'Tech').error).toBeTruthy()
+        expect(nestCategory(original, 'Nope', 'Tech').error).toBeTruthy()
+        expect(nestCategory(original, 'Tech', 'Nope').error).toBeTruthy()
+        expect(original.categories).toHaveLength(3)
+    })
+})
+
+describe('promoteSubfolder', () => {
+    it('makes a subfolder an empty category at the given position', () => {
+        const { plan: next } = promoteSubfolder(plan(), 'Tech', 'Data', 1)
+        expect(next.categories.map(c => c.name)).toEqual(['Tech', 'Data', 'Travel', 'Finance'])
+        expect(next.categories[0].sub_categories).toEqual(['Web'])
+        expect(next.categories[1].sub_categories).toEqual([])
+    })
+
+    it('refuses a clash with an existing category, unknown folders and bad positions', () => {
+        const clash = addSubfolder(plan(), 'Tech', 'Finance').plan
+        expect(promoteSubfolder(clash, 'Tech', 'Finance', 0).error).toMatch(/already exists/)
+        expect(promoteSubfolder(plan(), 'Tech', 'Nope', 0).error).toBeTruthy()
+        expect(promoteSubfolder(plan(), 'Tech', 'Web', 9).error).toBeTruthy()
     })
 })

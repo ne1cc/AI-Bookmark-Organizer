@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import EditorDialog from './EditorDialog'
 import FolderTree from './FolderTree'
 import {
-    addCategory, addSubfolder, mergeCategories, mergeSubfolders, moveSubfolder,
+    addCategory, addSubfolder, mergeCategories, mergeSubfolders, moveSubfolder, nestCategory, promoteSubfolder,
     removeCategory, removeSubfolder, renameCategory, renameSubfolder, reorderCategory, reorderSubfolder, summarize
 } from '../services/planEditor'
 
@@ -15,6 +15,7 @@ const toNodes = (plan) => plan.categories.map(category => ({
 // Edit the AI's proposed plan ({ categories: [{ name, sub_categories }] }) before any bookmark is filed.
 export default function PlanEditor({ plan, onSave, onDiscard }) {
     const [draft, setDraft] = useState(plan)
+    const [history, setHistory] = useState([]) // earlier drafts, newest last
     const [error, setError] = useState('')
     const nodes = useMemo(() => toNodes(draft), [draft])
     const { categories, subfolders } = summarize(draft)
@@ -23,13 +24,26 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
     const apply = (result) => {
         if (result.error) { setError(result.error); return result.error }
         setError('')
+        setHistory(previous => [...previous, draft])
         setDraft(result.plan)
         return null
     }
 
+    const undo = () => {
+        if (history.length === 0) return
+        setError('')
+        setDraft(history[history.length - 1])
+        setHistory(previous => previous.slice(0, -1))
+    }
+
     // Folder order follows the plan's array order, so a drop between rows reorders there.
-    // Dropping past a row of another category moves the subfolder first, then places it.
+    // Dropping past a row of another category moves the subfolder first, then places it;
+    // dropping a subfolder between categories promotes it to a category at that spot.
     const reorder = (node, targetPath, position) => {
+        if (node.path.length === 2 && targetPath.length === 1) {
+            const at = draft.categories.findIndex(c => c.name === targetPath[0]) + (position === 'after' ? 1 : 0)
+            return apply(promoteSubfolder(draft, node.path[0], node.path[1], at))
+        }
         if (node.path.length === 1) {
             const from = draft.categories.findIndex(c => c.name === node.path[0])
             const to = draft.categories.findIndex(c => c.name === targetPath[0])
@@ -58,6 +72,8 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
             summary={`${categories} categor${categories === 1 ? 'y' : 'ies'} · ${subfolders} subfolder${subfolders === 1 ? '' : 's'}`}
             dirty={JSON.stringify(draft) !== JSON.stringify(plan)}
             saveDisabled={categories === 0}
+            onUndo={undo}
+            canUndo={history.length > 0}
             error={error}
             onSave={() => onSave(draft)}
             onDiscard={onDiscard}
@@ -66,6 +82,7 @@ export default function PlanEditor({ plan, onSave, onDiscard }) {
                 nodes={nodes}
                 defaultExpanded
                 onReorder={reorder}
+                onNest={(node, target) => apply(nestCategory(draft, node.path[0], target[0]))}
                 actionsFor={(node) => (node.path.length === 1 ? ['rename', 'add', 'delete', 'merge'] : ['rename', 'delete', 'move', 'merge'])}
                 onRename={(node, name) => apply(node.path.length === 1
                     ? renameCategory(draft, node.path[0], name)
