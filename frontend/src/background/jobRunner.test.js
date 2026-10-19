@@ -377,6 +377,32 @@ describe('BackgroundJobRunner', () => {
         await jobPromise;
     });
 
+    it('stops the keepalive alarm and flushes a terminal snapshot for a zero-result run', async () => {
+        OrganizerService.mockImplementationOnce(function (apiKey, categories, onProgress) {
+            this.onProgress = onProgress;
+            this.start = vi.fn(async () => {
+                onProgress({ status: 'done', message: 'No bookmarks to organize.' });
+                return [];
+            });
+            this.cancel = vi.fn();
+            this.isCancelled = false;
+            this.stats = null;
+        });
+        runner.subscribe((event) => { if (event === 'cancelled') throw new Error('unexpected cancelled event'); });
+
+        const results = await runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: false }, null);
+
+        expect(results).toEqual([]);
+        expect(runner.keepAliveTimer).toBeNull();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+        expect(runner.getState().status).toBe('complete');
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                activeJobState: expect.objectContaining({ status: 'complete', progress: 100, count: 0 })
+            })
+        );
+    });
+
     it('clears the keepalive alarm on cancel and reset', () => {
         runner.organizer = { cancel: vi.fn() };
         runner.currentJob.status = 'processing';
@@ -414,7 +440,7 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('idle');
         expect(runner.getState().progress).toBe(0);
         expect(runner.getResults()).toBeNull();
-        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['activeJobState', 'organizedData']);
+        expect(globalThis.chrome.storage.session.remove).toHaveBeenCalledWith(['organizedData']);
         // Saved runs survive a reset: "Organize another" must not delete earlier results.
         expect(globalThis.chrome.storage.local.remove).not.toHaveBeenCalled();
     });

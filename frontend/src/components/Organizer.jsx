@@ -1092,6 +1092,7 @@ export default function Organizer({ theme = 'light' }) {
         resultsRequestPendingRef.current = false
         organizedResultsRef.current = null;
         setLastOrganized(null);
+        setBackgroundNotice('');
         let reportedErrorMessage = '';
 
         // Session-snapshot bookkeeping for an in-panel fallback run. Only
@@ -1400,6 +1401,9 @@ export default function Organizer({ theme = 'light' }) {
                         .then(() => addLog('Results saved — downloadable anytime, even after reopening the panel.'))
                         .catch((saveError) => addLog(`Could not save results for later download: ${saveError.message}`));
                 }
+            } else {
+                persistPanelSnapshot('complete', { count: 0, completedAt: Date.now() });
+                endPanelRunTracking();
             }
 
         } catch (err) {

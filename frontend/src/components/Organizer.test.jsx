@@ -1666,6 +1666,62 @@ describe('In-process and completion date range display', () => {
             }
         })
 
+        it('terminates tracking with a complete zero-count snapshot when an in-panel run finishes with no results', async () => {
+            localStorage.setItem('apiKey', 'sk-or-test-panel-empty')
+            vi.useFakeTimers()
+
+            try {
+                OrganizerService.mockImplementation(function (apiKey, categories, onProgress) {
+                    this.start = vi.fn(async () => {
+                        act(() => { onProgress({ status: 'done', message: 'No bookmarks to organize.' }) })
+                        return []
+                    })
+                    this.cancel = vi.fn()
+                    this.isCancelled = false
+                })
+
+                const silentPort = {
+                    postMessage: vi.fn(), // START_JOB vanishes — no JOB_ACK ever arrives
+                    onMessage: { addListener: vi.fn(), removeListener: vi.fn() },
+                    onDisconnect: { addListener: vi.fn() },
+                    disconnect: vi.fn()
+                }
+                global.chrome = {
+                    runtime: { connect: vi.fn(() => silentPort) },
+                    storage: {
+                        local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                        session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                    }
+                }
+
+                render(<Organizer />)
+
+                await act(async () => {
+                    fireEvent.click(screen.getByRole('button', { name: /Organize My Bookmarks/i }))
+                    await vi.advanceTimersByTimeAsync(2500)
+                })
+
+                const snapshots = () => global.chrome.storage.session.set.mock.calls.map(([payload]) => payload.activeJobState)
+                expect(snapshots().at(-1)).toEqual(expect.objectContaining({
+                    id: expect.stringMatching(/^panel_/),
+                    status: 'complete',
+                    count: 0,
+                    completedAt: expect.any(Number)
+                }))
+
+                const writesAfterTerminal = global.chrome.storage.session.set.mock.calls.length
+                await act(async () => {
+                    window.dispatchEvent(new Event('pagehide'))
+                    document.dispatchEvent(new Event('visibilitychange'))
+                    await Promise.resolve()
+                })
+                expect(global.chrome.storage.session.set.mock.calls.length).toBe(writesAfterTerminal)
+                expect(snapshots().at(-1)?.status).toBe('complete')
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
         it('wires live worker updates to the port reconnected after the original port died', async () => {
             localStorage.setItem('apiKey', 'sk-or-test-rewire')
 

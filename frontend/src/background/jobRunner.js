@@ -357,6 +357,15 @@ export class BackgroundJobRunner {
                 return results;
             }
 
+            // An empty result set still ends the run: stop the keepalive alarm
+            // and flush a terminal snapshot so the interrupted-run alarm cannot
+            // keep waking the worker for a run that already finished.
+            this.currentJob.status = 'complete';
+            this.currentJob.progress = 100;
+            this.currentJob.count = 0;
+            this.currentJob.completedAt = Date.now();
+            this.stopKeepAlive();
+            this.flushState();
             return results;
         } catch (err) {
             if (this.organizer?.isCancelled || err?.isCancelled || err?.name === 'AbortError') {
@@ -406,9 +415,11 @@ export class BackgroundJobRunner {
             count: null,
             completedAt: null
         };
+        // The idle snapshot flushState() writes below replaces activeJobState,
+        // so only the cached results need an explicit removal here.
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
-                chrome.storage.session.remove(['activeJobState', 'organizedData']);
+                chrome.storage.session.remove(['organizedData']);
             } catch {
                 // Ignore removal error
             }
