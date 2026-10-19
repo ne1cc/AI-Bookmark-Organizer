@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { removeDuplicateUrls, checkUrlReachable, filterReachableBookmarks, OrganizerService, getBookmarkTimestamp, getBookmarkDomain, calculateDateSpan, buildUrlIndex, dedupeFromIndex, removeBrowserDuplicates } from './organizer'
 import * as ai from './ai'
-import { classifyBatch, generateSchema, withRetry, geminiModelId, detectProvider, isNetworkError, isRateLimitError, isRetryableError } from './ai'
+import { classifyBatch, generateSchema, withRetry, geminiModelId, detectProvider, isNetworkError, isRateLimitError, isRetryableError, retryCause } from './ai'
 import * as bookmarksExport from './bookmarks_export'
 import * as bookmarksService from './bookmarks'
 import { DEFAULT_CATEGORIES, SUGGESTED_ADDABLE_CATEGORIES, SCHEMA_SORT_OPTIONS } from '../components/Organizer'
@@ -877,6 +877,26 @@ describe('withRetry resilient retry and cancellation', () => {
         }
     })
 
+    it('gives an overloaded provider (503) the rate-limit patience but does not call it a rate limit', async () => {
+        const overloaded = new Error('provider is temporarily overloaded — high demand')
+        overloaded.statusCode = 503
+
+        const fn = vi.fn().mockRejectedValue(overloaded)
+        const onRetry = vi.fn()
+
+        const promise = withRetry(fn, 5, 1500, null, onRetry)
+        const rejection = expect(promise).rejects.toThrow('temporarily overloaded')
+
+        await vi.runAllTimersAsync()
+        await rejection
+
+        expect(fn).toHaveBeenCalledTimes(8)
+        const calls = onRetry.mock.calls.map(([call]) => call)
+        expect(calls.every(call => call.isRateLimit === false && call.delayMs <= 60000)).toBe(true)
+        expect(calls[0].delayMs).toBeGreaterThanOrEqual(4000)
+        expect(calls.reduce((total, call) => total + call.delayMs, 0)).toBeGreaterThan(120000)
+    })
+
     it('respects error.retryAfterMs when provided on rate-limit errors', async () => {
         const rateLimitError = new Error('Too many requests')
         rateLimitError.statusCode = 429
@@ -1394,6 +1414,8 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
             onRetry({ attempt: 1, delayMs: 8000, isRateLimit: true, error: new Error('Rate limit') })
             // Simulate network issue notification
             onRetry({ attempt: 2, delayMs: 3000, isRateLimit: false, error: new Error('Network error') })
+            // Simulate a provider overload: it carries an HTTP status, so it must not read as a network issue
+            onRetry({ attempt: 3, delayMs: 5000, isRateLimit: false, error: Object.assign(new Error('provider is temporarily overloaded'), { statusCode: 503 }) })
             return [{ title: 'Site', url: 'https://example.com', category: 'Tech', sub_category: 'General' }]
         })
 
@@ -1407,6 +1429,10 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         expect(progressEvents).toContainEqual({
             status: 'warning',
             message: 'Network issue on batch 1. Retrying in 3s...'
+        })
+        expect(progressEvents).toContainEqual({
+            status: 'warning',
+            message: 'Provider is temporarily overloaded (HTTP 503) on batch 1. Retrying in 5s...'
         })
     })
 
@@ -3172,5 +3198,15 @@ describe('Progress reporting guarantees', () => {
             expect(evt.percent).toBeLessThanOrEqual(99)
             expect(evt.percent).toBeGreaterThanOrEqual(0)
         }
+    })
+})
+
+describe('retryCause', () => {
+    it('names the HTTP status, an unusable answer, or the network', () => {
+        expect(retryCause(Object.assign(new Error('x'), { statusCode: 503 }))).toBe('Provider is temporarily overloaded (HTTP 503)')
+        expect(retryCause(Object.assign(new Error('x'), { statusCode: 599 }))).toBe('Request failed (HTTP 599)')
+        expect(retryCause(Object.assign(new Error('truncated'), { retryable: true }))).toBe('Unusable response from the AI')
+        expect(retryCause(new TypeError('Failed to fetch'))).toBe('Network issue')
+        expect(retryCause(undefined)).toBe('Network issue')
     })
 })
