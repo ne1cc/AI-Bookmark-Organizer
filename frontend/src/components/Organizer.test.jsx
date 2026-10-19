@@ -920,6 +920,93 @@ describe('In-process and completion date range display', () => {
             expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
         })
 
+        // The browser killed the worker mid-run: the watchdog reconnects, which wakes a fresh worker with no job.
+        const runThenLoseWorker = async ({ cancelFirst = false } = {}) => {
+            const firstListeners = []
+            const firstDisconnect = []
+            const firstPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn((fn) => firstListeners.push(fn)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn((fn) => firstDisconnect.push(fn)) },
+                disconnect: vi.fn()
+            }
+            const secondListeners = []
+            const secondPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn((fn) => secondListeners.push(fn)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            let connectCount = 0
+            global.chrome = {
+                runtime: { connect: vi.fn(() => (++connectCount === 1 ? firstPort : secondPort)) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+            act(() => {
+                firstListeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: { id: 'job_live', status: 'processing', progress: 42, logs: [] } }))
+            })
+            if (cancelFirst) fireEvent.click(screen.getByRole('button', { name: /Cancel/i }))
+            act(() => firstDisconnect.forEach((fn) => fn()))
+            await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+            act(() => {
+                secondListeners.forEach((fn) => fn({ type: 'STATUS_UPDATE', payload: { id: null, status: 'idle', progress: 0, logs: [] } }))
+            })
+        }
+
+        it('shows the interrupted notice when the worker dies mid-run with the panel open', async () => {
+            vi.useFakeTimers()
+            try {
+                await runThenLoseWorker()
+                expect(screen.getByText(/interrupted before it could complete/i)).toBeDefined()
+                expect(screen.queryByRole('button', { name: /Cancel/i })).toBeNull()
+                expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it('returns quietly to the menu when a cancelled run comes back idle', async () => {
+            vi.useFakeTimers()
+            try {
+                await runThenLoseWorker({ cancelFirst: true })
+                expect(screen.queryByText(/interrupted before it could complete/i)).toBeNull()
+                expect(screen.getByRole('button', { name: /Organize My Bookmarks/i })).toBeDefined()
+            } finally {
+                vi.useRealTimers()
+            }
+        })
+
+        it('shows the interrupted notice when the worker reports an interrupted run live', async () => {
+            const listeners = []
+            const mockPort = {
+                postMessage: vi.fn(),
+                onMessage: { addListener: vi.fn((fn) => listeners.push(fn)), removeListener: vi.fn() },
+                onDisconnect: { addListener: vi.fn() },
+                disconnect: vi.fn()
+            }
+            global.chrome = {
+                runtime: { connect: vi.fn(() => mockPort) },
+                storage: {
+                    local: { get: vi.fn((keys, cb) => cb({})), set: vi.fn(), remove: vi.fn() },
+                    session: { get: vi.fn((keys, cb) => cb({})), set: vi.fn() }
+                }
+            }
+
+            render(<Organizer />)
+            act(() => {
+                listeners.forEach((listener) => listener({ type: 'STATUS_UPDATE', payload: { id: 'job_live', status: 'processing', progress: 42 } }))
+                listeners.forEach((listener) => listener({ type: 'STATUS_UPDATE', payload: { id: 'job_live', status: 'interrupted', progress: 42 } }))
+            })
+
+            expect(screen.getByText(/interrupted before it could complete/i)).toBeDefined()
+            expect(screen.queryByRole('button', { name: /Cancel/i })).toBeNull()
+        })
+
         it('requests and downloads completed inferred results from background memory after reconnecting', async () => {
             const listeners = []
             const mockPort = {
