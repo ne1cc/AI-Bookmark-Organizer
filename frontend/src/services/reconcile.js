@@ -234,6 +234,8 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
 
     const tier = subfolderTier(subfolderTarget);
     const minCount = tier.minCount;
+    // A reviewed plan is binding: its folders are never dissolved or capped.
+    const binding = schema?.binding === true;
 
     const schemaSubs = new Map(
         (Array.isArray(schema?.categories) ? schema.categories : [])
@@ -297,15 +299,16 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
                 count: group.items.length,
                 items: group.items,
                 tokens: tokenize(name),
-                isProposed: !approved.has(key)
+                isProposed: !approved.has(key),
+                isBound: binding && approved.has(key)
             });
         }
 
         // A folder too small to be worth its own place in the sidebar is
         // dissolved. Survivors are chosen first so nothing folds into a folder
         // that is itself about to disappear.
-        let survivors = resolved.filter(g => g.count >= minCount);
-        let orphans = resolved.filter(g => g.count < minCount);
+        let survivors = resolved.filter(g => g.count >= minCount || g.isBound);
+        let orphans = resolved.filter(g => g.count < minCount && !g.isBound);
 
         // A category must never lose all of its structure — that outcome is the
         // bug this module exists to prevent. When nothing clears the floor, keep
@@ -328,8 +331,12 @@ export function reconcileSubcategories(classified, schema, { subfolderTarget = '
         // Rank survivors by size, then name, and enforce the data-derived
         // per-category ceiling.
         survivors.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-        const kept = survivors.slice(0, dynamicCap);
-        const capped = survivors.slice(dynamicCap);
+        // Bound folders always stay and use up part of the ceiling; the rest compete for what is left.
+        const bound = survivors.filter(g => g.isBound);
+        const free = survivors.filter(g => !g.isBound);
+        const freeSlots = Math.max(0, dynamicCap - bound.length);
+        const kept = [...bound, ...free.slice(0, freeSlots)].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+        const capped = free.slice(freeSlots);
 
         // Overflow past the ceiling is still well-classified content, so it goes
         // to its nearest surviving kin on the same terms as an orphan. Dumping

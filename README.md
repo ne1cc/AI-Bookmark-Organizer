@@ -7,6 +7,7 @@ AI Bookmark Organizer sorts browser bookmarks into a folder structure you can br
 - Organizes bookmarks with Google Gemini through Gemini API (Google AI Studio) or OpenRouter.
 - Uses your selected categories as top-level folders, then creates subfolders from the bookmarks. You can also let the organizer suggest categories.
 - Adjusts folder detail to your collection, with an optional third level for larger groups.
+- Optionally pauses to let you review and edit the proposed folders before anything is filed, and the finished folders (with bookmark counts) before they are saved. The plan review lets you rename, add, delete, move and merge folders; the result review lets you rename, delete, move and merge them.
 - Sorts links by title, date added, or website. A date-based organization mode works without AI.
 - Removes duplicate URLs from browser bookmarks while keeping the oldest saved copy.
 - Saves an HTML backup before changing browser bookmarks and preserves their original dates.

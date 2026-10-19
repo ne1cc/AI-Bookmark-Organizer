@@ -267,3 +267,46 @@ describe('reconcileSubcategories', () => {
         expect(forward.summary).toEqual(reversed.summary)
     })
 })
+
+describe('reconcileSubcategories with a binding (reviewed) plan', () => {
+    const plan = (extra = {}) => ({
+        categories: [{ name: 'Tech', sub_categories: ['Web Development', 'Databases', 'Hardware'] }],
+        ...extra
+    })
+    const build = () => [
+        ...items('Tech', 'Web Development', 6),
+        ...items('Tech', 'Databases', 6),
+        ...items('Tech', 'Hardware', 1)
+    ]
+
+    it('dissolves a one-bookmark approved folder without the flag', () => {
+        const result = reconcileSubcategories(build(), plan(), { subfolderTarget: 'medium' })
+
+        expect(new Set(subsIn(result, 'Tech'))).not.toContain('Hardware')
+    })
+
+    it('keeps every approved folder that holds a bookmark when the plan is binding', () => {
+        const result = reconcileSubcategories(build(), plan({ binding: true }), { subfolderTarget: 'medium' })
+
+        expect(new Set(subsIn(result, 'Tech'))).toEqual(new Set(['Web Development', 'Databases', 'Hardware']))
+    })
+
+    it('still folds folders the classifier invented on its own', () => {
+        const classified = [...build(), ...items('Tech', 'Gadgets', 1, { proposed: true })]
+
+        const result = reconcileSubcategories(classified, plan({ binding: true }), { subfolderTarget: 'medium' })
+
+        expect(new Set(subsIn(result, 'Tech'))).not.toContain('Gadgets')
+        expect(new Set(subsIn(result, 'Tech'))).toContain('Hardware')
+    })
+
+    it('does not cap approved folders at the per-category ceiling', () => {
+        const names = Array.from({ length: 12 }, (_, i) => `Topic ${String.fromCharCode(65 + i)}`)
+        const wide = { categories: [{ name: 'Tech', sub_categories: names }], binding: true }
+        const classified = names.flatMap(name => items('Tech', name, 3))
+
+        const result = reconcileSubcategories(classified, wide, { subfolderTarget: 'compact' })
+
+        expect(new Set(subsIn(result, 'Tech')).size).toBe(12)
+    })
+})

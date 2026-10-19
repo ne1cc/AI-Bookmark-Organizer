@@ -5,6 +5,7 @@ import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, listInputBookmarkFiles, getInputBookmarkHtml, removeInputBookmarkFile, clearAllInputBookmarkFiles, downloadInputBookmarkFile } from '../services/input_bookmarks'
 import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET, detectProvider } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
+import ReviewPanel from './ReviewPanel'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
@@ -221,6 +222,12 @@ export default function Organizer({ theme = 'light' }) {
 
     // Keep only one copy of each exact URL in the organized output.
     const [removeDuplicates, setRemoveDuplicates] = useState(() => getStored('removeDuplicates', true))
+    // Pause for review: the proposed folders before anything is filed, and the finished folders before they are saved.
+    const [reviewFolders, setReviewFolders] = useState(() => getStored('reviewFolders', false))
+    const [planForReview, setPlanForReview] = useState(null) // { categories, error? } while the worker waits for a plan decision
+    const planResolverRef = useRef(null)
+    const [resultForReview, setResultForReview] = useState(null) // { rows, error? } while the worker waits for a result decision
+    const resultResolverRef = useRef(null)
 
     // Clean messy or truncated titles with AI
     const [cleanTitles, setCleanTitles] = useState(() => getStored('cleanTitles', false))
@@ -332,6 +339,11 @@ export default function Organizer({ theme = 'light' }) {
             if (msg.type === 'STATUS_UPDATE') {
                 const state = msg.payload;
                 if (!state) return;
+
+                // An in-panel run (worker did not acknowledge) owns its review cards; the worker's idle
+                // updates must not clear them while the run still waits for an answer.
+                if (!planResolverRef.current) setPlanForReview(state.status === 'processing' ? (state.plan || null) : null);
+                if (!resultResolverRef.current) setResultForReview(state.status === 'processing' ? (state.result || null) : null);
 
                 if (state.status === 'processing') {
                     resultsRequestPendingRef.current = false
@@ -473,6 +485,8 @@ export default function Organizer({ theme = 'light' }) {
                         const aj = res.activeJobState;
                         if (aj.status === 'processing') {
                             setStatus('processing');
+                            if (aj.plan) setPlanForReview(aj.plan);
+                            if (aj.result) setResultForReview(aj.result);
                             if (typeof aj.progress === 'number') setProgress(Math.min(99, Math.max(0, aj.progress)));
                             if (aj.activeDateSpan) setActiveDateSpan(aj.activeDateSpan);
                             if (aj.backgroundNotice !== undefined) setBackgroundNotice(aj.backgroundNotice);
@@ -556,7 +570,7 @@ export default function Organizer({ theme = 'light' }) {
     useEffect(() => {
         const startTime = performance.now()
         if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'organizedMeta', 'organizedHistory'], (result) => {
+            chrome.storage.local.get(['apiKey', 'categories', 'inferCategories', 'selectedModel', 'subfolderTarget', 'sortAlphabetically', 'schemaSortOrder', 'removeDuplicates', 'cleanTitles', 'dateSortOrder', 'reviewFolders', 'organizedMeta', 'organizedHistory'], (result) => {
                 if (!result) return
                 if (result.apiKey) setApiKey(prev => (prev !== result.apiKey ? result.apiKey : prev))
                 if (Array.isArray(result.categories)) {
@@ -594,6 +608,10 @@ export default function Organizer({ theme = 'light' }) {
                 if (typeof result.removeDuplicates === 'boolean') {
                     setRemoveDuplicates(result.removeDuplicates)
                     try { localStorage.setItem('removeDuplicates', JSON.stringify(result.removeDuplicates)) } catch {}
+                }
+                if (typeof result.reviewFolders === 'boolean') {
+                    setReviewFolders(result.reviewFolders)
+                    try { localStorage.setItem('reviewFolders', JSON.stringify(result.reviewFolders)) } catch {}
                 }
                 if (result.cleanTitles !== undefined) {
                     setCleanTitles(Boolean(result.cleanTitles))
@@ -691,6 +709,11 @@ export default function Organizer({ theme = 'light' }) {
         setSchemaSortOrder(newOrder)
         updateSetting('schemaSortOrder', newOrder)
         updateSetting('sortAlphabetically', newOrder === 'alpha')
+    }, [updateSetting])
+
+    const handleReviewFoldersToggle = useCallback((enabled) => {
+        setReviewFolders(enabled)
+        updateSetting('reviewFolders', enabled)
     }, [updateSetting])
 
     const handleRemoveDuplicatesToggle = useCallback((enabled) => {
@@ -1004,8 +1027,32 @@ export default function Organizer({ theme = 'light' }) {
         setPreviousRuns([])
     }, [])
 
+    // Answer a review pause. In-panel runs resolve the waiting promise directly; worker runs get a port message.
+    const decideReview = useCallback((kind, decision, data = {}) => {
+        const answer = { decision, ...data }
+        const resolverRef = kind === 'plan' ? planResolverRef : resultResolverRef
+        const clearCard = () => (kind === 'plan' ? setPlanForReview(null) : setResultForReview(null))
+        if (resolverRef.current) {
+            const resolve = resolverRef.current
+            resolverRef.current = null
+            clearCard()
+            resolve(answer)
+            return
+        }
+        // Worker run: keep the card until the decision was actually handed over.
+        try {
+            if (!portRef.current) throw new Error('no port')
+            portRef.current.postMessage({ type: kind === 'plan' ? 'PLAN_DECISION' : 'RESULT_DECISION', payload: answer })
+            clearCard()
+        } catch {
+            addLog('Lost contact with the background worker. Reconnecting; try again in a moment.')
+        }
+    }, [addLog])
+
     const handleCancel = useCallback(() => {
         cancelRequestedRef.current = true;
+        if (planResolverRef.current) decideReview('plan', 'cancel')
+        if (resultResolverRef.current) decideReview('result', 'cancel')
         resultsRequestPendingRef.current = false
         if (portRef.current) {
             try {
@@ -1017,7 +1064,7 @@ export default function Organizer({ theme = 'light' }) {
         }
         setIsCancelling(true);
         addLog('Cancellation requested — halting operations...');
-    }, [addLog]);
+    }, [addLog, decideReview]);
 
     const returnToMenu = useCallback(() => {
         resultsRequestPendingRef.current = false
@@ -1242,7 +1289,8 @@ export default function Organizer({ theme = 'light' }) {
                                     cleanTitles,
                                     flatDateSort,
                                     dateSortOrder: effectiveDateSortOrder,
-                                    schemaSortOrder
+                                    schemaSortOrder,
+                                    reviewFolders
                                 },
                                 parsedBookmarks
                             }
@@ -1368,6 +1416,21 @@ export default function Organizer({ theme = 'light' }) {
                 parsedBookmarks ? deferFileDownload : inferCategories
             );
 
+            if (reviewFolders && !flatDateSort) {
+                organizerRef.current.planReviewer = (schema, error) => new Promise((resolve) => {
+                    planResolverRef.current = resolve
+                    setPlanForReview({
+                        categories: (schema.categories || []).map(c => ({ name: c.name, sub_categories: [...(c.sub_categories || [])] })),
+                        ...(error ? { error } : {})
+                    })
+                    addLog('Folder plan ready — review it, then approve to start organizing.')
+                })
+                organizerRef.current.resultReviewer = (rows, error) => new Promise((resolve) => {
+                    resultResolverRef.current = resolve
+                    setResultForReview({ rows, ...(error ? { error } : {}) })
+                    addLog('Organized folders ready — review them, then save the results.')
+                })
+            }
             persistPanelSnapshot('processing');
 
             // Pass parsed bookmarks if file mode, otherwise null (browser mode)
@@ -1424,8 +1487,12 @@ export default function Organizer({ theme = 'light' }) {
             }
         } finally {
             setIsCancelling(false);
+            // Edits saved for this run's review are stale once the run ends.
+            if (typeof chrome !== 'undefined' && chrome.storage?.session) {
+                try { chrome.storage.session.remove(['reviewDraft']); } catch {}
+            }
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, writePanelJobSnapshot]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, reviewFolders, writePanelJobSnapshot]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -2062,6 +2129,29 @@ export default function Organizer({ theme = 'light' }) {
                             }} />
                         </button>
                     </div>
+
+                    {/* Review Folders Toggle */}
+                    {!flatDateSort && (
+                        <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+                            <div>
+                                <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
+                                    Review folders before saving
+                                </label>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
+                                    Pause to approve or edit the proposed folders before any bookmark is filed, and again to edit the finished folders before they are saved
+                                </div>
+                            </div>
+                            <button
+                                role="switch"
+                                aria-label="Review folders before saving"
+                                aria-checked={reviewFolders}
+                                onClick={() => handleReviewFoldersToggle(!reviewFolders)}
+                                style={{ width: '44px', height: '24px', borderRadius: '12px', border: '1px solid var(--border)', background: reviewFolders ? 'var(--accent)' : 'var(--surface-solid)', position: 'relative', cursor: 'pointer', padding: 0, flexShrink: 0, transition: 'background 0.2s ease' }}
+                            >
+                                <span style={{ position: 'absolute', top: '2px', left: reviewFolders ? '22px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: reviewFolders ? 'var(--on-accent)' : 'var(--text-muted)', transition: 'left 0.2s ease' }} />
+                            </button>
+                        </div>
+                    )}
 
                     {/* Clean Titles Toggle */}
                     <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
@@ -2887,6 +2977,7 @@ export default function Organizer({ theme = 'light' }) {
                                 <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
                             </div>
                         )}
+                        <ReviewPanel plan={planForReview} result={resultForReview} onDecide={decideReview} />
                         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
                             <button
                                 className="btn-primary btn-in-progress"
@@ -2898,8 +2989,8 @@ export default function Organizer({ theme = 'light' }) {
                                     cursor: 'wait'
                                 }}
                             >
-                                <Loader2 size={18} className="spin-icon" />
-                                <span>In Progress... {Math.min(99, Math.max(0, progress))}%</span>
+                                {!(planForReview || resultForReview) && <Loader2 size={18} className="spin-icon" />}
+                                <span>{(planForReview || resultForReview) ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
                             </button>
                             <button
                                 type="button"

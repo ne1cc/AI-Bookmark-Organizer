@@ -120,6 +120,14 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
                     }
                     break;
 
+                case 'PLAN_DECISION':
+                    jobRunner.resolvePlan(msg.payload?.decision, msg.payload?.plan);
+                    break;
+
+                case 'RESULT_DECISION':
+                    jobRunner.resolveResult(msg.payload?.decision, msg.payload?.ops);
+                    break;
+
                 case 'CANCEL_JOB':
                     jobRunner.cancelJob();
                     break;
@@ -184,6 +192,20 @@ jobRunner.subscribe((event, payload) => {
                 message: `Organization halted: ${payload?.message || 'Unexpected error'}.`,
                 priority: 2
             }, () => {});
+        } else if (event === 'review') {
+            chrome.notifications.create('organizer-job-review', {
+                type: 'basic',
+                iconUrl: 'icon128.png',
+                title: 'AI Bookmark Organizer',
+                message: payload?.kind === 'result'
+                    ? 'Your organized folders are ready to review.'
+                    : 'Your folder plan is ready for review.',
+                priority: 2
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Background] Notification error:', chrome.runtime.lastError.message);
+                }
+            });
         }
     }
 });
