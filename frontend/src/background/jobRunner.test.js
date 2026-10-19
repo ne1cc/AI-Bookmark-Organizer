@@ -49,6 +49,10 @@ describe('BackgroundJobRunner', () => {
             downloads: {
                 download: vi.fn()
             },
+            alarms: {
+                create: vi.fn(),
+                clear: vi.fn()
+            },
             storage: {
                 session: {
                     get: vi.fn((keys, cb) => cb && cb({})),
@@ -365,6 +369,24 @@ describe('BackgroundJobRunner', () => {
                 })
             })
         );
+    });
+
+    it('creates the fallback keepalive alarm when a job starts', async () => {
+        const jobPromise = runner.startJob({ apiKey: 'AIzaSyFakeKey', categories: ['Tech'], inferCategories: false }, null);
+        expect(globalThis.chrome.alarms.create).toHaveBeenCalledWith('organizer-keepalive', { periodInMinutes: 1 });
+        await jobPromise;
+    });
+
+    it('clears the keepalive alarm on cancel and reset', () => {
+        runner.organizer = { cancel: vi.fn() };
+        runner.currentJob.status = 'processing';
+
+        runner.cancelJob();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
+
+        globalThis.chrome.alarms.clear.mockClear();
+        runner.resetJob();
+        expect(globalThis.chrome.alarms.clear).toHaveBeenCalledWith('organizer-keepalive');
     });
 
     it('cancels an active job cleanly', async () => {

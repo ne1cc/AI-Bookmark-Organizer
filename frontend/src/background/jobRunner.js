@@ -88,6 +88,17 @@ export class BackgroundJobRunner {
 
     startKeepAlive() {
         this.stopKeepAlive();
+        // Fallback liveness signal that survives the service worker being
+        // killed: the 15 s interval below only runs while the worker lives,
+        // but chrome.alarms wakes it and onAlarm can then detect an
+        // interrupted run. The interval stays the primary keepalive.
+        if (typeof chrome !== 'undefined' && chrome.alarms?.create) {
+            try {
+                chrome.alarms.create('organizer-keepalive', { periodInMinutes: 1 });
+            } catch {
+                // Ignore alarm creation failure
+            }
+        }
         if (typeof setInterval !== 'undefined') {
             this.keepAliveTimer = setInterval(() => {
                 try {
@@ -107,6 +118,13 @@ export class BackgroundJobRunner {
         if (this.keepAliveTimer) {
             clearInterval(this.keepAliveTimer);
             this.keepAliveTimer = null;
+        }
+        if (typeof chrome !== 'undefined' && chrome.alarms?.clear) {
+            try {
+                chrome.alarms.clear('organizer-keepalive');
+            } catch {
+                // Ignore alarm clear failure
+            }
         }
     }
 

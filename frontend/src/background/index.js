@@ -188,6 +188,52 @@ jobRunner.subscribe((event, payload) => {
     }
 });
 
+// Fallback liveness check driven by the 'organizer-keepalive' alarm. The
+// 15 s in-worker interval is the primary keepalive; this alarm fires even
+// after the browser killed the service worker, so it can tell a live run
+// (worker restarted, job still in memory) from a dead one (snapshot still
+// says "processing" but nothing is running) and mark the run interrupted.
+function handleKeepAliveAlarm(alarm) {
+    if (!alarm || alarm.name !== 'organizer-keepalive') return;
+
+    // Worker is alive with the job still in memory: touch the snapshot to
+    // reset the idle window.
+    if (jobRunner.currentJob.status === 'processing') {
+        jobRunner.persistSessionSnapshot();
+        return;
+    }
+
+    if (typeof chrome === 'undefined' || !chrome.storage?.session?.get) return;
+    chrome.storage.session.get('activeJobState', (result) => {
+        const snapshot = result?.activeJobState;
+        if (snapshot?.status !== 'processing') return;
+
+        // The worker was killed mid-run: flip the stale snapshot so the
+        // panel can render a notice instead of waiting forever.
+        const interrupted = { ...snapshot, status: 'interrupted' };
+        try {
+            chrome.storage.session.set({ activeJobState: interrupted });
+        } catch {}
+        // The run is terminal and the stopKeepAlive() that would have
+        // cleared the alarm died with the worker, so clear it here —
+        // otherwise it wakes this worker every minute forever.
+        try {
+            chrome.alarms.clear('organizer-keepalive');
+        } catch {}
+        for (const port of connectedPorts) {
+            try {
+                port.postMessage({ type: 'STATUS_UPDATE', payload: interrupted });
+            } catch (err) {
+                console.warn('[Background] Port postMessage failed:', err);
+            }
+        }
+    });
+}
+
+if (typeof chrome !== 'undefined' && chrome.alarms?.onAlarm) {
+    chrome.alarms.onAlarm.addListener(handleKeepAliveAlarm);
+}
+
 // Handle clicking on desktop notifications -> open side panel / sidebar
 if (typeof chrome !== 'undefined' && chrome.notifications?.onClicked) {
     chrome.notifications.onClicked.addListener((notificationId) => {
