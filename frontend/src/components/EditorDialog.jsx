@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
 
@@ -53,7 +54,8 @@ export default function EditorDialog({ title, summary, dirty, saveLabel = 'Save'
         return () => document.removeEventListener('keydown', onDocumentKeyDown)
     }, [])
 
-    return (
+    // Portaled to <body> so app descendant rules (e.g. `.action-button-container button { width: 100% }`) can't reach in.
+    return createPortal(
         <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'stretch', justifyContent: 'center' }}>
             <div
                 ref={dialogRef}
@@ -75,6 +77,7 @@ export default function EditorDialog({ title, summary, dirty, saveLabel = 'Save'
                 <div aria-live="polite" role="status" style={{ minHeight: error ? 'auto' : 0, padding: error ? '0.5rem 1rem' : 0, color: 'var(--error)', fontSize: '0.8rem' }}>{error}</div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1rem' }}>{children}</div>
             </div>
-        </div>
+        </div>,
+        document.body
     )
 }

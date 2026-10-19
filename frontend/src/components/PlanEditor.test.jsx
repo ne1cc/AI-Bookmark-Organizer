@@ -43,6 +43,14 @@ describe('PlanEditor', () => {
         expect(within(dialog).getByText('2 categories · 3 subfolders')).toBeDefined()
     })
 
+    it('renders outside its host so app button rules cannot squash the rows', () => {
+        // Organizer mounts the review inside .action-button-container, whose `button { width: 100% }` hid every name.
+        const { container } = render(<div className="action-button-container"><PlanEditor plan={plan()} onSave={vi.fn()} onDiscard={vi.fn()} /></div>)
+        const dialog = screen.getByRole('dialog', { name: 'Edit folder plan' })
+        expect(container.contains(dialog)).toBe(false)
+        expect(dialog.closest('.action-button-container')).toBeNull()
+    })
+
     it('renames a subfolder and saves the edited plan', () => {
         const { onSave } = setup()
 
