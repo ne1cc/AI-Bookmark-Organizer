@@ -110,6 +110,10 @@ const formatDateSpan = (span) => {
     return (span.includes(' – ') || span.includes(' - ')) ? span : `${span} – ${span}`;
 };
 
+// Shown when the panel reopens and the session snapshot says the previous
+// run was cut off before it could finish.
+const INTERRUPTED_RUN_NOTICE = 'Your previous organization run was interrupted before it could complete and its results may be incomplete. Re-run to continue.';
+
 export default function Organizer({ theme = 'light' }) {
     const [status, setStatus] = useState('idle') // idle, processing, complete, error
     const [logs, setLogs] = useState([])
@@ -266,11 +270,24 @@ export default function Organizer({ theme = 'light' }) {
     const completionTimerRef = useRef(null)
     const returnToMenuRef = useRef(null)
     const statusRef = useRef('idle')
+    const logsRef = useRef([])
+    // Stops the in-panel fallback run's pagehide listeners, set while such a
+    // run is live. Unmount must drop them even if the run never reached a
+    // terminal state — a closing panel fires pagehide before unmounting, so
+    // this only ever cleans up after that snapshot rewrite has happened.
+    const endPanelRunRef = useRef(null)
     // True while the panel waits for the worker's JOB_ACK. A replacement
     // port immediately receives the worker's connect-time STATUS_UPDATE
     // (idle), which must not reset the run state mid-handshake.
     const awaitingAckRef = useRef(false)
     useEffect(() => { statusRef.current = status }, [status])
+    useEffect(() => { logsRef.current = logs }, [logs])
+    useEffect(() => () => {
+        if (endPanelRunRef.current) {
+            endPanelRunRef.current()
+            endPanelRunRef.current = null
+        }
+    }, [])
 
     // How long the panel waits for the service worker to acknowledge a
     // START_JOB before assuming the port is dead and running the job in
@@ -468,6 +485,8 @@ export default function Organizer({ theme = 'light' }) {
                                     timestamp: new Date(l.timestamp)
                                 })));
                             }
+                        } else if (aj.status === 'interrupted') {
+                            setBackgroundNotice(INTERRUPTED_RUN_NOTICE);
                         }
                     }
                 });
@@ -1029,6 +1048,29 @@ export default function Organizer({ theme = 'light' }) {
 
     useEffect(() => { returnToMenuRef.current = returnToMenu }, [returnToMenu])
 
+    // Session snapshot writer for in-panel fallback runs. Mirrors the field
+    // layout of the service worker's persistSessionSnapshot so any reader of
+    // activeJobState sees the same shape regardless of who wrote it.
+    const writePanelJobSnapshot = useCallback((snapshot) => {
+        if (typeof chrome === 'undefined' || !chrome.storage?.session) return
+        try {
+            chrome.storage.session.set({
+                activeJobState: {
+                    id: snapshot.id,
+                    status: snapshot.status,
+                    progress: snapshot.progress,
+                    logs: (snapshot.logs ?? logsRef.current).slice(-60),
+                    activeDateSpan: snapshot.activeDateSpan ?? activeDateSpan,
+                    backgroundNotice: snapshot.backgroundNotice ?? '',
+                    errorMsg: snapshot.errorMsg ?? '',
+                    stats: snapshot.stats ?? null,
+                    count: snapshot.count ?? null,
+                    completedAt: snapshot.completedAt ?? null
+                }
+            })
+        } catch {}
+    }, [activeDateSpan])
+
     const startProcess = useCallback(async () => {
         const requiresApiKey = !flatDateSort || cleanTitles;
         if (requiresApiKey && !apiKey) {
@@ -1051,6 +1093,40 @@ export default function Organizer({ theme = 'light' }) {
         organizedResultsRef.current = null;
         setLastOrganized(null);
         let reportedErrorMessage = '';
+
+        // Session-snapshot bookkeeping for an in-panel fallback run. Only
+        // armed once this panel actually runs the job (delegated runs are
+        // tracked by the service worker), so nothing here fires when the
+        // worker acknowledges START_JOB.
+        let panelRunArmed = false;
+        let panelRunTerminated = false;
+        let panelProgress = 0;
+        let lastPanelSnapshotAt = 0;
+        const panelJobId = `panel_${Date.now()}`;
+        const persistPanelSnapshot = (snapshotStatus, snapshotExtras = {}) => {
+            const now = Date.now();
+            if (snapshotStatus === 'processing' && now - lastPanelSnapshotAt < 250) return;
+            lastPanelSnapshotAt = now;
+            if (snapshotStatus !== 'processing') panelRunTerminated = true;
+            writePanelJobSnapshot({ id: panelJobId, status: snapshotStatus, progress: panelProgress, ...snapshotExtras });
+        };
+        // The panel can vanish at any moment mid-run. Before that happens the
+        // page gets pagehide / visibilitychange, so rewrite the snapshot as
+        // interrupted — unless the run already reached a terminal state here.
+        const writeInterruptedSnapshot = () => {
+            if (panelRunTerminated) return;
+            writePanelJobSnapshot({ id: panelJobId, status: 'interrupted', progress: panelProgress });
+        };
+        const onPanelPageHide = () => writeInterruptedSnapshot();
+        const onPanelVisibilityChange = () => {
+            if (document.visibilityState === 'hidden') writeInterruptedSnapshot();
+        };
+        const endPanelRunTracking = () => {
+            panelRunTerminated = true;
+            window.removeEventListener('pagehide', onPanelPageHide);
+            document.removeEventListener('visibilitychange', onPanelVisibilityChange);
+            endPanelRunRef.current = null;
+        };
 
         try {
             setStatus('processing');
@@ -1193,6 +1269,13 @@ export default function Organizer({ theme = 'light' }) {
                 addLog('Background service worker unavailable — running the organization in this panel instead.');
             }
 
+            // From here the run lives in this panel, so this panel owns the
+            // session snapshot until the run reaches a terminal state.
+            panelRunArmed = true;
+            window.addEventListener('pagehide', onPanelPageHide);
+            document.addEventListener('visibilitychange', onPanelVisibilityChange);
+            endPanelRunRef.current = endPanelRunTracking;
+
             const { OrganizerService } = await import('../services/organizer')
             // Let React paint the completion state before opening the native
             // Save As dialog. Some browsers keep the extension panel looking
@@ -1219,10 +1302,14 @@ export default function Organizer({ theme = 'light' }) {
                         addLog(data.message);
                     } else if (data.status === 'processing') {
                         if (data.message) addLog(data.message);
-                        if (typeof data.percent === 'number') setProgress(Math.min(99, Math.max(0, Math.round(data.percent))));
+                        if (typeof data.percent === 'number') {
+                            panelProgress = Math.min(99, Math.max(0, Math.round(data.percent)));
+                            persistPanelSnapshot('processing');
+                        }
                     } else if (data.status === 'progress') {
                         if (data.message) addLog(data.message);
-                        setProgress(Math.min(99, Math.max(0, Math.round(data.percent))));
+                        panelProgress = Math.min(99, Math.max(0, Math.round(data.percent)));
+                        persistPanelSnapshot('processing');
                         if (data.clearNotice) {
                             setBackgroundNotice('');
                         }
@@ -1237,12 +1324,16 @@ export default function Organizer({ theme = 'light' }) {
                         if (data.message?.includes('cancelled')) {
                             setStatus('idle');
                             setIsCancelling(false);
+                            persistPanelSnapshot('idle');
+                            endPanelRunTracking();
                         }
                     } else if (data.status === 'error') {
                         reportedErrorMessage = data.message || '';
                         setErrorMsg(data.message);
                         setBackgroundNotice('');
                         setStatus('error');
+                        persistPanelSnapshot('error', { errorMsg: reportedErrorMessage });
+                        endPanelRunTracking();
                     } else if (data.status === 'success') {
                         addLog(data.message);
                         setBackgroundNotice('');
@@ -1252,6 +1343,9 @@ export default function Organizer({ theme = 'light' }) {
                         setStatus('complete');
                         setProgress(100);
                         scheduleReturnToMenu();
+                        panelProgress = 100;
+                        persistPanelSnapshot('complete', { completedAt: Date.now() });
+                        endPanelRunTracking();
                     }
                 },
                 selectedModel,
@@ -1265,12 +1359,16 @@ export default function Organizer({ theme = 'light' }) {
                 parsedBookmarks ? deferFileDownload : inferCategories
             );
 
+            persistPanelSnapshot('processing');
+
             // Pass parsed bookmarks if file mode, otherwise null (browser mode)
             const results = await organizerRef.current.start(parsedBookmarks);
 
             if (organizerRef.current?.isCancelled || !results) {
                 setStatus('idle');
                 setIsCancelling(false);
+                persistPanelSnapshot('idle');
+                endPanelRunTracking();
                 return;
             }
 
@@ -1294,6 +1392,8 @@ export default function Organizer({ theme = 'light' }) {
                     setActiveDateSpan(finalSpan);
                 }
                 setLastOrganized(meta);
+                persistPanelSnapshot('complete', { stats: enrichedStats, count: results.length, completedAt: Date.now() });
+                endPanelRunTracking();
                 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
                     // Every run is saved (latest plus the two before it) so it stays downloadable.
                     saveRun(results, meta)
@@ -1306,10 +1406,14 @@ export default function Organizer({ theme = 'light' }) {
             console.error(err);
             setErrorMsg(reportedErrorMessage || err?.message || "Failed to start process.");
             setStatus('error');
+            if (panelRunArmed) {
+                persistPanelSnapshot('error', { errorMsg: reportedErrorMessage || err?.message || "Failed to start process." });
+                endPanelRunTracking();
+            }
         } finally {
             setIsCancelling(false);
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort]);
+    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, writePanelJobSnapshot]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.
@@ -2864,6 +2968,14 @@ export default function Organizer({ theme = 'light' }) {
                     <div>
                         <strong>Background Run Active:</strong> {backgroundNotice}
                     </div>
+                </div>
+            )}
+
+            {/* Interrupted-run notice restored from the previous session */}
+            {backgroundNotice === INTERRUPTED_RUN_NOTICE && (
+                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <AlertCircle size={20} />
+                    {backgroundNotice}
                 </div>
             )}
 
