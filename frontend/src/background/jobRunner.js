@@ -30,7 +30,6 @@ export class BackgroundJobRunner {
         this.keepAliveTimer = null;
         this.subscribers = new Set();
         this.cachedResults = null;
-        this.persistJobState = true;
         this.stateFlushTimer = null;
     }
 
@@ -112,7 +111,6 @@ export class BackgroundJobRunner {
     }
 
     persistSessionSnapshot() {
-        if (!this.persistJobState) return;
         if (typeof chrome !== 'undefined' && chrome.storage?.session) {
             try {
                 chrome.storage.session.set({
@@ -159,7 +157,6 @@ export class BackgroundJobRunner {
             inferCategories = true,
             autoImport = true
         } = config;
-        this.persistJobState = flatDateSort || !inferCategories;
 
         const jobId = `job_${Date.now()}`;
         this.cachedResults = null;

@@ -349,6 +349,24 @@ describe('BackgroundJobRunner', () => {
         expect(runner.getState().status).toBe('complete');
     });
 
+    it('persists the session snapshot for the default AI-inferred config', async () => {
+        await runner.startJob({
+            apiKey: 'AIzaSyFakeKey',
+            categories: ['Tech'],
+            inferCategories: true,
+            flatDateSort: false
+        }, null);
+
+        expect(globalThis.chrome.storage.session.set).toHaveBeenCalledWith(
+            expect.objectContaining({
+                activeJobState: expect.objectContaining({
+                    status: 'complete',
+                    progress: 100
+                })
+            })
+        );
+    });
+
     it('cancels an active job cleanly', async () => {
         const cancelSpy = vi.fn();
         runner.organizer = { cancel: cancelSpy };
