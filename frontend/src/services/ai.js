@@ -202,6 +202,17 @@ function summarizeApiError(response, errorText) {
     return error;
 }
 
+// What to call a retried failure in the log: the HTTP status when there is one,
+// an unusable answer when the model replied badly, otherwise the network.
+export function retryCause(error) {
+    const status = error?.statusCode;
+    if (status) {
+        const label = STATUS_LABELS[status] || 'request failed';
+        return `${label.charAt(0).toUpperCase()}${label.slice(1)} (HTTP ${status})`;
+    }
+    return error?.retryable ? 'Unusable response from the AI' : 'Network issue';
+}
+
 // Determine if an error is retryable (transient) vs permanent
 export function isRetryableError(error, statusCode) {
     // Explicitly flagged (e.g. malformed/truncated model output): the request
@@ -481,7 +492,11 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
             const isPermanent = [400, 401, 402, 403, 404].includes(statusCode);
             const isRateLimit = !isPermanent && (statusCode === 429 || msgLower.includes('rate') || msgLower.includes('quota'));
 
-            const maxAttempts = isRateLimit ? 8 : maxRetries;
+            // An overloaded provider (503) recovers on the same minutes-long scale as a rate
+            // limit, so it gets the same patience; it is still reported as an overload, not a 429.
+            const isOverloaded = statusCode === 503;
+            const patient = isRateLimit || isOverloaded;
+            const maxAttempts = patient ? 8 : maxRetries;
 
             // If not retryable or this was the last attempt, throw
             if ((!isRetryableError(error, statusCode) && !isRateLimit) || attempt >= maxAttempts) {
@@ -489,7 +504,7 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
             }
 
             let delayMs;
-            if (isRateLimit) {
+            if (patient) {
                 const progressive = 5000 * Math.pow(1.8, attempt - 1) * (0.8 + Math.random() * 0.4);
                 delayMs = (typeof error.retryAfterMs === 'number' && error.retryAfterMs > 0)
                     ? error.retryAfterMs
@@ -499,7 +514,7 @@ export async function withRetry(fn, maxRetries = 5, initialDelayMs = 1500, isCan
                 delayMs = Math.min(30000, Math.max(exponentialDelay, error.retryAfterMs || 0));
             }
 
-            console.log(`Attempt ${attempt} failed (${isRateLimit ? 'rate limit' : 'retryable'}), retrying in ${Math.round(delayMs)}ms:`, error.message);
+            console.log(`Attempt ${attempt} failed (${isRateLimit ? 'rate limit' : isOverloaded ? 'overloaded' : 'retryable'}), retrying in ${Math.round(delayMs)}ms:`, error.message);
 
             if (typeof onRetry === 'function') {
                 try {

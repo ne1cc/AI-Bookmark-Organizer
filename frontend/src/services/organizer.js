@@ -1,5 +1,5 @@
 import { getBookmarks, findOrCreateFolder, clearFolderCache, shouldCreateSubFolder, moveBookmark, removeBookmark, getBookmarkChildren, getOtherBookmarksRootId, flattenBookmarks } from './bookmarks';
-import { generateSchema, generateInferredSchema, normalizeSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError } from './ai';
+import { generateSchema, generateInferredSchema, normalizeSchema, classifyBatch, classifyRehomeBatch, classifyDetailBatch, generateDetailSchemas, fallbackCategoryForSchema, normalizeClassificationForSchema, SCHEMA_SAMPLE_LIMIT, DETAIL_CLASSIFICATION_BATCH_SIZE, isNetworkError, isRateLimitError, retryCause } from './ai';
 import { downloadBookmarks } from './bookmarks_export';
 import { reconcileSubcategories, groupEligibleDetailCandidates, reconcileDetailCategories, canonicalKey, isExemptCategory } from './reconcile';
 import { buildRows, applyOps, detailStats } from './resultEditor';
@@ -439,13 +439,13 @@ export class OrganizerService {
                 this.model,
                 this.cleanTitles,
                 () => this.isCancelled,
-                ({ delayMs, isRateLimit }) => {
+                ({ delayMs, isRateLimit, error }) => {
                     const sec = Math.ceil(delayMs / 1000);
                     this.onProgress({
                         status: 'warning',
                         message: isRateLimit
                             ? `Rate limit reached (429). Pausing for ${sec}s before retrying batch ${label}...`
-                            : `Network issue on batch ${label}. Retrying in ${sec}s...`
+                            : `${retryCause(error)} on batch ${label}. Retrying in ${sec}s...`
                     });
                 }
             );
@@ -552,7 +552,7 @@ export class OrganizerService {
                         status: 'warning',
                         message: isRateLimit
                             ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
-                            : `Network issue during schema generation. Retrying in ${sec}s...`
+                            : `${retryCause(error)} during schema generation. Retrying in ${sec}s...`
                     });
                 },
                 reducedLimit
@@ -948,7 +948,7 @@ export class OrganizerService {
                     status: 'warning',
                     message: isRateLimit
                         ? `Rate limit reached (429). Pausing for ${sec}s before retrying schema generation...`
-                        : `Network issue during schema generation. Retrying in ${sec}s...`
+                        : `${retryCause(error)} during schema generation. Retrying in ${sec}s...`
                 });
             };
             schema = inferenceMode
@@ -1062,13 +1062,13 @@ export class OrganizerService {
                     this.model,
                     this.cleanTitles,
                     () => this.isCancelled,
-                    ({ delayMs, isRateLimit }) => {
+                    ({ delayMs, isRateLimit, error }) => {
                         const sec = Math.ceil(delayMs / 1000);
                         this.onProgress({
                             status: 'warning',
                             message: isRateLimit
                                 ? `Rate limit reached (429). Pausing for ${sec}s before retrying batch ${currentIdx + 1}...`
-                                : `Network issue on batch ${currentIdx + 1}. Retrying in ${sec}s...`
+                                : `${retryCause(error)} on batch ${currentIdx + 1}. Retrying in ${sec}s...`
                         });
                     }
                 );
@@ -1172,11 +1172,11 @@ export class OrganizerService {
                         foldersByCategory,
                         this.model,
                         () => this.isCancelled,
-                        ({ delayMs, isRateLimit }) => this.onProgress({
+                        ({ delayMs, isRateLimit, error }) => this.onProgress({
                             status: 'warning',
                             message: isRateLimit
                                 ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying the re-file pass...`
-                                : `Network issue during the re-file pass. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                : `${retryCause(error)} during the re-file pass. Retrying in ${Math.ceil(delayMs / 1000)}s...`
                         })
                     );
                     result.forEach((item, i) => { rehomed[indexes[i]] = item; });
@@ -1213,9 +1213,9 @@ export class OrganizerService {
         if (eligibleGroupCount > 0) {
             try {
                 const detailSchemas = await generateDetailSchemas(eligibleGroups, this.apiKey, this.model,
-                    () => this.isCancelled, ({ delayMs, isRateLimit }) => this.onProgress({ status: 'warning', message: isRateLimit
+                    () => this.isCancelled, ({ delayMs, isRateLimit, error }) => this.onProgress({ status: 'warning', message: isRateLimit
                         ? `Rate limit reached while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...`
-                        : `Network issue while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
+                        : `${retryCause(error)} while finding third-level folders; retrying in ${Math.ceil(delayMs / 1000)}s...` }));
                 if (detailSchemas.size === 0) {
                     this.onProgress({ status: 'warning', message: 'Third-level enrichment returned no usable folder schemas; keeping the two-level result.' });
                 }
@@ -1261,11 +1261,11 @@ export class OrganizerService {
                         detailed[taskIdx] = retainDetailRunOrdinals(
                             await classifyDetailBatch(chunk, this.apiKey, names, this.model,
                                 () => this.isCancelled,
-                                ({ delayMs, isRateLimit }) => this.onProgress({
+                                ({ delayMs, isRateLimit, error }) => this.onProgress({
                                     status: 'warning',
                                     message: isRateLimit
                                         ? `Rate limit reached (429). Pausing for ${Math.ceil(delayMs / 1000)}s before retrying detail chunk ${label}...`
-                                        : `Network issue on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
+                                        : `${retryCause(error)} on detail chunk ${label}. Retrying in ${Math.ceil(delayMs / 1000)}s...`
                                 })
                             ),
                             chunk
