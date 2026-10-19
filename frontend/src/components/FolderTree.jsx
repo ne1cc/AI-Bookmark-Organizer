@@ -1,9 +1,15 @@
 import { useRef, useState } from 'react'
 
 const smallButton = { padding: '0.15rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.72rem' }
-const rowStyle = { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.3rem', borderRadius: '6px', paddingLeft: undefined }
+// Finder list rows: everything packed left, one line per folder, the actions dot at the far right.
+const rowStyle = { display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'nowrap', padding: '0.2rem 0.3rem', borderRadius: '6px' }
 const ontoStyle = { ...rowStyle, background: 'var(--surface-alt)', outline: '2px solid var(--accent, #4c8dff)', outlineOffset: '-2px' }
-const nameStyle = (depth) => ({ color: 'var(--text-primary)', fontSize: '0.88rem', fontWeight: depth === 1 ? 600 : 400, cursor: 'default' })
+const chevronStyle = { ...smallButton, border: 'none', background: 'transparent', flexShrink: 0, width: '1.4rem', padding: 0 }
+const nameStyle = (depth) => ({
+    color: 'var(--text-primary)', fontSize: '0.88rem', fontWeight: depth === 1 ? 600 : 400, cursor: 'default',
+    flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    textAlign: 'left'
+})
 
 const keyOf = (path) => JSON.stringify(path)
 
@@ -69,7 +75,7 @@ export default function FolderTree({
                 if (event.key === 'Escape') { event.stopPropagation(); clear(editing.key); setEditing(null) }
             }}
             onBlur={() => { clear(editing.key); setEditing(null) }}
-            style={{ padding: '0.2rem 0.4rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+            style={{ flex: '1 1 auto', minWidth: 0, padding: '0.2rem 0.4rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-primary)', fontSize: '0.85rem' }}
         />
     )
 
@@ -216,18 +222,18 @@ export default function FolderTree({
                     style={{ ...rowVisual, paddingLeft: `${(node.path.length - 1) * 1.1 + 0.3}rem` }}
                 >
                     {node.children.length > 0 ? (
-                        <button type="button" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${node.name}`} onClick={() => toggle(key)} style={{ ...smallButton, border: 'none', background: 'transparent' }}>{open ? '▾' : '▸'}</button>
-                    ) : <span aria-hidden="true" style={{ width: '1.4rem' }} />}
+                        <button type="button" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${node.name}`} onClick={() => toggle(key)} style={chevronStyle}>{open ? '▾' : '▸'}</button>
+                    ) : <span aria-hidden="true" style={{ width: '1.4rem', flexShrink: 0 }} />}
                     {renaming ? nameInput(node, `New name for ${node.name}`) : (
-                        <span onDoubleClick={() => actions.includes('rename') && startRename(node)} style={nameStyle(node.path.length)}>{node.name}</span>
+                        <span onDoubleClick={() => actions.includes('rename') && startRename(node)} style={nameStyle(node.path.length)} title={node.name}>{node.name}</span>
                     )}
-                    {Number.isFinite(node.count) && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{node.count.toLocaleString()}{node.direct > 0 && node.children.length > 0 ? ` (${node.direct.toLocaleString()} directly here)` : ''}</span>}
+                    {Number.isFinite(node.count) && <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', flexShrink: 0 }}>{node.count.toLocaleString()}{node.direct > 0 && node.children.length > 0 ? ` (${node.direct.toLocaleString()} directly here)` : ''}</span>}
                     <button
                         type="button"
                         aria-haspopup="menu"
                         aria-label={`Actions for ${node.name}`}
                         onClick={() => setMenu(menu?.key === key && menu.kind === 'actions' ? null : { key, kind: 'actions', target: null })}
-                        style={{ ...smallButton, border: 'none', background: 'transparent', color: 'var(--text-muted)' }}
+                        style={{ ...smallButton, border: 'none', background: 'transparent', color: 'var(--text-muted)', flexShrink: 0 }}
                     >⋯</button>
                 </div>
                 {adding && <div style={{ paddingLeft: `${node.path.length * 1.1}rem`, padding: '0.2rem 0 0.2rem 1.5rem' }}>{nameInput(node, `Name for the new subfolder in ${node.name}`)}</div>}
