@@ -22,6 +22,8 @@ dist/
 *.zip
 
 # Documentation (Ignored by request)
+INDEX.md
+docs/architecture/
 CHANGELOG.md
 DEBUGGING_GUIDE.md
 IMPLEMENTATION_PLAN.md
