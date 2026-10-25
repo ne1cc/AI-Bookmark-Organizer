@@ -8,6 +8,7 @@ node_modules/
 .github/workflows/
 .superpowers/
 docs/superpowers/
+.claude/
 
 # Generated Data
 all_bookmarks.html
