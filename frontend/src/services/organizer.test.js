@@ -435,7 +435,7 @@ describe('OrganizerService cleanTitles integration', () => {
             expect.arrayContaining([expect.objectContaining({ url: 'https://example.com' })]),
             'test-key',
             expect.any(Object),
-            'google/gemini-3.5-flash-lite',
+            'google/gemini-4-hydrogen',
             false,
             expect.any(Function),
             expect.any(Function)
