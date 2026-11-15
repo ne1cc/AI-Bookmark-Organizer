@@ -80,7 +80,9 @@ describe('Organizer Component UI Tests', () => {
     it('renders the initial UI with Gemini AI models info', () => {
         render(<Organizer />)
 
-        expect(screen.getByText(/Gemini AI/i)).toBeDefined()
+        expect(screen.getByText(/Google Gemini \(AI Studio\) or OpenRouter/i)).toBeDefined()
+        // The standalone browser cleaner lives in the Options group now, not the app header.
+        expect(screen.getByRole('button', { name: 'Clear duplicate bookmarks' })).toBeDefined()
         expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
@@ -392,22 +394,26 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
     })
 
-    it('toggles flat date sort when the card title is clicked', () => {
+    it('switches between AI and flat sort from the mode switch', () => {
         render(<Organizer />)
 
         const flatToggle = screen.getByRole('switch', { name: /Sort without AI - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
-        const titleButton = screen.getByRole('button', { name: 'Toggle Sort without AI - Flat list' })
-        act(() => {
-            fireEvent.click(titleButton)
-        })
-        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+        const aiButton = screen.getByRole('button', { name: 'Organize with AI' })
+        expect(aiButton.getAttribute('aria-pressed')).toBe('true')
 
         act(() => {
-            fireEvent.click(titleButton)
+            fireEvent.click(flatToggle)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+        expect(aiButton.getAttribute('aria-pressed')).toBe('false')
+
+        act(() => {
+            fireEvent.click(aiButton)
         })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+        expect(aiButton.getAttribute('aria-pressed')).toBe('true')
     })
 
     it('shows the default direction readout after enabling flat date sort', () => {

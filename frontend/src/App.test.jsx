@@ -28,23 +28,16 @@ describe('App Component Layout', () => {
         vi.restoreAllMocks()
     })
 
-    it('renders the top bar with Clear duplicates button on the left and ThemeToggle / close button on the right', () => {
+    it('renders a single-line header with the title and the zoom / theme / close tools', () => {
         const { container } = render(<App />)
 
-        const headerTopLeft = container.querySelector('.header-top-left')
-        const headerTopRight = container.querySelector('.header-top-right')
+        const header = container.querySelector('.app-header')
+        expect(header.querySelector('h1.app-title').textContent).toBe('AI Bookmark Organizer')
+        expect(header.querySelector('.header-tools .header-close-btn')).not.toBeNull()
 
-        expect(headerTopLeft).toBeDefined()
-        expect(headerTopRight).toBeDefined()
-
-        // Clear duplicates button is located inside header-top-left
-        const clearDupesBtn = headerTopLeft.querySelector('.remove-duplicates-btn')
-        expect(clearDupesBtn).toBeDefined()
-        expect(clearDupesBtn.textContent).toContain('Clear duplicates')
-
-        // Close button and theme toggle are inside header-top-right
-        const closeBtn = headerTopRight.querySelector('.header-close-btn')
-        expect(closeBtn).toBeDefined()
+        // "Clear duplicates" moved into Organizer's Options group; Organizer is
+        // mocked in this file, so its presence is covered by the Organizer tests.
+        expect(header.querySelector('.remove-duplicates-btn')).toBeNull()
     })
 
     it('defaults to light mode when no theme preference is saved', () => {

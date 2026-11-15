@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Terminal, Play, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Zap, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar, Trash2 } from 'lucide-react'
+import { Terminal, AlertCircle, Plus, X, Bookmark, Upload, FileText, Lock, Download, Loader2, RefreshCw, Square, Copy, Check, ChevronDown, ChevronUp, Clock, ArrowDown, ArrowUp, ArrowDownAZ, ArrowUpZA, Globe, FolderTree, ExternalLink, Calendar, Trash2 } from 'lucide-react'
 import { parseBookmarks } from '../utils/parser'
 import { calculateDateSpan } from '../utils/dates'
 import { saveInputBookmarkFile, getInputBookmarkMeta, listInputBookmarkFiles, getInputBookmarkHtml, removeInputBookmarkFile, clearAllInputBookmarkFiles, downloadInputBookmarkFile } from '../services/input_bookmarks'
 import { normalizeSubfolderTarget, DEFAULT_SUBFOLDER_TARGET, detectProvider } from '../services/ai'
 import { saveRun, loadRunData, deleteRun, clearHistory } from '../services/runHistory'
 import ReviewPanel from './ReviewPanel'
+import RemoveDuplicatesButton from './RemoveDuplicatesButton'
+import { Switch, Segmented } from './controls'
 import subfolderHierarchyImage from '../assets/subfolder-hierarchy.png'
 import subfolderHierarchyBalancedImage from '../assets/subfolder-hierarchy-balanced.png'
 import subfolderHierarchyDetailedImage from '../assets/subfolder-hierarchy-detailed.png'
@@ -1519,1054 +1521,71 @@ export default function Organizer({ theme = 'light' }) {
     // the default source.
     const canStart = status === 'idle' && !isCancelling;
 
-    return (
-        <div className="glass-panel main-glass-panel">
+    // The key field collapses to one line once a key is saved. The key loads
+    // from storage after mount, so "open" is tracked as an explicit edit in
+    // progress (typing or Change) rather than derived once from the key.
+    const [keyOpen, setKeyOpen] = useState(false);
 
-            {/* API Key Input */}
-            <div className="section-block">
-                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                    API Key {(!flatDateSort || cleanTitles) ? <span style={{ color: 'var(--error)' }}>*</span> : null}
-                    <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)', fontWeight: '400' }}>
-                        {flatDateSort && !cleanTitles ? 'Optional for flat sorting' : 'Google Gemini (AI Studio) or OpenRouter'}
-                    </span>
-                </label>
-                <input
-                    type="password"
-                    placeholder="AIza... or AQ... (Google AI Studio / Gemini) or sk-or-... (OpenRouter)"
-                    value={apiKey}
-                    onChange={(e) => handleApiKeyChange(e.target.value)}
-                    style={{
-                        width: '100%',
-                        padding: '0.75rem',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)',
-                        background: 'var(--surface-solid)',
-                        color: 'var(--text-primary)',
-                        fontSize: '1rem',
-                        outline: 'none',
-                        marginBottom: '0.4rem',
-                        boxSizing: 'border-box'
-                    }}
-                />
-
-                {/* Minimal Quick Links to Get API Keys */}
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: '0.5rem',
-                    marginBottom: '0.65rem',
-                    padding: '0 0.15rem'
-                }}>
-                    <a
-                        href="https://aistudio.google.com/app/apikey"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            color: 'var(--accent)',
-                            fontSize: '0.74rem',
-                            textDecoration: 'none',
-                            opacity: 0.9,
-                            transition: 'opacity 0.2s ease'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
-                    >
-                        <span>Get Gemini API Key (Google AI Studio - Free)</span>
-                        <ExternalLink size={11} />
-                    </a>
-                    <a
-                        href="https://openrouter.ai/keys"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                            color: 'var(--accent)',
-                            fontSize: '0.74rem',
-                            textDecoration: 'none',
-                            opacity: 0.9,
-                            transition: 'opacity 0.2s ease'
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.textDecoration = 'underline'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.textDecoration = 'none'; }}
-                    >
-                        <span>Get OpenRouter Key</span>
-                        <ExternalLink size={11} />
-                    </a>
-                </div>
-
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'var(--surface-alt)', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                        <Lock size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
-                        <span>Your API key is stored locally in your browser.</span>
-                    </div>
-                </div>
-
-                <div style={{ marginTop: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-                    <p style={{ margin: 0, display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                        <Zap size={14} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
-                        <span>
-                            Uses <strong>Gemini AI</strong> models. Paste a key from{' '}
-                            <strong>Google AI Studio / Gemini</strong> (free, starts with <code>AIza</code> or <code>AQ</code>) or{' '}
-                            <strong>OpenRouter</strong> (<code>sk-or-</code>) — the provider is detected
-                            automatically{apiKey ? `: ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}` : ''}.
-                        </span>
-                    </p>
-                </div>
+    const needsKey = !flatDateSort || cleanTitles;
+    const waitingForReview = Boolean(planForReview || resultForReview);
+    const stats = lastOrganized?.stats;
+    const breakdown = stats?.categoryBreakdown;
+    const hasBreakdown = Boolean(breakdown) && Object.keys(breakdown).length > 0;
+    const schemaRows = hasBreakdown && Object.entries(breakdown)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([category, count]) => (
+            <div key={category} className="schema-row">
+                <span>{category}</span>
+                <span className="schema-count">{count}</span>
             </div>
+        ));
+    const copyButton = hasBreakdown && (
+        <button
+            type="button"
+            className={`btn-quiet ${copiedSchema ? 'is-success' : ''}`}
+            onClick={() => handleCopySchema(breakdown)}
+            title="Copy category list as plain text"
+        >
+            {copiedSchema ? <Check size={13} /> : <Copy size={13} />}
+            {copiedSchema ? 'Copied' : 'Copy'}
+        </button>
+    );
 
-            {/* Model Selector */}
-            {status === 'idle' && (!flatDateSort || cleanTitles) && (
-                <div className="card-panel section-block">
-                    <label style={{ display: 'block', marginBottom: '0.75rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                        Select AI Model
-                    </label>
-                    <div className="model-selector-grid">
-                        {models.map((model) => (
-                            <button
-                                key={model.id}
-                                onClick={() => handleModelChange(model.id)}
-                                className={`model-select-btn ${selectedModel === model.id ? 'active' : ''}`}
-                            >
-                                <span className="model-name">{model.name}</span>
-                                {model.badge && (
-                                    <span className="model-badge">
-                                        ({model.badge})
-                                    </span>
-                                )}
-                            </button>
-                        ))}
-                    </div>
-                    <div className="model-desc">
-                        {models.find(m => m.id === selectedModel)?.description || models.find(m => m.id === selectedModel)?.desc || '3.1 Flash Lite: Recommended default — ultra-fast latency and minimal token cost.'}
-                    </div>
-                </div>
-            )}
-
-            {/* Sort without AI - Flat list — Conditionally Active Flat Pipeline */}
-            {status === 'idle' && (
-                <div className={`flat-date-card section-block ${flatDateSort ? 'active' : ''}`}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
-                            <div style={{
-                                width: '36px',
-                                height: '36px',
-                                borderRadius: '10px',
-                                background: flatDateSort ? 'var(--accent-gradient)' : 'var(--surface-solid)',
-                                color: flatDateSort ? '#ffffff' : 'var(--accent)',
-                                border: '1px solid var(--border)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flexShrink: 0,
-                                boxShadow: flatDateSort ? '0 2px 8px var(--accent-glow)' : 'none',
-                                transition: 'all 0.2s ease',
-                                marginTop: '2px'
-                            }}>
-                                {flatSortType === 'alpha' ? <ArrowDownAZ size={18} /> : <Clock size={18} />}
-                            </div>
-                            <div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <button
-                                        type="button"
-                                        aria-label="Toggle Sort without AI - Flat list"
-                                        onClick={() => handleFlatDateSortToggle(!flatDateSort)}
-                                        style={{
-                                            display: 'block',
-                                            color: 'var(--text-primary)',
-                                            fontSize: '0.95rem',
-                                            fontWeight: '700',
-                                            background: 'transparent',
-                                            border: 'none',
-                                            padding: 0,
-                                            cursor: 'pointer',
-                                            fontFamily: 'inherit',
-                                            textAlign: 'left'
-                                        }}
-                                    >
-                                        Sort without AI - Flat list
-                                    </button>
-                                    <span style={{
-                                        fontSize: '0.68rem',
-                                        padding: '0.15rem 0.5rem',
-                                        borderRadius: '10px',
-                                        background: 'var(--accent-soft)',
-                                        border: '1px solid var(--border)',
-                                        color: 'var(--accent)',
-                                        fontWeight: 700,
-                                        letterSpacing: '0.4px',
-                                        textTransform: 'uppercase'
-                                    }}>
-                                        Zero AI Tokens
-                                    </span>
-                                </div>
-                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.25rem', lineHeight: '1.35' }}>
-                                    Orders bookmarks by date added or alphabetically into a single list without folders.
-                                </div>
-                            </div>
-                        </div>
-                        <button
-                            role="switch"
-                            aria-label="Sort without AI - Flat list"
-                            aria-checked={flatDateSort}
-                            onClick={() => handleFlatDateSortToggle(!flatDateSort)}
-                            style={{
-                                width: '46px',
-                                height: '26px',
-                                borderRadius: '13px',
-                                border: '1px solid var(--border)',
-                                background: flatDateSort ? 'var(--accent)' : 'var(--surface-solid)',
-                                position: 'relative',
-                                cursor: 'pointer',
-                                padding: 0,
-                                flexShrink: 0,
-                                transition: 'all 0.2s ease',
-                                boxShadow: flatDateSort ? '0 0 10px var(--accent-glow)' : 'none'
-                            }}
-                        >
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                left: flatDateSort ? '22px' : '2px',
-                                width: '20px',
-                                height: '20px',
-                                borderRadius: '50%',
-                                background: flatDateSort ? '#ffffff' : 'var(--text-muted)',
-                                transition: 'left 0.2s ease',
-                                boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
-                            }} />
-                        </button>
-                    </div>
-
-                    {flatDateSort && (
-                        <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
-                            {/* Sort Criterion: Date Added vs Alphabetical */}
-                            <div style={{ marginBottom: '1rem' }}>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
-                                    Sort Criterion
-                                </label>
-                                <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleFlatSortTypeChange('date')}
-                                        style={{
-                                            flex: 1,
-                                            padding: '0.5rem 0.75rem',
-                                            borderRadius: '6px',
-                                            border: 'none',
-                                            background: flatSortType === 'date' ? 'var(--accent-gradient)' : 'transparent',
-                                            color: flatSortType === 'date' ? '#ffffff' : 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            fontSize: '0.82rem',
-                                            fontWeight: flatSortType === 'date' ? '600' : '500',
-                                            transition: 'all 0.2s ease',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '0.4rem',
-                                            boxShadow: flatSortType === 'date' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                        }}
-                                    >
-                                        <Clock size={14} />
-                                        <span>Date Added</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleFlatSortTypeChange('alpha')}
-                                        style={{
-                                            flex: 1,
-                                            padding: '0.5rem 0.75rem',
-                                            borderRadius: '6px',
-                                            border: 'none',
-                                            background: flatSortType === 'alpha' ? 'var(--accent-gradient)' : 'transparent',
-                                            color: flatSortType === 'alpha' ? '#ffffff' : 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            fontSize: '0.82rem',
-                                            fontWeight: flatSortType === 'alpha' ? '600' : '500',
-                                            transition: 'all 0.2s ease',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '0.4rem',
-                                            boxShadow: flatSortType === 'alpha' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                        }}
-                                    >
-                                        <ArrowDownAZ size={14} />
-                                        <span>Alphabetical</span>
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Chronological Direction Controls */}
-                            {flatSortType === 'date' && (
-                                <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                        <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
-                                            Chronological Direction
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
-                                            title="Click to reverse direction"
-                                            style={{
-                                                fontSize: '0.72rem',
-                                                color: 'var(--text-muted)',
-                                                background: 'transparent',
-                                                border: 'none',
-                                                padding: 0,
-                                                cursor: 'pointer',
-                                                fontFamily: 'inherit',
-                                                textDecoration: 'underline'
-                                            }}
-                                        >
-                                            {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
-                                        </button>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleDateSortOrderChange('desc')}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.5rem 0.75rem',
-                                                borderRadius: '6px',
-                                                border: 'none',
-                                                background: dateSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
-                                                color: dateSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
-                                                cursor: 'pointer',
-                                                fontSize: '0.82rem',
-                                                fontWeight: dateSortOrder === 'desc' ? '600' : '500',
-                                                transition: 'all 0.2s ease',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.4rem',
-                                                boxShadow: dateSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                            }}
-                                        >
-                                            <ArrowDown size={14} />
-                                            <span>Newest First</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleDateSortOrderChange('asc')}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.5rem 0.75rem',
-                                                borderRadius: '6px',
-                                                border: 'none',
-                                                background: dateSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
-                                                color: dateSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
-                                                cursor: 'pointer',
-                                                fontSize: '0.82rem',
-                                                fontWeight: dateSortOrder === 'asc' ? '600' : '500',
-                                                transition: 'all 0.2s ease',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.4rem',
-                                                boxShadow: dateSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                            }}
-                                        >
-                                            <ArrowUp size={14} />
-                                            <span>Oldest First</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Alphabetical Direction Controls */}
-                            {flatSortType === 'alpha' && (
-                                <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
-                                        <label style={{ color: 'var(--text-primary)', fontSize: '0.82rem', fontWeight: '600' }}>
-                                            Alphabetical Direction
-                                        </label>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleAlphaSortOrderChange(alphaSortOrder === 'desc' ? 'asc' : 'desc')}
-                                            title="Click to reverse direction"
-                                            style={{
-                                                fontSize: '0.72rem',
-                                                color: 'var(--text-muted)',
-                                                background: 'transparent',
-                                                border: 'none',
-                                                padding: 0,
-                                                cursor: 'pointer',
-                                                fontFamily: 'inherit',
-                                                textDecoration: 'underline'
-                                            }}
-                                        >
-                                            {alphaSortOrder === 'desc' ? 'Z to A bookmarks at the top' : 'A to Z bookmarks at the top'}
-                                        </button>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '0.5rem', padding: '0.3rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleAlphaSortOrderChange('asc')}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.5rem 0.75rem',
-                                                borderRadius: '6px',
-                                                border: 'none',
-                                                background: alphaSortOrder === 'asc' ? 'var(--accent-gradient)' : 'transparent',
-                                                color: alphaSortOrder === 'asc' ? '#ffffff' : 'var(--text-secondary)',
-                                                cursor: 'pointer',
-                                                fontSize: '0.82rem',
-                                                fontWeight: alphaSortOrder === 'asc' ? '600' : '500',
-                                                transition: 'all 0.2s ease',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.4rem',
-                                                boxShadow: alphaSortOrder === 'asc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                            }}
-                                        >
-                                            <ArrowDownAZ size={14} />
-                                            <span>A to Z</span>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => handleAlphaSortOrderChange('desc')}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.5rem 0.75rem',
-                                                borderRadius: '6px',
-                                                border: 'none',
-                                                background: alphaSortOrder === 'desc' ? 'var(--accent-gradient)' : 'transparent',
-                                                color: alphaSortOrder === 'desc' ? '#ffffff' : 'var(--text-secondary)',
-                                                cursor: 'pointer',
-                                                fontSize: '0.82rem',
-                                                fontWeight: alphaSortOrder === 'desc' ? '600' : '500',
-                                                transition: 'all 0.2s ease',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.4rem',
-                                                boxShadow: alphaSortOrder === 'desc' ? '0 1px 8px var(--accent-glow)' : 'none'
-                                            }}
-                                        >
-                                            <ArrowUpZA size={14} />
-                                            <span>Z to A</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* Subfolder & Sorting Strategy Row (2-col grid on wide, stacked on compact) */}
-            {status === 'idle' && !flatDateSort && (
-                <div className="settings-grid-row section-block">
-                    {/* Subfolder Target Size */}
-                    <div className="card-panel">
-                        <label style={{ display: 'block', marginBottom: '0.75rem', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                            Subfolder Organization
-                        </label>
-                        <div style={{ display: 'flex', gap: '0.5rem', padding: '0.4rem', background: 'var(--surface-solid)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                            {subfolderOptions.map((option) => (
-                                <button
-                                    key={option.id}
-                                    onClick={() => handleSubfolderTargetChange(option.id)}
-                                    style={{
-                                        flex: 1,
-                                        padding: '0.6rem 0.8rem',
-                                        borderRadius: '6px',
-                                        border: 'none',
-                                        background: subfolderTarget === option.id ? 'var(--accent-gradient)' : 'transparent',
-                                        color: subfolderTarget === option.id ? 'var(--on-accent)' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.85rem',
-                                        fontWeight: subfolderTarget === option.id ? '600' : '500',
-                                        transition: 'all 0.2s ease',
-                                        boxShadow: subfolderTarget === option.id ? '0 1px 10px var(--accent-glow)' : 'none'
-                                    }}
-                                >
-                                    {option.label}
-                                </button>
-                            ))}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-                            {subfolderOptions.find(opt => opt.id === subfolderTarget)?.description}
-                        </div>
-                        <div className="subfolder-explainer">
-                            <img
-                                className="subfolder-hierarchy-image"
-                                src={SUBFOLDER_EXPLAINER_IMAGES[theme]?.[subfolderTarget] || subfolderHierarchyImage}
-                                alt="Category and nested subfolder hierarchy for the selected organization level"
-                            />
-                        </div>
-                    </div>
-
-                    {/* Folder Content Sorting (Schema-Dependent Mode) */}
-                    <div className="card-panel">
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <FolderTree size={18} style={{ color: 'var(--accent)' }} />
-                                <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.95rem', fontWeight: '600' }}>
-                                    Folder Content Sorting
-                                </label>
-                            </div>
-                            <span style={{
-                                fontSize: '0.72rem',
-                                padding: '0.15rem 0.5rem',
-                                borderRadius: '10px',
-                                background: 'var(--surface-solid)',
-                                border: '1px solid var(--border)',
-                                color: 'var(--accent)',
-                                fontWeight: 600
-                            }}>
-                                {SCHEMA_SORT_OPTIONS.find(opt => opt.id === schemaSortOrder)?.badge || 'Active'}
-                            </span>
-                        </div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
-                            Choose how bookmarks are ordered inside each AI-generated category folder:
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                            {SCHEMA_SORT_OPTIONS.map(option => {
-                                const isSelected = schemaSortOrder === option.id;
-                                const IconComponent = option.icon;
-                                return (
-                                    <button
-                                        key={option.id}
-                                        type="button"
-                                        onClick={() => handleSchemaSortChange(option.id)}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            padding: '0.75rem 1rem',
-                                            borderRadius: '8px',
-                                            border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
-                                            background: isSelected ? 'var(--surface-solid)' : 'transparent',
-                                            color: 'var(--text-primary)',
-                                            cursor: 'pointer',
-                                            textAlign: 'left',
-                                            transition: 'all 0.2s ease',
-                                            boxShadow: isSelected ? '0 2px 10px var(--accent-glow)' : 'none'
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                            <div style={{
-                                                width: '32px',
-                                                height: '32px',
-                                                borderRadius: '8px',
-                                                background: isSelected ? 'var(--accent-soft)' : 'var(--surface-solid)',
-                                                color: isSelected ? 'var(--accent)' : 'var(--text-muted)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                flexShrink: 0,
-                                                border: '1px solid var(--border)'
-                                            }}>
-                                                <IconComponent size={16} />
-                                            </div>
-                                            <div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                    <span style={{ fontSize: '0.86rem', fontWeight: isSelected ? '600' : '500' }}>
-                                                        {option.label}
-                                                    </span>
-                                                </div>
-                                                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                                                    {option.desc}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        {isSelected && (
-                                            <div style={{
-                                                width: '20px',
-                                                height: '20px',
-                                                borderRadius: '50%',
-                                                background: 'var(--accent)',
-                                                color: 'var(--on-accent)',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                flexShrink: 0,
-                                                marginLeft: '0.5rem'
-                                            }}>
-                                                <Check size={12} strokeWidth={3} />
-                                            </div>
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Toggles Row (2-col grid on wide, stacked on compact) */}
-            {status === 'idle' && (
-                <div className="settings-grid-row section-block">
-                    {/* Duplicate Removal Toggle */}
-                    <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                        <div>
-                            <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                                Remove Duplicate URLs
-                            </label>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                                Keep one copy of each URL in the organized result; original bookmarks are unchanged
-                            </div>
-                        </div>
-                        <button
-                            role="switch"
-                            aria-label="Remove duplicate URLs"
-                            aria-checked={removeDuplicates}
-                            onClick={() => handleRemoveDuplicatesToggle(!removeDuplicates)}
-                            style={{
-                                width: '44px',
-                                height: '24px',
-                                borderRadius: '12px',
-                                border: '1px solid var(--border)',
-                                background: removeDuplicates ? 'var(--accent)' : 'var(--surface-solid)',
-                                position: 'relative',
-                                cursor: 'pointer',
-                                padding: 0,
-                                flexShrink: 0,
-                                transition: 'background 0.2s ease'
-                            }}
-                        >
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                left: removeDuplicates ? '22px' : '2px',
-                                width: '18px',
-                                height: '18px',
-                                borderRadius: '50%',
-                                background: removeDuplicates ? 'var(--on-accent)' : 'var(--text-muted)',
-                                transition: 'left 0.2s ease'
-                            }} />
-                        </button>
-                    </div>
-
-                    {/* Review Folders Toggle */}
-                    {!flatDateSort && (
-                        <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                            <div>
-                                <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '500' }}>
-                                    Review folders before saving
-                                </label>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                                    Pause to approve or edit the proposed folders before any bookmark is filed, and again to edit the finished folders before they are saved
-                                </div>
-                            </div>
-                            <button
-                                role="switch"
-                                aria-label="Review folders before saving"
-                                aria-checked={reviewFolders}
-                                onClick={() => handleReviewFoldersToggle(!reviewFolders)}
-                                style={{ width: '44px', height: '24px', borderRadius: '12px', border: '1px solid var(--border)', background: reviewFolders ? 'var(--accent)' : 'var(--surface-solid)', position: 'relative', cursor: 'pointer', padding: 0, flexShrink: 0, transition: 'background 0.2s ease' }}
-                            >
-                                <span style={{ position: 'absolute', top: '2px', left: reviewFolders ? '22px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: reviewFolders ? 'var(--on-accent)' : 'var(--text-muted)', transition: 'left 0.2s ease' }} />
-                            </button>
-                        </div>
-                    )}
-
-                    {/* Clean Titles Toggle */}
-                    <div className="card-panel" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
-                        <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                <label style={{ display: 'block', color: 'var(--text-primary)', fontSize: '0.9rem', fontWeight: '600' }}>
-                                    Clean Titles with AI
-                                </label>
-                                <span style={{
-                                    fontSize: '0.68rem',
-                                    padding: '0.12rem 0.45rem',
-                                    borderRadius: '10px',
-                                    background: cleanTitles ? 'var(--accent-soft)' : 'var(--surface-solid)',
-                                    border: '1px solid var(--border)',
-                                    color: cleanTitles ? 'var(--accent)' : 'var(--text-muted)',
-                                    fontWeight: 600,
-                                    textTransform: 'uppercase',
-                                    letterSpacing: '0.3px'
-                                }}>
-                                    Consumes AI Tokens
-                                </span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: '1.4' }}>
-                                {flatDateSort
-                                    ? `Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving ${flatSortType === 'alpha' ? 'alphabetical' : 'chronological date'} order. Consumes AI tokens and requires an API key.`
-                                    : 'Uses AI to rewrite messy, truncated, or raw-URL titles into human-readable names. Consumes AI tokens.'}
-                            </div>
-                        </div>
-                        <button
-                            role="switch"
-                            aria-label="Clean Titles with AI"
-                            aria-checked={cleanTitles}
-                            onClick={() => handleCleanTitlesToggle(!cleanTitles)}
-                            style={{
-                                width: '44px',
-                                height: '24px',
-                                borderRadius: '12px',
-                                border: '1px solid var(--border)',
-                                background: cleanTitles ? 'var(--accent)' : 'var(--surface-solid)',
-                                position: 'relative',
-                                cursor: 'pointer',
-                                padding: 0,
-                                flexShrink: 0,
-                                transition: 'background 0.2s ease'
-                            }}
-                        >
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                left: cleanTitles ? '22px' : '2px',
-                                width: '18px',
-                                height: '18px',
-                                borderRadius: '50%',
-                                background: cleanTitles ? 'var(--on-accent)' : 'var(--text-muted)',
-                                transition: 'left 0.2s ease'
-                            }} />
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* Category Editor */}
-            {status === 'idle' && !flatDateSort && (
-                <div className="glass-panel categories-panel section-block">
-                    {/* Header with Title, Count Badge, and Clear All / Reset Action */}
-                    <div className="categories-header">
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.05rem', fontWeight: 600 }}>
-                                Customize Categories
-                            </h3>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                            <div style={{ maxWidth: '19rem' }}>
-                                <div style={{ fontSize: '0.82rem', color: 'var(--text-primary)', fontWeight: 600 }}>Infer categories</div>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.35 }}>
-                                    AI creates categories from this run’s bookmarks. Manual choices stay saved but inactive.
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                role="switch"
-                                aria-label="Infer categories"
-                                aria-checked={inferCategories}
-                                onClick={() => handleInferCategoriesToggle(!inferCategories)}
-                                style={{ width: '44px', height: '24px', borderRadius: '12px', border: '1px solid var(--border)', background: inferCategories ? 'var(--accent)' : 'var(--surface-solid)', position: 'relative', cursor: 'pointer', padding: 0, flexShrink: 0, transition: 'background 0.2s ease' }}
-                            >
-                                <span style={{ position: 'absolute', top: '2px', left: inferCategories ? '22px' : '2px', width: '18px', height: '18px', borderRadius: '50%', background: inferCategories ? 'var(--on-accent)' : 'var(--text-muted)', transition: 'left 0.2s ease' }} />
-                            </button>
-                        </div>
-                    </div>
-
-                    <div aria-disabled={inferCategories} style={{ opacity: inferCategories ? 0.58 : 1, filter: inferCategories ? 'blur(0.2px)' : 'none', pointerEvents: inferCategories ? 'none' : 'auto', transition: 'opacity 0.2s ease' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.8rem' }}>
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>{categories.length} chosen</span>
-                            <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            {categories.length > 0 ? (
-                                <button
-                                    type="button"
-                                    onClick={handleClearAllCategories}
-                                    disabled={inferCategories}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        padding: '0.25rem 0.6rem',
-                                        fontSize: '0.75rem',
-                                        borderRadius: '6px',
-                                        border: '1px solid var(--error-soft)',
-                                        background: 'var(--error-soft)',
-                                        color: 'var(--error)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.15s ease'
-                                    }}
-                                    title="Clear all active categories"
-                                >
-                                    <X size={12} />
-                                    <span>Clear All</span>
-                                </button>
-                            ) : (
-                                <button
-                                    type="button"
-                                    onClick={handleResetDefaultCategories}
-                                    disabled={inferCategories}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        padding: '0.25rem 0.6rem',
-                                        fontSize: '0.75rem',
-                                        borderRadius: '6px',
-                                        border: '1px solid var(--border)',
-                                        background: 'var(--surface-solid)',
-                                        color: 'var(--accent)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.15s ease'
-                                    }}
-                                    title="Reset to default categories"
-                                >
-                                    <RefreshCw size={12} />
-                                    <span>Reset Defaults</span>
-                                </button>
-                            )}
-                        </div>
-                        </div>
-
-                    <div style={{ margin: '0.75rem 0 1rem', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.45' }}>
-                        <span style={{ display: 'block' }}>Your chosen categories become the root-level folders.</span>
-                        <span style={{ display: 'block' }}>Subfolders are always generated automatically inside each root folder.</span>
-                    </div>
-
-                    {/* Custom Category Input */}
-                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.3rem', marginBottom: '1rem' }}>
-                        <input
-                            type="text"
-                            placeholder="Add custom category..."
-                            value={newCategory}
-                            disabled={inferCategories}
-                            onChange={(e) => setNewCategory(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' && newCategory.trim()) {
-                                    handleAddCategory(newCategory);
-                                    setNewCategory('');
-                                }
-                            }}
-                            style={{
-                                flex: 1,
-                                padding: '0.5rem 0.75rem',
-                                borderRadius: '6px',
-                                border: '1px solid var(--border)',
-                                background: 'var(--surface-solid)',
-                                color: 'var(--text-primary)',
-                                outline: 'none',
-                                fontSize: '0.85rem'
-                            }}
-                        />
-                        <button
-                            type="button"
-                            disabled={inferCategories}
-                            onClick={() => {
-                                if (newCategory.trim()) {
-                                    handleAddCategory(newCategory);
-                                    setNewCategory('');
-                                }
-                            }}
-                            className="btn-secondary"
-                            style={{
-                                padding: '0.5rem 0.85rem',
-                                borderRadius: '6px',
-                                border: '1px solid var(--border)',
-                                background: 'var(--accent)',
-                                color: 'var(--on-accent)',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.3rem',
-                                fontSize: '0.85rem',
-                                fontWeight: 500
-                            }}
-                        >
-                            <Plus size={15} />
-                            <span>Add</span>
-                        </button>
-                    </div>
-
-                    {/* Active Chosen Categories Bin */}
-                    {categories.length === 0 ? (
-                        <div style={{
-                            padding: '0.85rem',
-                            textAlign: 'center',
-                            fontSize: '0.8rem',
-                            color: 'var(--text-muted)',
-                            background: 'var(--surface-solid)',
-                            borderRadius: '8px',
-                            border: '1px dashed var(--border)'
-                        }}>
-                            No manual categories selected. The app will infer root-level folders from your bookmark file. Turn off Infer categories to choose the root folders below. Subfolders are always generated automatically inside each root folder.
-                        </div>
-                    ) : (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                            {categories.map((cat, idx) => (
-                                <div key={idx} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.45rem',
-                                    background: 'var(--surface-solid)',
-                                    border: '1px solid var(--border)',
-                                    padding: '0.25rem 0.75rem',
-                                    borderRadius: '20px',
-                                    fontSize: '0.85rem',
-                                    color: 'var(--text-secondary)'
-                                }}>
-                                    <span>{cat}</span>
-                                    <button type="button" disabled={inferCategories} onClick={() => handleRemoveCategory(idx)} title={`Remove "${cat}"`} style={{ display: 'flex', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: 'var(--error)' }}>
-                                        <X size={14} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Second List: Suggested Categories (Addable Pool) */}
-                    {availableSuggestions.length > 0 && (
-                        <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.65rem' }}>
-                                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Suggested Categories
-                                </span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                                    Click + to add into chosen
-                                </span>
-                            </div>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
-                                {availableSuggestions.map((sug) => (
-                                    <button
-                                        type="button"
-                                        key={sug}
-                                        disabled={inferCategories}
-                                        onClick={() => handleAddCategory(sug)}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.4rem',
-                                            background: 'var(--surface-solid)',
-                                            border: '1px dashed var(--border)',
-                                            padding: '0.25rem 0.65rem',
-                                            borderRadius: '20px',
-                                            fontSize: '0.82rem',
-                                            color: 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            transition: 'all 0.15s ease'
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            e.currentTarget.style.borderColor = 'var(--success)';
-                                            e.currentTarget.style.color = 'var(--text-primary)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            e.currentTarget.style.borderColor = 'var(--border)';
-                                            e.currentTarget.style.color = 'var(--text-secondary)';
-                                        }}
-                                        title={`Add "${sug}" to chosen categories`}
-                                    >
-                                        <span>{sug}</span>
-                                        <Plus
-                                            size={14}
-                                            style={{ color: 'var(--success)', flexShrink: 0 }}
-                                        />
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                    </div>
-                </div>
-            )}
-
-            {/* File Upload Area */}
-            {status === 'idle' && (
-                <div
-                    data-testid="dropzone"
-                    onDrop={handleDrop}
-                    onDragOver={handleDragOver}
-                    className={`upload-dropzone section-block ${uploadedFile ? 'has-file' : ''}`}
-                    onClick={() => fileInputRef.current.click()}
-                >
-                    <input
-                        type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileSelect}
-                        accept=".html,.htm"
-                        style={{ display: 'none' }}
-                    />
-
-                    {uploadedFile ? (
-                        <div>
-                            <div style={{ color: 'var(--success)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                                <FileText size={24} />
-                                <span style={{ fontWeight: 'bold' }}>{uploadedFile.name}</span>
-                            </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                {parsedBookmarks
-                                    ? `${parsedBookmarks.length.toLocaleString()} bookmarks ready${activeDateSpan ? ` · Dates ${formatDateSpan(activeDateSpan)}` : ''}`
-                                    : 'Ready to process'}
-                            </div>
-                            <button
-                                onClick={(e) => { e.stopPropagation(); resetApp(); }}
-                                style={{
-                                    marginTop: '0.5rem',
-                                    background: 'transparent',
-                                    border: 'none',
-                                    color: 'var(--error)',
-                                    fontSize: '0.8rem',
-                                    cursor: 'pointer',
-                                    textDecoration: 'underline'
-                                }}
-                            >
-                                Remove File
-                            </button>
-                        </div>
-                    ) : (
-                        <div>
-                            <Upload size={24} style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }} />
-                            <div style={{ color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                                Drag & drop bookmarks.html here
-                            </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                or click to browse
-                            </div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--terminal-muted)', marginTop: '1rem' }}>
-                                (Optional - defaults to browser's current bookmarks)
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
+    // Cached input files belong with the source picker while idle and with
+    // the result once a run completes, so both views place this same block.
+    const savedInputs = (
+        <>
             {/* Cached dropped-in input file (spec §12): pristine original kept for re-organize/download */}
-            {(status === 'idle' || status === 'complete') && inputFile && (
-                <div className="input-bookmarks-card section-block">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--text-primary)' }}>Input Bookmarks</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                                {inputFile.filename} · {(inputFile.count || 0).toLocaleString()} bookmarks
-                                {inputFile.dateSpan ? ` · Dates ${formatDateSpan(inputFile.dateSpan)}` : ''}
-                                {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
-                            </div>
+            {inputFile && (
+                <div className="input-bookmarks-card">
+                    <div style={{ minWidth: 0 }}>
+                        <div className="setting-title">Input Bookmarks</div>
+                        <div className="setting-desc">
+                            {inputFile.filename} · {(inputFile.count || 0).toLocaleString()} bookmarks
+                            {inputFile.dateSpan ? ` · Dates ${formatDateSpan(inputFile.dateSpan)}` : ''}
+                            {' '}· saved {new Date(inputFile.savedAt).toLocaleString()}
                         </div>
-                        <div className="input-file-actions">
-                            <button className="input-file-action input-file-action-secondary" type="button" onClick={() => handleDownloadInput(inputFile)} title="Download the original file">Download</button>
-                            <button className="input-file-action input-file-action-primary" type="button" onClick={() => handleReorganizeInput(inputFile)} title="Organize from the cached original again">Re-organize</button>
-                            <button className="input-file-action input-file-action-danger" type="button" onClick={() => handleRemoveInput(inputFile)} title="Forget the cached input">Remove</button>
-                        </div>
+                    </div>
+                    <div className="input-file-actions">
+                        <button className="input-file-action input-file-action-secondary" type="button" onClick={() => handleDownloadInput(inputFile)} title="Download the original file">Download</button>
+                        <button className="input-file-action input-file-action-primary" type="button" onClick={() => handleReorganizeInput(inputFile)} title="Organize from the cached original again">Re-organize</button>
+                        <button className="input-file-action input-file-action-danger" type="button" onClick={() => handleRemoveInput(inputFile)} title="Forget the cached input">Remove</button>
                     </div>
                 </div>
             )}
 
             {/* Recorded input files history (unlimited files with download / re-organize / delete) */}
-            {(status === 'idle' || status === 'complete') && inputFiles.length > 1 && (
-                <details className="previous-inputs section-block">
-                    <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        All saved input files ({inputFiles.length})
-                    </summary>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                        <button
-                            type="button"
-                            onClick={clearAllInputFiles}
-                            style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
-                        >
-                            Clear all saved input files
-                        </button>
-                    </div>
-                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '240px', overflowY: 'auto' }}>
+            {inputFiles.length > 1 && (
+                <details className="previous-inputs sub-details">
+                    <summary>All saved input files ({inputFiles.length})</summary>
+                    <button type="button" className="btn-quiet" onClick={clearAllInputFiles}>
+                        Clear all saved input files
+                    </button>
+                    <ul className="saved-list">
                         {inputFiles.map((entry) => (
-                            <li key={entry.id || entry.savedAt} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{entry.filename}</strong>
+                            <li key={entry.id || entry.savedAt}>
+                                <span className="saved-meta">
+                                    <strong>{entry.filename}</strong>
                                     <br />
                                     {[
                                         `${(entry.count || 0).toLocaleString()} bookmarks`,
@@ -2574,33 +1593,15 @@ export default function Organizer({ theme = 'light' }) {
                                         formatRunTime(entry.savedAt)
                                     ].filter(Boolean).join(' · ')}
                                 </span>
-                                <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
-                                    <button
-                                        type="button"
-                                        aria-label={`Download ${entry.filename}`}
-                                        onClick={() => handleDownloadInput(entry)}
-                                        title="Download this original input file"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                                    >
+                                <div className="saved-actions">
+                                    <button type="button" className="btn-quiet" aria-label={`Download ${entry.filename}`} onClick={() => handleDownloadInput(entry)} title="Download this original input file">
                                         <Download size={13} />
                                         Download
                                     </button>
-                                    <button
-                                        type="button"
-                                        aria-label={`Re-organize ${entry.filename}`}
-                                        onClick={() => handleReorganizeInput(entry)}
-                                        title="Load this input file to organize"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                                    >
+                                    <button type="button" className="btn-quiet" aria-label={`Re-organize ${entry.filename}`} onClick={() => handleReorganizeInput(entry)} title="Load this input file to organize">
                                         Re-organize
                                     </button>
-                                    <button
-                                        type="button"
-                                        aria-label={`Delete ${entry.filename}`}
-                                        onClick={() => handleRemoveInput(entry)}
-                                        title="Delete this saved input file"
-                                        style={{ display: 'inline-flex', alignItems: 'center', padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                                    >
+                                    <button type="button" className="btn-quiet" aria-label={`Delete ${entry.filename}`} onClick={() => handleRemoveInput(entry)} title="Delete this saved input file">
                                         <Trash2 size={13} />
                                     </button>
                                 </div>
@@ -2609,530 +1610,751 @@ export default function Organizer({ theme = 'light' }) {
                     </ul>
                 </details>
             )}
+        </>
+    );
 
-            {/* Saved results from a previous run (persists across panel sessions) */}
-            {status === 'idle' && lastOrganized && (
-                <div className="last-run-banner section-block">
-                    <div className="last-run-header">
-                        <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>{formatRunTime(lastOrganized.savedAt)}</span> · {lastOrganized.count.toLocaleString()} bookmarks {lastOrganized.stats?.isFlat ? 'sorted' : 'organized'}
-                            {lastOrganized.stats?.isFlat && ` · ${lastOrganized.stats?.dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First'}`}
-                            {lastOrganized.stats?.dateSpan ? ` · ${formatDateSpan(lastOrganized.stats.dateSpan)}` : ' · dates not recorded'}
-                            {lastOrganized.stats?.duplicatesRemoved > 0 && ` · ${lastOrganized.stats.duplicatesRemoved} dupes`}
-                            {lastOrganized.stats?.deadLinksArchived > 0 && ` · ${lastOrganized.stats.deadLinksArchived} archived`}
-                            {lastOrganized.stats?.failedMoves?.length > 0 && ` · ${lastOrganized.stats.failedMoves.length} move${lastOrganized.stats.failedMoves.length === 1 ? '' : 's'} failed`}
-                            {lastOrganized.stats?.detailFoldersCount > 0 && ` · ${lastOrganized.stats.detailFoldersCount} detail folder${lastOrganized.stats.detailFoldersCount === 1 ? '' : 's'}`}
-                            {lastOrganized.stats?.detailedSubcategories > 0 && ` · ${lastOrganized.stats.detailedSubcategories} detailed subcategor${lastOrganized.stats.detailedSubcategories === 1 ? 'y' : 'ies'}`}
+    return (
+        <div className="organizer">
+
+            {status === 'idle' && (
+                <>
+                    {/* Mode: the right-hand option keeps the switch role and name the flat-sort toggle always had */}
+                    <div role="group" aria-label="Mode" className="segmented mode-switch">
+                        <button
+                            type="button"
+                            aria-pressed={!flatDateSort}
+                            className={!flatDateSort ? 'active' : ''}
+                            onClick={() => handleFlatDateSortToggle(false)}
+                        >
+                            <Bookmark size={14} />
+                            <span>Organize with AI</span>
+                        </button>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-label="Sort without AI - Flat list"
+                            aria-checked={flatDateSort}
+                            className={flatDateSort ? 'active' : ''}
+                            onClick={() => handleFlatDateSortToggle(!flatDateSort)}
+                        >
+                            {flatSortType === 'alpha' ? <ArrowDownAZ size={14} /> : <Clock size={14} />}
+                            <span>Sort without AI</span>
+                        </button>
+                    </div>
+                    <p className="hint mode-hint">
+                        {flatDateSort
+                            ? 'Orders bookmarks by date added or alphabetically into a single list without folders. Uses zero AI tokens.'
+                            : 'AI files your bookmarks into category folders and subfolders.'}
+                    </p>
+
+                    {/* API key: one line once saved, full field while empty or being changed */}
+                    <section className="group">
+                        {apiKey && !keyOpen ? (
+                            <div className="setting-row">
+                                <div className="setting-title with-icon">
+                                    <Check size={15} className="ok-icon" />
+                                    {provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'} API key saved
+                                </div>
+                                <button type="button" className="btn-quiet" onClick={() => setKeyOpen(true)}>Change</button>
+                            </div>
+                        ) : (
+                            <>
+                                <label className="field-label" htmlFor="api-key">
+                                    API Key {needsKey ? <span className="required">*</span> : null}
+                                    <span className="hint">
+                                        {needsKey ? 'Google Gemini (AI Studio) or OpenRouter' : 'Optional for flat sorting'}
+                                    </span>
+                                </label>
+                                <input
+                                    id="api-key"
+                                    className="text-input"
+                                    type="password"
+                                    placeholder="AIza... or AQ... (Google AI Studio / Gemini) or sk-or-... (OpenRouter)"
+                                    value={apiKey}
+                                    autoFocus={keyOpen}
+                                    onChange={(e) => { setKeyOpen(true); handleApiKeyChange(e.target.value); }}
+                                    onBlur={() => setKeyOpen(false)}
+                                />
+                                <div className="key-links">
+                                    <a className="link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">
+                                        <span>Get Gemini API Key (Google AI Studio - Free)</span>
+                                        <ExternalLink size={11} />
+                                    </a>
+                                    <a className="link" href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">
+                                        <span>Get OpenRouter Key</span>
+                                        <ExternalLink size={11} />
+                                    </a>
+                                </div>
+                                <p className="hint with-icon">
+                                    <Lock size={13} className="ok-icon" />
+                                    <span>
+                                        Your API key is stored locally in your browser. The provider is detected
+                                        automatically{apiKey ? `: ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'}` : ''}.
+                                    </span>
+                                </p>
+                            </>
+                        )}
+                    </section>
+
+                    {/* Source: browser bookmarks unless a file is dropped in */}
+                    <section className="group">
+                        <div className="field-label">
+                            Source
+                            <span className="hint">{uploadedFile ? 'Bookmarks file' : 'Your browser bookmarks'}</span>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            {lastOrganized.stats?.categoryBreakdown && Object.keys(lastOrganized.stats.categoryBreakdown).length > 0 && (
-                                <button
-                                    type="button"
-                                    onClick={() => setShowIdleSchema(!showIdleSchema)}
-                                    title="View category counts"
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        padding: '0.5rem 0.75rem',
-                                        borderRadius: '6px',
-                                        border: '1px solid var(--border)',
-                                        background: 'var(--surface-solid)',
-                                        color: 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.85rem',
-                                        whiteSpace: 'nowrap'
-                                    }}
-                                >
-                                    {showIdleSchema ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                    Schema
+                        <div
+                            data-testid="dropzone"
+                            onDrop={handleDrop}
+                            onDragOver={handleDragOver}
+                            className={`upload-dropzone ${uploadedFile ? 'has-file' : ''}`}
+                            onClick={() => fileInputRef.current.click()}
+                        >
+                            <input
+                                type="file"
+                                ref={fileInputRef}
+                                onChange={handleFileSelect}
+                                accept=".html,.htm"
+                                style={{ display: 'none' }}
+                            />
+
+                            {uploadedFile ? (
+                                <div>
+                                    <div className="dropzone-file">
+                                        <FileText size={18} />
+                                        <span>{uploadedFile.name}</span>
+                                    </div>
+                                    <div className="hint">
+                                        {parsedBookmarks
+                                            ? `${parsedBookmarks.length.toLocaleString()} bookmarks ready${activeDateSpan ? ` · Dates ${formatDateSpan(activeDateSpan)}` : ''}`
+                                            : 'Ready to process'}
+                                    </div>
+                                    <button type="button" className="link danger" onClick={(e) => { e.stopPropagation(); resetApp(); }}>
+                                        Remove File
+                                    </button>
+                                </div>
+                            ) : (
+                                // A real button so the picker is reachable by keyboard; its click bubbles to the dropzone.
+                                <button type="button" className="dropzone-btn">
+                                    <Upload size={18} />
+                                    <span>
+                                        Drag & drop bookmarks.html here
+                                        <span className="hint">or click to browse (Optional - defaults to browser's current bookmarks)</span>
+                                    </span>
                                 </button>
                             )}
-                            <button
-                                onClick={downloadOrganized}
-                                title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(lastOrganized.stats.dateSpan)})` : 'Download bookmarks'}
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.4rem',
-                                    padding: '0.5rem 0.9rem',
-                                    borderRadius: '6px',
-                                    border: 'none',
-                                    background: 'var(--accent)',
-                                    color: 'var(--on-accent)',
-                                    cursor: 'pointer',
-                                    fontSize: '0.85rem',
-                                    whiteSpace: 'nowrap'
-                                }}
-                            >
-                                <Download size={15} />
-                                Download
-                            </button>
                         </div>
-                    </div>
-                    {showIdleSchema && lastOrganized.stats?.categoryBreakdown && (
-                        <div style={{
-                            borderTop: '1px solid var(--border)',
-                            background: 'var(--surface-solid)',
-                            padding: '0.75rem 1rem'
-                        }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                    Category Schema ({Object.keys(lastOrganized.stats.categoryBreakdown).length} categories)
-                                    {lastOrganized.stats?.dateSpan && (
-                                        <span style={{ fontWeight: 'normal', color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
-                                            · Dates {formatDateSpan(lastOrganized.stats.dateSpan)}
-                                        </span>
-                                    )}
-                                </span>
-                                <button
-                                    type="button"
-                                    onClick={() => handleCopySchema(lastOrganized.stats.categoryBreakdown)}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.3rem',
-                                        padding: '0.2rem 0.5rem',
-                                        borderRadius: '4px',
-                                        border: '1px solid var(--border)',
-                                        background: copiedSchema ? 'var(--success-soft)' : 'var(--surface-alt)',
-                                        color: copiedSchema ? 'var(--success)' : 'var(--text-secondary)',
-                                        cursor: 'pointer',
-                                        fontSize: '0.75rem'
-                                    }}
-                                >
-                                    {copiedSchema ? <Check size={12} /> : <Copy size={12} />}
-                                    {copiedSchema ? 'Copied' : 'Copy'}
-                                </button>
-                            </div>
-                            <div style={{
-                                maxHeight: '160px',
-                                overflowY: 'auto',
-                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                fontSize: '0.8rem',
-                                lineHeight: '1.6'
-                            }}>
-                                {Object.entries(lastOrganized.stats.categoryBreakdown)
-                                    .sort(([a], [b]) => a.localeCompare(b))
-                                    .map(([category, count]) => (
-                                        <div key={category} style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', padding: '1px 0' }}>
-                                            <span>{category}</span>
-                                            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{count}</span>
-                                        </div>
-                                    ))}
-                            </div>
-                        </div>
+                        {savedInputs}
+                    </section>
+
+                    {/* Model */}
+                    {needsKey && (
+                        <section className="group">
+                            <div className="field-label">Select AI Model</div>
+                            <Segmented
+                                label="AI model"
+                                className="segmented-grid"
+                                options={models.map((m) => ({ id: m.id, label: m.name, badge: m.badge }))}
+                                value={selectedModel}
+                                onChange={handleModelChange}
+                            />
+                            <p className="hint">
+                                {models.find(m => m.id === selectedModel)?.description || '3.1 Flash Lite: Recommended default — ultra-fast latency and minimal token cost.'}
+                            </p>
+                        </section>
                     )}
-                </div>
+
+                    {/* Flat sort settings */}
+                    {flatDateSort && (
+                        <section className="group">
+                            <div className="field-label">Sort Criterion</div>
+                            <Segmented
+                                label="Sort Criterion"
+                                options={[
+                                    { id: 'date', label: 'Date Added', icon: Clock },
+                                    { id: 'alpha', label: 'Alphabetical', icon: ArrowDownAZ }
+                                ]}
+                                value={flatSortType}
+                                onChange={handleFlatSortTypeChange}
+                            />
+
+                            {flatSortType === 'date' ? (
+                                <>
+                                    <div className="field-label spaced">
+                                        Chronological Direction
+                                        <button
+                                            type="button"
+                                            className="link muted"
+                                            onClick={() => handleDateSortOrderChange(dateSortOrder === 'desc' ? 'asc' : 'desc')}
+                                            title="Click to reverse direction"
+                                        >
+                                            {dateSortOrder === 'desc' ? 'Newest bookmarks at the top' : 'Oldest bookmarks at the top'}
+                                        </button>
+                                    </div>
+                                    <Segmented
+                                        label="Chronological Direction"
+                                        options={[
+                                            { id: 'desc', label: 'Newest First', icon: ArrowDown },
+                                            { id: 'asc', label: 'Oldest First', icon: ArrowUp }
+                                        ]}
+                                        value={dateSortOrder}
+                                        onChange={handleDateSortOrderChange}
+                                    />
+                                </>
+                            ) : (
+                                <>
+                                    <div className="field-label spaced">
+                                        Alphabetical Direction
+                                        <button
+                                            type="button"
+                                            className="link muted"
+                                            onClick={() => handleAlphaSortOrderChange(alphaSortOrder === 'desc' ? 'asc' : 'desc')}
+                                            title="Click to reverse direction"
+                                        >
+                                            {alphaSortOrder === 'desc' ? 'Z to A bookmarks at the top' : 'A to Z bookmarks at the top'}
+                                        </button>
+                                    </div>
+                                    <Segmented
+                                        label="Alphabetical Direction"
+                                        options={[
+                                            { id: 'asc', label: 'A to Z', icon: ArrowDownAZ },
+                                            { id: 'desc', label: 'Z to A', icon: ArrowUpZA }
+                                        ]}
+                                        value={alphaSortOrder}
+                                        onChange={handleAlphaSortOrderChange}
+                                    />
+                                </>
+                            )}
+                        </section>
+                    )}
+
+                    {/* Folders: subfolder depth and in-folder ordering */}
+                    {!flatDateSort && (
+                        <details className="group">
+                            <summary>
+                                <span className="group-title">Folders</span>
+                                <span className="group-value">
+                                    {subfolderOptions.find(opt => opt.id === subfolderTarget)?.label}
+                                    {' · '}
+                                    {SCHEMA_SORT_OPTIONS.find(opt => opt.id === schemaSortOrder)?.short}
+                                </span>
+                            </summary>
+                            <div className="group-body">
+                                <div className="field-label">Subfolder Organization</div>
+                                <Segmented
+                                    label="Subfolder Organization"
+                                    options={subfolderOptions}
+                                    value={subfolderTarget}
+                                    onChange={handleSubfolderTargetChange}
+                                />
+                                <p className="hint">{subfolderOptions.find(opt => opt.id === subfolderTarget)?.description}</p>
+                                <img
+                                    className="subfolder-hierarchy-image"
+                                    src={SUBFOLDER_EXPLAINER_IMAGES[theme]?.[subfolderTarget] || subfolderHierarchyImage}
+                                    alt="Category and nested subfolder hierarchy for the selected organization level"
+                                />
+
+                                <div className="field-label spaced">Folder Content Sorting</div>
+                                <p className="hint">Choose how bookmarks are ordered inside each AI-generated category folder:</p>
+                                <div className="option-list">
+                                    {SCHEMA_SORT_OPTIONS.map(option => {
+                                        const isSelected = schemaSortOrder === option.id;
+                                        const IconComponent = option.icon;
+                                        return (
+                                            <button
+                                                key={option.id}
+                                                type="button"
+                                                aria-pressed={isSelected}
+                                                className={`option-row ${isSelected ? 'active' : ''}`}
+                                                onClick={() => handleSchemaSortChange(option.id)}
+                                            >
+                                                <IconComponent size={16} className="option-icon" />
+                                                <span className="option-text">
+                                                    <span className="setting-title">{option.label}</span>
+                                                    <span className="setting-desc">{option.desc}</span>
+                                                </span>
+                                                {isSelected && <Check size={15} strokeWidth={3} className="option-check" />}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </details>
+                    )}
+
+                    {/* Category Editor */}
+                    {!flatDateSort && (
+                        <details className="group">
+                            <summary>
+                                <span className="group-title">Customize Categories</span>
+                                <span className="group-value">{inferCategories ? 'Inferred by AI' : `${categories.length} custom`}</span>
+                            </summary>
+                            <div className="group-body">
+                                <div className="setting-row">
+                                    <div>
+                                        <div className="setting-title">Infer categories</div>
+                                        <div className="setting-desc">
+                                            AI creates categories from this run’s bookmarks. Manual choices stay saved but inactive.
+                                        </div>
+                                    </div>
+                                    <Switch label="Infer categories" checked={inferCategories} onChange={handleInferCategoriesToggle} />
+                                </div>
+
+                                <div aria-disabled={inferCategories} className={`category-editor ${inferCategories ? 'is-disabled' : ''}`}>
+                                    <div className="setting-row">
+                                        <span className="hint">{categories.length} chosen</span>
+                                        {categories.length > 0 ? (
+                                            <button type="button" className="btn-quiet danger" onClick={handleClearAllCategories} disabled={inferCategories} title="Clear all active categories">
+                                                <X size={12} />
+                                                <span>Clear All</span>
+                                            </button>
+                                        ) : (
+                                            <button type="button" className="btn-quiet" onClick={handleResetDefaultCategories} disabled={inferCategories} title="Reset to default categories">
+                                                <RefreshCw size={12} />
+                                                <span>Reset Defaults</span>
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <p className="hint">
+                                        <span style={{ display: 'block' }}>Your chosen categories become the root-level folders.</span>
+                                        <span style={{ display: 'block' }}>Subfolders are always generated automatically inside each root folder.</span>
+                                    </p>
+
+                                    {/* Custom Category Input */}
+                                    <div className="input-row">
+                                        <input
+                                            type="text"
+                                            className="text-input"
+                                            placeholder="Add custom category..."
+                                            aria-label="Add custom category"
+                                            value={newCategory}
+                                            disabled={inferCategories}
+                                            onChange={(e) => setNewCategory(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && newCategory.trim()) {
+                                                    handleAddCategory(newCategory);
+                                                    setNewCategory('');
+                                                }
+                                            }}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            disabled={inferCategories}
+                                            onClick={() => {
+                                                if (newCategory.trim()) {
+                                                    handleAddCategory(newCategory);
+                                                    setNewCategory('');
+                                                }
+                                            }}
+                                        >
+                                            <Plus size={15} />
+                                            <span>Add</span>
+                                        </button>
+                                    </div>
+
+                                    {/* Active Chosen Categories Bin */}
+                                    {categories.length === 0 ? (
+                                        <div className="empty-note">
+                                            No manual categories selected. The app will infer root-level folders from your bookmark file. Turn off Infer categories to choose the root folders below. Subfolders are always generated automatically inside each root folder.
+                                        </div>
+                                    ) : (
+                                        <div className="chip-list">
+                                            {categories.map((cat, idx) => (
+                                                <div key={idx} className="chip">
+                                                    <span>{cat}</span>
+                                                    <button type="button" className="chip-remove" disabled={inferCategories} onClick={() => handleRemoveCategory(idx)} title={`Remove "${cat}"`}>
+                                                        <X size={14} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Second List: Suggested Categories (Addable Pool) */}
+                                    {availableSuggestions.length > 0 && (
+                                        <>
+                                            <div className="field-label spaced">
+                                                Suggested Categories
+                                                <span className="hint">Click + to add into chosen</span>
+                                            </div>
+                                            <div className="chip-list">
+                                                {availableSuggestions.map((sug) => (
+                                                    <button
+                                                        type="button"
+                                                        key={sug}
+                                                        className="chip chip-add"
+                                                        disabled={inferCategories}
+                                                        onClick={() => handleAddCategory(sug)}
+                                                        title={`Add "${sug}" to chosen categories`}
+                                                    >
+                                                        <span>{sug}</span>
+                                                        <Plus size={14} />
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </details>
+                    )}
+
+                    {/* Options */}
+                    <details className="group">
+                        <summary>
+                            <span className="group-title">Options</span>
+                            <span className="group-value">
+                                {[
+                                    removeDuplicates && 'Dedupe',
+                                    !flatDateSort && reviewFolders && 'Review',
+                                    cleanTitles && 'AI titles'
+                                ].filter(Boolean).join(' · ') || 'None on'}
+                            </span>
+                        </summary>
+                        <div className="group-body">
+                            <div className="setting-row">
+                                <div>
+                                    <div className="setting-title">Remove Duplicate URLs</div>
+                                    <div className="setting-desc">
+                                        Keep one copy of each URL in the organized result; original bookmarks are unchanged
+                                    </div>
+                                </div>
+                                <Switch label="Remove duplicate URLs" checked={removeDuplicates} onChange={handleRemoveDuplicatesToggle} />
+                            </div>
+
+                            {!flatDateSort && (
+                                <div className="setting-row">
+                                    <div>
+                                        <div className="setting-title">Review folders before saving</div>
+                                        <div className="setting-desc">
+                                            Pause to approve or edit the proposed folders before any bookmark is filed, and again to edit the finished folders before they are saved
+                                        </div>
+                                    </div>
+                                    <Switch label="Review folders before saving" checked={reviewFolders} onChange={handleReviewFoldersToggle} />
+                                </div>
+                            )}
+
+                            <div className="setting-row">
+                                <div>
+                                    <div className="setting-title">
+                                        Clean Titles with AI
+                                        <span className="badge">Consumes AI Tokens</span>
+                                    </div>
+                                    <div className="setting-desc">
+                                        {flatDateSort
+                                            ? `Uses AI to rewrite cryptic, truncated, or raw-URL titles into clean names while preserving ${flatSortType === 'alpha' ? 'alphabetical' : 'chronological date'} order. Consumes AI tokens and requires an API key.`
+                                            : 'Uses AI to rewrite messy, truncated, or raw-URL titles into human-readable names. Consumes AI tokens.'}
+                                    </div>
+                                </div>
+                                <Switch label="Clean Titles with AI" checked={cleanTitles} onChange={handleCleanTitlesToggle} />
+                            </div>
+
+                            <div className="setting-row">
+                                <div>
+                                    <div className="setting-title">Clean up browser bookmarks now</div>
+                                    <div className="setting-desc">
+                                        Deletes duplicate bookmarks from your browser right away, without organizing. A backup is saved first.
+                                    </div>
+                                </div>
+                                <RemoveDuplicatesButton />
+                            </div>
+                        </div>
+                    </details>
+
+                    {/* Saved results from previous runs (persist across panel sessions) */}
+                    {lastOrganized && (
+                        <section className="group">
+                            <div className="field-label">Last run</div>
+                            <div className="last-run-banner">
+                                <div className="last-run-header">
+                                    <div className="setting-desc">
+                                        <span>{formatRunTime(lastOrganized.savedAt)}</span> · {lastOrganized.count.toLocaleString()} bookmarks {stats?.isFlat ? 'sorted' : 'organized'}
+                                        {stats?.isFlat && ` · ${stats?.dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First'}`}
+                                        {stats?.dateSpan ? ` · ${formatDateSpan(stats.dateSpan)}` : ' · dates not recorded'}
+                                        {stats?.duplicatesRemoved > 0 && ` · ${stats.duplicatesRemoved} dupes`}
+                                        {stats?.deadLinksArchived > 0 && ` · ${stats.deadLinksArchived} archived`}
+                                        {stats?.failedMoves?.length > 0 && ` · ${stats.failedMoves.length} move${stats.failedMoves.length === 1 ? '' : 's'} failed`}
+                                        {stats?.detailFoldersCount > 0 && ` · ${stats.detailFoldersCount} detail folder${stats.detailFoldersCount === 1 ? '' : 's'}`}
+                                        {stats?.detailedSubcategories > 0 && ` · ${stats.detailedSubcategories} detailed subcategor${stats.detailedSubcategories === 1 ? 'y' : 'ies'}`}
+                                    </div>
+                                    <div className="saved-actions">
+                                        {hasBreakdown && (
+                                            <button type="button" className="btn-quiet" onClick={() => setShowIdleSchema(!showIdleSchema)} title="View category counts" aria-expanded={showIdleSchema}>
+                                                {showIdleSchema ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                                Schema
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={downloadOrganized}
+                                            title={stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(stats.dateSpan)})` : 'Download bookmarks'}
+                                        >
+                                            <Download size={15} />
+                                            Download
+                                        </button>
+                                    </div>
+                                </div>
+                                {showIdleSchema && hasBreakdown && (
+                                    <div className="schema-box">
+                                        <div className="setting-row">
+                                            <span className="setting-title">
+                                                Category Schema ({Object.keys(breakdown).length} categories)
+                                                {stats?.dateSpan && (
+                                                    <span className="hint">· Dates {formatDateSpan(stats.dateSpan)}</span>
+                                                )}
+                                            </span>
+                                            {copyButton}
+                                        </div>
+                                        <div className="schema-list">{schemaRows}</div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Every older saved run, newest first, each downloadable (the latest is the banner above) */}
+                            {previousRuns.length > 0 && (
+                                <details className="previous-runs sub-details">
+                                    <summary>Previous runs ({previousRuns.length})</summary>
+                                    <button type="button" className="btn-quiet" onClick={clearPreviousRuns}>
+                                        Clear all previous runs
+                                    </button>
+                                    <ul className="saved-list">
+                                        {previousRuns.map((entry) => (
+                                            <li key={entry.id}>
+                                                <span className="saved-meta">
+                                                    <strong>{formatRunTime(entry.savedAt)}</strong>
+                                                    <br />
+                                                    {[
+                                                        `${entry.count.toLocaleString()} bookmarks`,
+                                                        entry.stats?.categoriesCount ? `${entry.stats.categoriesCount} categories` : '',
+                                                        formatDateSpan(entry.dateSpan || entry.stats?.dateSpan),
+                                                        entry.mode === 'file' ? 'from file' : entry.mode === 'browser' ? 'from browser' : ''
+                                                    ].filter(Boolean).join(' · ')}
+                                                </span>
+                                                <div className="saved-actions">
+                                                    <button type="button" className="btn-quiet" aria-label={`Download run from ${formatRunTime(entry.savedAt)}`} onClick={() => downloadPreviousRun(entry)} title="Save this run as an HTML file">
+                                                        <Download size={13} />
+                                                        Download
+                                                    </button>
+                                                    <button type="button" className="btn-quiet" aria-label={`Delete run from ${formatRunTime(entry.savedAt)}`} onClick={() => removePreviousRun(entry)} title="Delete this saved run">
+                                                        <Trash2 size={13} />
+                                                    </button>
+                                                </div>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </details>
+                            )}
+                        </section>
+                    )}
+                </>
             )}
 
-            {/* Every older saved run, newest first, each downloadable (the latest is the banner above) */}
-            {status === 'idle' && lastOrganized && previousRuns.length > 0 && (
-                <details className="previous-runs section-block">
-                    <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                        Previous runs ({previousRuns.length})
+            {/* Result summary */}
+            {status === 'complete' && (
+                <section className="group result-summary">
+                    <div className="result-title">
+                        {uploadedFile
+                            ? "File Processed! Check your downloads."
+                            : (flatDateSort
+                                ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
+                                : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`)}
+                    </div>
+                    {!uploadedFile && (
+                        <div className="hint">(A backup file was also saved to your downloads)</div>
+                    )}
+                    {stats && (
+                        <div className="stats-pill">
+                            <span><strong>{(stats.total ?? lastOrganized.count ?? 0).toLocaleString()}</strong> {stats.isFlat ? 'sorted' : 'organized'}</span>
+                            <span>•</span>
+                            <span><strong>{stats.duplicatesRemoved ?? 0}</strong> duplicates</span>
+                            {stats.deadLinksArchived > 0 && (
+                                <>
+                                    <span>•</span>
+                                    <span><strong>{stats.deadLinksArchived}</strong> dead archived</span>
+                                </>
+                            )}
+                            {stats.isFlat ? (
+                                <>
+                                    <span>•</span>
+                                    <span><strong>{stats.dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First'}</strong></span>
+                                </>
+                            ) : (
+                                <>
+                                    {stats.categoriesCount != null && (
+                                        <>
+                                            <span>•</span>
+                                            <span><strong>{stats.categoriesCount}</strong> categories</span>
+                                        </>
+                                    )}
+                                    {stats.schemaSortOrder && (
+                                        <>
+                                            <span>•</span>
+                                            <span><strong>{SCHEMA_SORT_OPTIONS.find(o => o.id === stats.schemaSortOrder)?.short || 'A–Z'}</strong></span>
+                                        </>
+                                    )}
+                                    {stats.detailFoldersCount > 0 && (
+                                        <>
+                                            <span>•</span>
+                                            <span><strong>{stats.detailFoldersCount}</strong> detail folder{stats.detailFoldersCount === 1 ? '' : 's'}</span>
+                                        </>
+                                    )}
+                                    {stats.detailedSubcategories > 0 && (
+                                        <>
+                                            <span>•</span>
+                                            <span><strong>{stats.detailedSubcategories}</strong> detailed subcategor{stats.detailedSubcategories === 1 ? 'y' : 'ies'}</span>
+                                        </>
+                                    )}
+                                </>
+                            )}
+                            <span>•</span>
+                            <span>{stats.dateSpan ? `Dates ${formatDateSpan(stats.dateSpan)}` : 'Dates not recorded'}</span>
+                        </div>
+                    )}
+                    {hasBreakdown && (
+                        <div className="schema-box">
+                            <div className="setting-row">
+                                <button type="button" className="link plain" onClick={() => setShowSchema(!showSchema)} aria-expanded={showSchema}>
+                                    {showSchema ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                                    <span>Category Schema ({Object.keys(breakdown).length})</span>
+                                </button>
+                                {copyButton}
+                            </div>
+                            {showSchema && <div className="schema-list">{schemaRows}</div>}
+                        </div>
+                    )}
+                    {stats?.dateSpan && (
+                        <div className="hint">
+                            Date range: <strong>{formatDateSpan(stats.dateSpan)}</strong>
+                        </div>
+                    )}
+                    {savedInputs}
+                    <div className="hint">
+                        Returning to the main menu shortly — your results stay downloadable in the last-run banner.
+                    </div>
+                </section>
+            )}
+
+            {/* Live run: date range and any review the worker is waiting on */}
+            {status === 'processing' && (
+                <>
+                    {activeDateSpan && (
+                        <div className="stats-chip">
+                            <Calendar size={13} />
+                            <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
+                        </div>
+                    )}
+                    <ReviewPanel plan={planForReview} result={resultForReview} onDecide={decideReview} />
+                </>
+            )}
+
+            {/* Activity log: hidden until there is something to read, open while a run is live */}
+            {(logs.length > 0 || status !== 'idle') && (
+                <details className="group log-group" open={status !== 'idle'}>
+                    <summary>
+                        <span className="group-title with-icon"><Terminal size={14} /> Activity log</span>
+                        <span className="group-value">{logs.length} {logs.length === 1 ? 'line' : 'lines'}</span>
                     </summary>
-                    <button
-                        type="button"
-                        onClick={clearPreviousRuns}
-                        style={{ marginTop: '0.5rem', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--surface-alt)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
-                    >
-                        Clear all previous runs
-                    </button>
-                    <ul style={{ listStyle: 'none', margin: '0.5rem 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '240px', overflowY: 'auto' }}>
-                        {previousRuns.map((entry) => (
-                            <li key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                <span>
-                                    <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{formatRunTime(entry.savedAt)}</strong>
-                                    <br />
-                                    {[
-                                        `${entry.count.toLocaleString()} bookmarks`,
-                                        entry.stats?.categoriesCount ? `${entry.stats.categoriesCount} categories` : '',
-                                        formatDateSpan(entry.dateSpan || entry.stats?.dateSpan),
-                                        entry.mode === 'file' ? 'from file' : entry.mode === 'browser' ? 'from browser' : ''
-                                    ].filter(Boolean).join(' · ')}
+                    <div className="terminal-panel" ref={logContainerRef}>
+                        {logs.length === 0 && <span className="terminal-muted">Waiting for start...</span>}
+                        {logs.map((log, index) => (
+                            <div key={index} className="log-line">
+                                <span className="terminal-muted">
+                                    {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
                                 </span>
-                                <div style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
-                                    <button
-                                        type="button"
-                                        aria-label={`Download run from ${formatRunTime(entry.savedAt)}`}
-                                        onClick={() => downloadPreviousRun(entry)}
-                                        title="Save this run as an HTML file"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                                    >
-                                        <Download size={13} />
-                                        Download
-                                    </button>
-                                    <button
-                                        type="button"
-                                        aria-label={`Delete run from ${formatRunTime(entry.savedAt)}`}
-                                        onClick={() => removePreviousRun(entry)}
-                                        title="Delete this saved run"
-                                        style={{ display: 'inline-flex', alignItems: 'center', padding: '0.3rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface-solid)', color: 'var(--text-secondary)', cursor: 'pointer' }}
-                                    >
-                                        <Trash2 size={13} />
-                                    </button>
-                                </div>
-                            </li>
+                                <span>{typeof log === 'object' ? log.message : log}</span>
+                            </div>
                         ))}
-                    </ul>
+                        {status === 'processing' && <div className="log-cursor">_</div>}
+                    </div>
                 </details>
             )}
 
-            {/* Controls */}
-            <div className="action-button-container section-block" style={{ display: 'flex', justifyContent: 'center' }}>
-                {status === 'complete' ? (
-                    <div style={{ textAlign: 'center', width: '100%' }}>
-                        <div style={{ marginBottom: '0.75rem', color: 'var(--success)', fontSize: '1.2rem', fontWeight: 'bold' }}>
-                            {uploadedFile
-                                ? "File Processed! Check your downloads."
-                                : (flatDateSort
-                                    ? `All Done! Check your "Chronological Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`
-                                    : `All Done! Check your "AI Organized Bookmarks-${new Date(lastOrganized?.savedAt || Date.now()).toISOString().slice(0, 10)}" folder in Other Bookmarks.`)}
-                        </div>
-                        {!uploadedFile && (
-                            <div style={{ marginBottom: '0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                                (A backup file was also saved to your downloads)
-                            </div>
-                        )}
-                        {lastOrganized?.stats && (
-                            <div className="stats-pill" style={{
-                                display: 'inline-flex',
-                                flexWrap: 'wrap',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                gap: '0.6rem',
-                                padding: '0.4rem 0.9rem',
-                                marginBottom: '1rem',
-                                borderRadius: '20px',
-                                background: 'var(--surface-alt)',
-                                border: '1px solid var(--border)',
-                                fontSize: '0.85rem',
-                                color: 'var(--text-secondary)'
-                            }}>
-                                <span><strong>{(lastOrganized.stats.total ?? lastOrganized.count ?? 0).toLocaleString()}</strong> {lastOrganized.stats.isFlat ? 'sorted' : 'organized'}</span>
-                                <span>•</span>
-                                <span><strong>{lastOrganized.stats.duplicatesRemoved ?? 0}</strong> duplicates</span>
-                                {lastOrganized.stats.deadLinksArchived > 0 && (
-                                    <>
-                                        <span>•</span>
-                                        <span><strong>{lastOrganized.stats.deadLinksArchived}</strong> dead archived</span>
-                                    </>
-                                )}
-                                {lastOrganized.stats.isFlat ? (
-                                    <>
-                                        <span>•</span>
-                                        <span><strong>{lastOrganized.stats.dateSortOrder === 'desc' ? 'Newest First' : 'Oldest First'}</strong></span>
-                                    </>
-                                ) : (
-                                    <>
-                                        {lastOrganized.stats.categoriesCount != null && (
-                                            <>
-                                                <span>•</span>
-                                                <span><strong>{lastOrganized.stats.categoriesCount}</strong> categories</span>
-                                            </>
-                                        )}
-                                        {lastOrganized.stats.schemaSortOrder && (
-                                            <>
-                                                <span>•</span>
-                                                <span><strong>{SCHEMA_SORT_OPTIONS.find(o => o.id === lastOrganized.stats.schemaSortOrder)?.short || 'A–Z'}</strong></span>
-                                            </>
-                                        )}
-                                        {lastOrganized.stats.detailFoldersCount > 0 && (
-                                            <>
-                                                <span>•</span>
-                                                <span><strong>{lastOrganized.stats.detailFoldersCount}</strong> detail folder{lastOrganized.stats.detailFoldersCount === 1 ? '' : 's'}</span>
-                                            </>
-                                        )}
-                                        {lastOrganized.stats.detailedSubcategories > 0 && (
-                                            <>
-                                                <span>•</span>
-                                                <span><strong>{lastOrganized.stats.detailedSubcategories}</strong> detailed subcategor{lastOrganized.stats.detailedSubcategories === 1 ? 'y' : 'ies'}</span>
-                                            </>
-                                        )}
-                                    </>
-                                )}
-                                <span>•</span>
-                                <span>{lastOrganized.stats.dateSpan ? `Dates ${formatDateSpan(lastOrganized.stats.dateSpan)}` : 'Dates not recorded'}</span>
-                            </div>
-                        )}
-                        {lastOrganized?.stats?.categoryBreakdown && Object.keys(lastOrganized.stats.categoryBreakdown).length > 0 && (
-                            <div style={{
-                                margin: '0 auto 1.25rem auto',
-                                maxWidth: '440px',
-                                textAlign: 'left',
-                                background: 'var(--surface-alt)',
-                                border: '1px solid var(--border)',
-                                borderRadius: '10px',
-                                overflow: 'hidden'
-                            }}>
-                                <div style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    padding: '0.6rem 0.9rem',
-                                    background: 'var(--surface-solid)',
-                                    borderBottom: showSchema ? '1px solid var(--border)' : 'none',
-                                    fontSize: '0.85rem',
-                                    fontWeight: '600',
-                                    color: 'var(--text-primary)'
-                                }}>
-                                    <button
-                                        type="button"
-                                        onClick={() => setShowSchema(!showSchema)}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.4rem',
-                                            background: 'none',
-                                            border: 'none',
-                                            padding: 0,
-                                            color: 'inherit',
-                                            cursor: 'pointer',
-                                            fontSize: 'inherit',
-                                            fontWeight: 'inherit'
-                                        }}
-                                    >
-                                        {showSchema ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                                        <span>Category Schema ({Object.keys(lastOrganized.stats.categoryBreakdown).length})</span>
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleCopySchema(lastOrganized.stats.categoryBreakdown)}
-                                        title="Copy category list as plain text"
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.3rem',
-                                            padding: '0.25rem 0.6rem',
-                                            borderRadius: '5px',
-                                            border: '1px solid var(--border)',
-                                            background: copiedSchema ? 'var(--success-soft)' : 'var(--surface-alt)',
-                                            color: copiedSchema ? 'var(--success)' : 'var(--text-secondary)',
-                                            cursor: 'pointer',
-                                            fontSize: '0.75rem',
-                                            fontWeight: '500',
-                                            transition: 'all 0.2s ease'
-                                        }}
-                                    >
-                                        {copiedSchema ? <Check size={13} /> : <Copy size={13} />}
-                                        {copiedSchema ? 'Copied' : 'Copy'}
-                                    </button>
-                                </div>
-                                {showSchema && (
-                                    <div style={{
-                                        padding: '0.6rem 0.9rem',
-                                        maxHeight: '180px',
-                                        overflowY: 'auto',
-                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                        fontSize: '0.8rem',
-                                        lineHeight: '1.6',
-                                        color: 'var(--text-primary)'
-                                    }}>
-                                        {Object.entries(lastOrganized.stats.categoryBreakdown)
-                                            .sort(([a], [b]) => a.localeCompare(b))
-                                            .map(([category, count]) => (
-                                                <div key={category} style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', padding: '1px 0' }}>
-                                                    <span>{category}</span>
-                                                    <span style={{ color: 'var(--accent)', fontWeight: '600' }}>{count}</span>
-                                                </div>
-                                            ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        {lastOrganized && (
-                            <div style={{ marginBottom: '1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.4rem' }}>
-                                <button
-                                    className="btn-primary"
-                                    onClick={downloadOrganized}
-                                    title={lastOrganized.stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(lastOrganized.stats.dateSpan)})` : 'Download bookmarks'}
-                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
-                                >
-                                    <Download size={18} />
-                                    {lastOrganized.stats?.isFlat ? (lastOrganized.stats?.tierLabel === 'Alphabetical' || lastOrganized.stats?.folderTitle?.includes('Alphabetical') || (lastOrganized.stats?.dateSortOrder && String(lastOrganized.stats.dateSortOrder).startsWith('alpha')) ? 'Download Alphabetical Bookmarks' : 'Download Chronological Bookmarks') : 'Download Organized Bookmarks'}
-                                </button>
-                                {lastOrganized.stats?.dateSpan && (
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                                        Date range: <strong>{formatDateSpan(lastOrganized.stats.dateSpan)}</strong>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        <div
-                            onClick={resetApp}
-                            style={{
-                                cursor: 'pointer',
-                                color: 'var(--accent)',
-                                fontSize: '0.9rem',
-                                border: '1px solid var(--border)',
-                                padding: '0.5rem 1rem',
-                                borderRadius: '6px',
-                                background: 'var(--accent-soft)',
-                                display: 'inline-block'
-                            }}
-                        >
-                            {flatDateSort ? 'Sort Again' : 'Organize Again'}
-                        </div>
-                        <div style={{ marginTop: '0.75rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                            Returning to the main menu shortly — your results stay downloadable in the last-run banner.
-                        </div>
+            {/* Sticky footer: notices sit directly above the action they explain */}
+            <div className="action-bar">
+                {/* Background Ongoing Progress / Transient Retry Notification */}
+                {status === 'processing' && backgroundNotice && (
+                    <div className="notice notice-success">
+                        <RefreshCw size={16} className="spin-icon" />
+                        <div><strong>Background Run Active:</strong> {backgroundNotice}</div>
                     </div>
-                ) : status === 'processing' ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem', width: '100%' }}>
-                        {activeDateSpan && (
-                            <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                padding: '0.35rem 0.8rem',
-                                borderRadius: '20px',
-                                background: 'var(--surface-alt)',
-                                border: '1px solid var(--border)',
-                                fontSize: '0.8rem',
-                                color: 'var(--text-secondary)'
-                            }}>
-                                <Calendar size={13} style={{ color: 'var(--accent)' }} />
-                                <span>Date range: <strong>{formatDateSpan(activeDateSpan)}</strong></span>
-                            </div>
-                        )}
-                        <ReviewPanel plan={planForReview} result={resultForReview} onDecide={decideReview} />
-                        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-                            <button
-                                className="btn-primary btn-in-progress"
-                                disabled
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.5rem',
-                                    cursor: 'wait'
-                                }}
-                            >
-                                {!(planForReview || resultForReview) && <Loader2 size={18} className="spin-icon" />}
-                                <span>{(planForReview || resultForReview) ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
-                            </button>
+                )}
+
+                {/* Interrupted-run notice restored from the previous session */}
+                {backgroundNotice === INTERRUPTED_RUN_NOTICE && (
+                    <div className="notice notice-error" role="alert">
+                        <AlertCircle size={16} />
+                        {backgroundNotice}
+                    </div>
+                )}
+
+                {/* Error Message */}
+                {errorMsg && (
+                    <div className="notice notice-error" role="alert">
+                        <AlertCircle size={16} />
+                        {errorMsg}
+                    </div>
+                )}
+
+                {status === 'complete' ? (
+                    <div className="action-row">
+                        {lastOrganized && (
                             <button
                                 type="button"
-                                onClick={handleCancel}
-                                disabled={isCancelling}
-                                title="Cancel the organization process"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '0.4rem',
-                                    padding: '0.8rem 1.25rem',
-                                    borderRadius: '10px',
-                                    border: '1px solid var(--error)',
-                                    background: 'var(--error-soft)',
-                                    color: 'var(--error)',
-                                    fontWeight: '600',
-                                    fontSize: '0.95rem',
-                                    cursor: isCancelling ? 'not-allowed' : 'pointer',
-                                    opacity: isCancelling ? 0.6 : 1,
-                                    transition: 'all 0.2s ease'
-                                }}
+                                className="btn-primary"
+                                onClick={downloadOrganized}
+                                title={stats?.dateSpan ? `Download bookmarks (Dates ${formatDateSpan(stats.dateSpan)})` : 'Download bookmarks'}
                             >
-                                <Square size={16} fill="currentColor" />
-                                {isCancelling ? 'Cancelling...' : 'Cancel'}
+                                <Download size={18} />
+                                {stats?.isFlat ? (stats?.tierLabel === 'Alphabetical' || stats?.folderTitle?.includes('Alphabetical') || (stats?.dateSortOrder && String(stats.dateSortOrder).startsWith('alpha')) ? 'Download Alphabetical Bookmarks' : 'Download Chronological Bookmarks') : 'Download Organized Bookmarks'}
                             </button>
+                        )}
+                        <button type="button" className="btn-secondary" onClick={resetApp}>
+                            {flatDateSort ? 'Sort Again' : 'Organize Again'}
+                        </button>
+                    </div>
+                ) : status === 'processing' ? (
+                    <div className="action-row">
+                        <div className="run-status" role="status">
+                            <div className="with-icon">
+                                {!waitingForReview && <Loader2 size={16} className="spin-icon" />}
+                                <span>{waitingForReview ? 'Waiting for your approval' : `In Progress... ${Math.min(99, Math.max(0, progress))}%`}</span>
+                            </div>
+                            <progress max="100" value={Math.min(99, Math.max(0, progress))} aria-label="Run progress" />
                         </div>
+                        <button
+                            type="button"
+                            className="btn-secondary danger"
+                            onClick={handleCancel}
+                            disabled={isCancelling}
+                            title="Cancel the organization process"
+                        >
+                            <Square size={14} fill="currentColor" />
+                            {isCancelling ? 'Cancelling...' : 'Cancel'}
+                        </button>
                     </div>
                 ) : (
-                    <button
-                        className="btn-primary"
-                        onClick={startProcess}
-                        disabled={!canStart}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            opacity: !canStart ? 0.5 : 1,
-                            cursor: !canStart ? 'not-allowed' : 'pointer'
-                        }}
-                    >
+                    <button type="button" className="btn-primary btn-block" onClick={startProcess} disabled={!canStart}>
                         {flatDateSort ? (
                             flatSortType === 'alpha' ? (
                                 <>
-                                    <ArrowDownAZ size={20} />
+                                    <ArrowDownAZ size={18} />
                                     {uploadedFile ? 'Sort File Alphabetically & Download' : 'Sort My Bookmarks Alphabetically'}
                                 </>
                             ) : (
                                 <>
-                                    <Clock size={20} />
+                                    <Clock size={18} />
                                     {uploadedFile ? 'Sort File & Download' : 'Sort My Bookmarks by Date'}
                                 </>
                             )
                         ) : (
                             <>
-                                {uploadedFile ? <FileText size={20} /> : <Bookmark size={20} />}
+                                {uploadedFile ? <FileText size={18} /> : <Bookmark size={18} />}
                                 {uploadedFile ? 'Organize File & Download' : 'Organize My Bookmarks'}
                             </>
                         )}
                     </button>
-                )}
-            </div>
-
-            {/* Background Ongoing Progress / Transient Retry Notification */}
-            {status === 'processing' && backgroundNotice && (
-                <div style={{
-                    background: 'var(--success-soft)',
-                    border: '1px solid var(--success)',
-                    color: 'var(--success)',
-                    padding: '0.85rem 1rem',
-                    borderRadius: '8px',
-                    marginBottom: '1.5rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.6rem',
-                    fontSize: '0.85rem'
-                }}>
-                    <RefreshCw size={18} className="spin-icon" style={{ flexShrink: 0 }} />
-                    <div>
-                        <strong>Background Run Active:</strong> {backgroundNotice}
-                    </div>
-                </div>
-            )}
-
-            {/* Interrupted-run notice restored from the previous session */}
-            {backgroundNotice === INTERRUPTED_RUN_NOTICE && (
-                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <AlertCircle size={20} />
-                    {backgroundNotice}
-                </div>
-            )}
-
-            {/* Error Message */}
-            {errorMsg && (
-                <div style={{ background: 'var(--error-soft)', border: '1px solid var(--error)', color: 'var(--error)', padding: '1rem', borderRadius: '8px', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <AlertCircle size={20} />
-                    {errorMsg}
-                </div>
-            )}
-
-            {/* Logs / Terminal */}
-            <div
-                className="glass-panel terminal-panel"
-                ref={logContainerRef}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid var(--terminal-muted)', paddingBottom: '0.5rem', color: 'var(--text-muted)' }}>
-                    <Terminal size={16} />
-                    <span>System Output</span>
-                </div>
-
-                {logs.length === 0 && <span style={{ color: 'var(--terminal-muted)' }}>Waiting for start...</span>}
-
-                {logs.map((log, index) => (
-                    <div key={index} style={{ marginBottom: '0.25rem', display: 'flex', gap: '0.5rem' }}>
-                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
-                            {typeof log === 'object' ? log.timestamp.toLocaleTimeString() : new Date().toLocaleTimeString()}
-                        </span>
-                        <span style={{ overflowWrap: 'anywhere' }}>
-                            {typeof log === 'object' ? log.message : log}
-                        </span>
-                    </div>
-                ))}
-                {status === 'processing' && (
-                    <div className="animate-pulse">_</div>
                 )}
             </div>
 

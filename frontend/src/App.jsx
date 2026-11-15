@@ -1,6 +1,5 @@
 import Organizer from './components/Organizer'
 import ThemeToggle from './components/ThemeToggle'
-import RemoveDuplicatesButton from './components/RemoveDuplicatesButton'
 import { useTheme } from './hooks/useTheme'
 import { useZoom } from './hooks/useZoom'
 import { X } from 'lucide-react'
@@ -22,23 +21,18 @@ function App() {
   return (
     <div className="app-container">
       <header className="app-header">
-        {/* Top bar: remove duplicates on top left, theme toggle + close on top right */}
-        <div className="header-top">
-          <div className="header-top-left">
-            <RemoveDuplicatesButton />
-          </div>
-          <div className="header-top-right">
-            <ZoomControl zoom={zoom} increase={increase} decrease={decrease} reset={reset} />
-            <ThemeToggle theme={theme} setTheme={setTheme} />
-            <button
-              onClick={() => setShowCloseConfirmation(true)}
-              title="Close Extension"
-              className="header-close-btn"
-              aria-label="Close Extension"
-            >
-              <X size={18} />
-            </button>
-          </div>
+        <h1 className="app-title">AI Bookmark Organizer</h1>
+        <div className="header-tools">
+          <ZoomControl zoom={zoom} increase={increase} decrease={decrease} reset={reset} />
+          <ThemeToggle theme={theme} setTheme={setTheme} />
+          <button
+            onClick={() => setShowCloseConfirmation(true)}
+            title="Close Extension"
+            className="header-close-btn"
+            aria-label="Close Extension"
+          >
+            <X size={18} />
+          </button>
         </div>
 
         {showCloseConfirmation && (
@@ -50,16 +44,6 @@ function App() {
             </div>
           </div>
         )}
-
-        {/* Title block */}
-        <div className="header-title-block">
-          <h1 className="header-title">
-            AI Bookmark Organizer
-          </h1>
-          <p className="header-subtitle">
-            Transform your chaos into a curated library
-          </p>
-        </div>
       </header>
 
       <main className="app-main">
