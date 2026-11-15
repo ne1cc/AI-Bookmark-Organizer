@@ -1247,7 +1247,7 @@ export default function Organizer({ theme = 'light' }) {
                 const sortLabel = SCHEMA_SORT_OPTIONS.find(opt => opt.id === schemaSortOrder)?.label || 'Alphabetical (A–Z)';
                 setLogs([
                     { message: 'Starting AI Organization...', timestamp: new Date() },
-                    { message: `Using Model: Google Gemini ${selectedModelLabel}`, timestamp: new Date() },
+                    { message: `Using Model: ${provider === 'gemini' ? 'Google Gemini' : 'OpenRouter'} ${selectedModelLabel}`, timestamp: new Date() },
                     { message: `Subfolder Organization: ${subfolderLabel}`, timestamp: new Date() },
                     { message: `Folder Content Sorting: ${sortLabel}`, timestamp: new Date() },
                     { message: `Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`, timestamp: new Date() },
@@ -1530,7 +1530,7 @@ export default function Organizer({ theme = 'light' }) {
                 try { chrome.storage.session.remove(['reviewDraft']); } catch {}
             }
         }
-    }, [apiKey, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, reviewFolders, writePanelJobSnapshot]);
+    }, [apiKey, provider, models, selectedModel, categories, inferCategories, addLog, parsedBookmarks, subfolderTarget, subfolderOptions, sortAlphabetically, schemaSortOrder, removeDuplicates, cleanTitles, flatDateSort, dateSortOrder, flatSortType, alphaSortOrder, activeDateSpan, scheduleReturnToMenu, wirePort, reviewFolders, writePanelJobSnapshot]);
 
     // Keep the primary action available before a key is entered so browser
     // mode can explain the remaining requirement instead of looking broken.

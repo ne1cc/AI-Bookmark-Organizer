@@ -6,6 +6,7 @@ import * as organizerService from '../services/organizer'
 describe('RemoveDuplicatesButton Component', () => {
     beforeEach(() => {
         vi.useFakeTimers()
+        vi.spyOn(window, 'confirm').mockReturnValue(true)
         global.chrome = {
             storage: {
                 session: {
@@ -78,6 +79,26 @@ describe('RemoveDuplicatesButton Component', () => {
         })
 
         expect(btn.textContent).toContain('No duplicates found')
+    })
+
+    it('does nothing when the user declines the confirmation', async () => {
+        window.confirm.mockReturnValue(false)
+        const removeSpy = vi.spyOn(organizerService, 'removeBrowserDuplicates')
+        render(<RemoveDuplicatesButton />)
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: /clear duplicate bookmarks/i }))
+        })
+        expect(removeSpy).not.toHaveBeenCalled()
+    })
+
+    it('says nothing was deleted when the backup fails', async () => {
+        vi.spyOn(organizerService, 'removeBrowserDuplicates').mockRejectedValue(Object.assign(new Error('x'), { backupFailed: true }))
+        render(<RemoveDuplicatesButton />)
+        const btn = screen.getByRole('button', { name: /clear duplicate bookmarks/i })
+        await act(async () => {
+            fireEvent.click(btn)
+        })
+        expect(btn.textContent).toContain('Backup failed — nothing deleted')
     })
 
     it('handles errors gracefully and shows error message before resetting', async () => {

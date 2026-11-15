@@ -153,19 +153,29 @@ export async function filterReachableBookmarks(bookmarks, onProgress, isCancelle
     return { activeLinks, deadLinks };
 }
 
-// Preserve the first occurrence so the output stays deterministic and never
-// writes more than one bookmark for an exact duplicate URL.
+// Keep the oldest copy per exact URL (README promise); undated copies count as
+// newest, ties go to the earliest input. Survivors keep input order for callers.
 export function removeDuplicateUrls(bookmarks) {
-    const seenUrls = new Set();
-    return bookmarks.filter((bookmark) => {
-        if (seenUrls.has(bookmark.url)) return false;
-        seenUrls.add(bookmark.url);
-        return true;
-    });
+    const age = (b) => getBookmarkTimestamp(b) || Infinity;
+    const keep = new Map();
+    for (const bookmark of bookmarks) {
+        const current = keep.get(bookmark.url);
+        if (!current || age(bookmark) < age(current)) keep.set(bookmark.url, bookmark);
+    }
+    const survivors = new Set(keep.values());
+    return bookmarks.filter((bookmark) => survivors.has(bookmark));
 }
 
 // Browser-mode provenance index (spec §7): exact-URL groups, oldest dateAdded wins,
-// numeric id breaks ties. Survivor = group head; everything else is a doomed duplicate.
+// id breaks ties. Survivor = group head; everything else is a doomed duplicate.
+// Firefox ids are non-numeric strings, so fall back to string order there.
+function compareIds(a, b) {
+    const na = Number(a);
+    const nb = Number(b);
+    if (a !== '' && b !== '' && Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+}
+
 export function buildUrlIndex(links) {
     const index = new Map();
     for (const link of links) {
@@ -174,7 +184,7 @@ export function buildUrlIndex(links) {
         index.get(link.url).push({ id: link.id, dateAdded: link.dateAdded || 0 });
     }
     for (const group of index.values()) {
-        group.sort((a, b) => (a.dateAdded - b.dateAdded) || (Number(a.id) - Number(b.id)));
+        group.sort((a, b) => (a.dateAdded - b.dateAdded) || compareIds(a.id, b.id));
     }
     return index;
 }
@@ -216,19 +226,27 @@ export async function removeBrowserDuplicates({ snapshot = true } = {}) {
     }
 
     if (snapshot && typeof chrome !== 'undefined' && chrome?.storage?.local) {
+        // Fail closed: deleting without a saved backup would be unrecoverable.
         try {
             const items = [...survivors, ...doomed].map((b) => ({
                 title: b.title,
                 url: b.url,
                 add_date: b.add_date || (b.dateAdded ? String(Math.floor(b.dateAdded / 1000)) : undefined)
             }));
-            await new Promise((resolve) => {
+            await new Promise((resolve, reject) => {
                 chrome.storage.local.set(
                     { preWriteBackup: { savedAt: Date.now(), count: items.length, items } },
-                    () => resolve()
+                    () => {
+                        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+                        else resolve();
+                    }
                 );
             });
-        } catch {}
+        } catch (err) {
+            const error = new Error(`Backup failed — nothing was deleted. (${err?.message || err})`);
+            error.backupFailed = true;
+            throw error;
+        }
     }
 
     let failedCount = 0;
@@ -255,6 +273,7 @@ export {
     getStandardizedOutputLabel
 } from '../utils/dates';
 import {
+    getBookmarkTimestamp,
     calculateDateSpan,
     getMonthYearBucket,
     sortMonthYearBuckets,
@@ -415,7 +434,7 @@ export class OrganizerService {
             this.snapshotProvider = async (surv, doomed) => {
                 // No filename: the exporter keeps its organized_bookmarks.html default (spec §8).
                 // saveAs: false — a Save-As dialog on every organize run would be hostile.
-                downloadBookmarks([...surv, ...doomed], undefined, { saveAs: false });
+                await downloadBookmarks([...surv, ...doomed], undefined, { saveAs: false });
             };
         }
         this.onProgress({ status: 'info', message: 'Saving a backup before touching your bookmarks (restores content and dates, not the previous folder layout)...' });
@@ -570,7 +589,8 @@ export class OrganizerService {
     }
 
     calculateAdaptiveBatchSize(totalBookmarks) {
-        const isProModel = this.model.includes('pro');
+        // Heavy models (pro tier, Hydrogen) get smaller batches.
+        const isProModel = /pro|hydrogen/i.test(this.model);
 
         if (totalBookmarks < 50) {
             return isProModel ? 20 : 30;

@@ -4,7 +4,8 @@ import { removeBrowserDuplicates } from '../services/organizer'
 
 /**
  * Standalone one-click "Clear duplicates" button positioned in the top-left corner of the app.
- * Immediately scans browser bookmarks, saves a pre-write backup to storage, and removes doomed duplicates.
+ * After the user confirms, scans browser bookmarks, saves a pre-write backup to storage, and removes
+ * doomed duplicates. A failed backup aborts before anything is deleted.
  */
 export default function RemoveDuplicatesButton() {
     const [status, setStatus] = useState('idle') // 'idle' | 'running' | 'success' | 'error'
@@ -51,6 +52,8 @@ export default function RemoveDuplicatesButton() {
 
     const handleClearDuplicates = async () => {
         if (status === 'running' || isJobRunning) return
+        // Deletes across the whole tree, so ask first.
+        if (!window.confirm('Delete duplicate bookmarks across all folders? The oldest copy of each URL is kept, and a backup is saved first.')) return
 
         if (resetTimerRef.current) {
             clearTimeout(resetTimerRef.current)
@@ -78,9 +81,9 @@ export default function RemoveDuplicatesButton() {
                 setStatus('idle')
                 setMessage('')
             }, 3500)
-        } catch {
+        } catch (err) {
             setStatus('error')
-            setMessage('Failed to clear duplicates')
+            setMessage(err?.backupFailed ? 'Backup failed — nothing deleted' : 'Failed to clear duplicates')
             resetTimerRef.current = setTimeout(() => {
                 setStatus('idle')
                 setMessage('')
