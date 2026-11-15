@@ -99,6 +99,16 @@ describe('removeDuplicateUrls', () => {
             { title: 'Different', url: 'https://example.com/page' }
         ])
     })
+
+    it('keeps the oldest dated copy, in input order, over earlier newer or undated copies', () => {
+        const bookmarks = [
+            { title: 'Undated', url: 'https://a.com' },
+            { title: 'B', url: 'https://b.com' },
+            { title: 'Newer', url: 'https://a.com', add_date: '1700000000' },
+            { title: 'Oldest', url: 'https://a.com', add_date: '1500000000' }
+        ]
+        expect(removeDuplicateUrls(bookmarks).map(b => b.title)).toEqual(['B', 'Oldest'])
+    })
 })
 
 describe('buildUrlIndex and dedupeFromIndex', () => {
@@ -113,6 +123,14 @@ describe('buildUrlIndex and dedupeFromIndex', () => {
         const index = buildUrlIndex(links)
         expect(index.get('https://a.com').map(g => g.id)).toEqual(['9', '10', '11'])
         expect(index.get('https://b.com').map(g => g.id)).toEqual(['20'])
+    })
+
+    it('breaks ties deterministically for non-numeric (Firefox) ids', () => {
+        const ff = [
+            { id: 'toolbar_b', url: 'https://a.com', dateAdded: 5 },
+            { id: 'toolbar_a', url: 'https://a.com', dateAdded: 5 }
+        ]
+        expect(buildUrlIndex(ff).get('https://a.com').map(g => g.id)).toEqual(['toolbar_a', 'toolbar_b'])
     })
 
     it('keeps the group head as survivor and dooms the rest', () => {
@@ -134,6 +152,17 @@ describe('removeBrowserDuplicates', () => {
     afterEach(() => {
         delete global.chrome
         vi.restoreAllMocks()
+    })
+
+    it('throws and deletes nothing when the backup write fails', async () => {
+        vi.spyOn(bookmarksService, 'getBookmarks').mockResolvedValue([{ id: '0', children: [
+            { id: '1', title: 'A', url: 'https://a.com', dateAdded: 1 },
+            { id: '2', title: 'A', url: 'https://a.com', dateAdded: 2 }
+        ] }])
+        const removeSpy = vi.spyOn(bookmarksService, 'removeBookmark').mockResolvedValue()
+        global.chrome = { runtime: {}, storage: { local: { set: vi.fn((p, cb) => { global.chrome.runtime.lastError = { message: 'quota' }; cb() }) } } }
+        await expect(removeBrowserDuplicates()).rejects.toMatchObject({ backupFailed: true })
+        expect(removeSpy).not.toHaveBeenCalled()
     })
 
     it('returns zeroes when getBookmarks returns empty or null', async () => {
@@ -281,6 +310,11 @@ describe('OrganizerService adaptive batch sizes', () => {
         expect(service.calculateAdaptiveBatchSize(30)).toBe(30)
         expect(service.calculateAdaptiveBatchSize(150)).toBe(45)
         expect(service.calculateAdaptiveBatchSize(600)).toBe(50)
+    })
+
+    it('uses smaller batches for the heavy Hydrogen model', () => {
+        const service = createOrganizerService('test-key', [], () => {}, 'google/gemini-4-hydrogen')
+        expect(service.calculateAdaptiveBatchSize(600)).toBe(40)
     })
 })
 

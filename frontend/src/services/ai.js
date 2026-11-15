@@ -366,14 +366,16 @@ function parseGeminiResponse(data, { salvageTruncated = false } = {}) {
 // parsed JSON object. Throws errors tagged with statusCode/retryable so the
 // shared withRetry wrapper can decide whether to back off and try again.
 const REQUEST_TIMEOUT_MS = 30000;
+// Schema calls emit up to SCHEMA_MAX_TOKENS on slower models; a 30s abort retries then degrades to the built-in schema.
+export const SCHEMA_REQUEST_TIMEOUT_MS = 90000;
 
-async function fetchWithTimeout(url, options = {}, isCancelled = null) {
+async function fetchWithTimeout(url, options = {}, isCancelled = null, timeoutMs = REQUEST_TIMEOUT_MS) {
     const controller = new AbortController();
     let cancelTimer = null;
 
     const timer = setTimeout(() => {
         controller.abort(new Error("request timeout"));
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
 
     if (typeof isCancelled === 'function') {
         cancelTimer = setInterval(() => {
@@ -418,7 +420,7 @@ async function fetchWithTimeout(url, options = {}, isCancelled = null) {
 // Single model call routed to the right provider by key prefix. Returns the
 // parsed JSON object. Throws errors tagged with statusCode/retryable so the
 // shared withRetry wrapper can decide whether to back off and try again.
-async function callModel(apiKey, model, systemContent, userContent, { temperature, maxTokens, salvageTruncated = false }, isCancelled = null) {
+async function callModel(apiKey, model, systemContent, userContent, { temperature, maxTokens, salvageTruncated = false, timeoutMs }, isCancelled = null) {
     const key = (apiKey || '').trim();
     if (detectProvider(key) === 'gemini') {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModelId(model)}:generateContent`;
@@ -437,7 +439,7 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
                     responseMimeType: "application/json"
                 }
             })
-        }, isCancelled);
+        }, isCancelled, timeoutMs);
 
         return parseGeminiResponse(data, { salvageTruncated });
     }
@@ -455,7 +457,7 @@ async function callModel(apiKey, model, systemContent, userContent, { temperatur
             ],
             response_format: { type: "json_object" }
         })
-    }, isCancelled);
+    }, isCancelled, timeoutMs);
 
     return parseModelResponse(data, { salvageTruncated });
 }
@@ -1000,7 +1002,7 @@ function buildSchemaPrompt({ bookmarks, bookmarkCount = bookmarks.length, subfol
 }
 
 const requestSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry(
-    () => callModel(apiKey, model, "You are an expert information architect and precise JSON generator. Output only valid JSON. Do not use Markdown blocks.", prompt, { temperature: 0.2, maxTokens: SCHEMA_MAX_TOKENS, salvageTruncated: true }, isCancelled),
+    () => callModel(apiKey, model, "You are an expert information architect and precise JSON generator. Output only valid JSON. Do not use Markdown blocks.", prompt, { temperature: 0.2, maxTokens: SCHEMA_MAX_TOKENS, salvageTruncated: true, timeoutMs: SCHEMA_REQUEST_TIMEOUT_MS }, isCancelled),
     5,
     1500,
     isCancelled,
@@ -1288,7 +1290,7 @@ const requestDetailSchema = (prompt, apiKey, model, isCancelled, onRetry) => wit
         model,
         'You are a precise information architect and JSON generator. Output only valid JSON. Do not use Markdown blocks.',
         prompt,
-        { temperature: 0.2, maxTokens: 8000, salvageTruncated: true },
+        { temperature: 0.2, maxTokens: 8000, salvageTruncated: true, timeoutMs: SCHEMA_REQUEST_TIMEOUT_MS },
         isCancelled
     ),
     5,
@@ -1538,7 +1540,7 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
             }
         }
 
-        return bookmarks.map((b, i) => {
+        const result = bookmarks.map((b, i) => {
             const entry = byIndex.get(i);
             const hasCleanTitle = cleanTitles && typeof entry?.clean_title === 'string' && entry.clean_title.trim().length > 0;
             const { category, sub_category, proposed } = normalizeClassificationForSchema(entry, schema);
@@ -1551,5 +1553,8 @@ export async function classifyBatch(bookmarks, apiKey, schema, model = "google/g
                 ...(proposed ? { proposed: true } : {})
             };
         });
+        // Indexes the model omitted were filed under a default; callers can surface this non-enumerable count.
+        Object.defineProperty(result, 'unassignedCount', { value: bookmarks.length - byIndex.size, enumerable: false });
+        return result;
     }, 5, 1500, isCancelled, onRetry);
 }

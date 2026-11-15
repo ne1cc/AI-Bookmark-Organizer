@@ -3,6 +3,7 @@ import { downloadBookmarks } from '../services/bookmarks_export';
 import { saveRun } from '../services/runHistory';
 import { calculateDateSpan } from '../utils/dates';
 import { createStorageSnapshotProvider } from './snapshotProvider';
+import { detectProvider } from '../services/ai';
 
 // Progress and log events fire many times per second while classification
 // workers run. Persisting the whole job state (and broadcasting it to every
@@ -185,7 +186,6 @@ export class BackgroundJobRunner {
             dateSortOrder,
             schemaSortOrder,
             inferCategories = true,
-            autoImport = true,
             reviewFolders = false
         } = config;
 
@@ -223,10 +223,6 @@ export class BackgroundJobRunner {
         this.startKeepAlive();
         this.flushState();
 
-        if (parsedBookmarks) {
-            this.addLog(`Auto-Import File to Other Bookmarks: ${autoImport ? 'On (top of list)' : 'Off'}`);
-        }
-
         if (flatDateSort) {
             const isAlpha = dateSortOrder === 'alpha-asc' || dateSortOrder === 'alpha-desc' || dateSortOrder === 'a-z' || dateSortOrder === 'z-a' || dateSortOrder === 'alpha';
             const isAlphaDesc = dateSortOrder === 'alpha-desc' || dateSortOrder === 'z-a';
@@ -240,7 +236,7 @@ export class BackgroundJobRunner {
             this.addLog(`Clean Bookmark Titles: ${cleanTitles ? 'On' : 'Off'}`);
         } else {
             this.addLog('Starting AI Organization in Background...');
-            this.addLog(`Using Model: Google Gemini ${selectedModel || 'Default'}`);
+            this.addLog(`Using Model: ${detectProvider(apiKey) === 'gemini' ? 'Google Gemini' : 'OpenRouter'} ${selectedModel || 'Default'}`);
             this.addLog(`Subfolder Organization: ${subfolderTarget || 'medium'}`);
             this.addLog(`Folder Content Sorting: ${schemaSortOrder || 'Alphabetical (A–Z)'}`);
             this.addLog(`Remove Duplicate URLs: ${removeDuplicates ? 'On' : 'Off'}`);
