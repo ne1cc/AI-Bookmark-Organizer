@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, cleanup, within } from '@testing-library/react'
 import Organizer from './Organizer'
 import { OrganizerService } from '../services/organizer'
 import * as inputService from '../services/input_bookmarks'
@@ -80,7 +80,9 @@ describe('Organizer Component UI Tests', () => {
     it('renders the initial UI with Gemini AI models info', () => {
         render(<Organizer />)
 
-        expect(screen.getByText(/Gemini AI/i)).toBeDefined()
+        expect(screen.getByText(/Google Gemini \(AI Studio\) or OpenRouter/i)).toBeDefined()
+        // The standalone browser cleaner lives in the Options group now, not the app header.
+        expect(screen.getByRole('button', { name: 'Clear duplicate bookmarks' })).toBeDefined()
         expect(screen.getByPlaceholderText(/AIza\.\.\. or AQ\.\.\. \(Google AI Studio \/ Gemini\) or sk-or-\.\.\. \(OpenRouter\)/i)).toBeDefined()
     })
 
@@ -92,6 +94,30 @@ describe('Organizer Component UI Tests', () => {
 
         expect(modelButton.className).toContain('active')
         expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ selectedModel: 'google/gemini-3.5-flash-lite' })
+    })
+
+    it('offers exactly three models and defaults to 4 Hydrogen', () => {
+        render(<Organizer />)
+
+        const group = screen.getByRole('group', { name: 'AI model' })
+        expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual([
+            '3.5 Flash Lite(Fast)', '3.8 Flash(Balanced)', '4 Hydrogen(Best)'
+        ])
+        expect(within(group).getByRole('button', { name: /4 Hydrogen/ }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it.each([
+        ['google/gemini-3.1-flash-lite', '3.5 Flash Lite'],
+        ['google/gemini-3.1-pro-preview', '4 Hydrogen'],
+        ['google/gemini-4-hydrogen', '4 Hydrogen'],
+        ['not-a-model', '4 Hydrogen'],
+        ['google/gemini-3.5-flash-lite', '3.5 Flash Lite'],
+    ])('maps stored model %s to %s', (stored, label) => {
+        localStorage.setItem('selectedModel', stored)
+        render(<Organizer />)
+
+        const group = screen.getByRole('group', { name: 'AI model' })
+        expect(within(group).getByRole('button', { name: new RegExp(label) }).getAttribute('aria-pressed')).toBe('true')
     })
 
     it('defaults new installs to inferred categories with no manual selection', () => {
@@ -392,22 +418,26 @@ describe('Organizer Component UI Tests', () => {
         expect(screen.getByText('Newest bookmarks at the top')).toBeDefined()
     })
 
-    it('toggles flat date sort when the card title is clicked', () => {
+    it('switches between AI and flat sort from the mode switch', () => {
         render(<Organizer />)
 
         const flatToggle = screen.getByRole('switch', { name: /Sort without AI - Flat list/i })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
 
-        const titleButton = screen.getByRole('button', { name: 'Toggle Sort without AI - Flat list' })
-        act(() => {
-            fireEvent.click(titleButton)
-        })
-        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+        const aiButton = screen.getByRole('button', { name: 'Organize with AI' })
+        expect(aiButton.getAttribute('aria-pressed')).toBe('true')
 
         act(() => {
-            fireEvent.click(titleButton)
+            fireEvent.click(flatToggle)
+        })
+        expect(flatToggle.getAttribute('aria-checked')).toBe('true')
+        expect(aiButton.getAttribute('aria-pressed')).toBe('false')
+
+        act(() => {
+            fireEvent.click(aiButton)
         })
         expect(flatToggle.getAttribute('aria-checked')).toBe('false')
+        expect(aiButton.getAttribute('aria-pressed')).toBe('true')
     })
 
     it('shows the default direction readout after enabling flat date sort', () => {

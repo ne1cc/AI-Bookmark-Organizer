@@ -315,8 +315,8 @@ export function detectProvider(apiKey) {
     return key && !key.startsWith('sk-') ? 'gemini' : 'openrouter';
 }
 
-// Model ids in the UI are OpenRouter-namespaced ("google/gemini-3.1-flash-lite").
-// The native Gemini API wants the bare id ("gemini-3.1-flash-lite").
+// Model ids in the UI are OpenRouter-namespaced ("google/gemini-4-hydrogen").
+// The native Gemini API wants the bare id ("gemini-4-hydrogen").
 export function geminiModelId(model) {
     const bare = model.replace(/^google\//, '');
     // Google AI Studio deprecated gemini-2.5-pro for new users in favor of gemini-3.1-pro-preview
@@ -679,7 +679,7 @@ export function categorySubfolderPlan(shares, bookmarkCount, subfolderTarget) {
 // output, so the cost is a few hundred tokens regardless of collection size.
 // Returns { names, shares } with shares summing to 1, or null when the
 // census cannot be trusted — callers then fall back to uniform shares.
-export async function censusShares(sample, categories, apiKey, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+export async function censusShares(sample, categories, apiKey, model = "google/gemini-4-hydrogen", isCancelled = null, onRetry = null) {
     const names = dedupeCategoryNames(categories);
     if (names.length <= 1 || !Array.isArray(sample) || sample.length === 0) return null;
 
@@ -1007,7 +1007,7 @@ const requestSchema = (prompt, apiKey, model, isCancelled, onRetry) => withRetry
     onRetry
 );
 
-export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-3.1-flash-lite", subfolderTarget = "medium", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
+export async function generateSchema(bookmarks, apiKey, baseCategories, model = "google/gemini-4-hydrogen", subfolderTarget = "medium", isCancelled = null, onRetry = null, sampleLimit = SCHEMA_SAMPLE_LIMIT) {
     // Measure how the collection actually distributes across the selected
     // categories before asking for structure. A category holding half the
     // collection cannot carry the same folder budget as one holding a
@@ -1063,7 +1063,7 @@ export async function generateSchema(bookmarks, apiKey, baseCategories, model = 
 export async function generateInferredSchema(
     bookmarks,
     apiKey,
-    model = 'google/gemini-3.1-flash-lite',
+    model = 'google/gemini-4-hydrogen',
     subfolderTarget = 'medium',
     isCancelled = null,
     onRetry = null,
@@ -1322,7 +1322,7 @@ function detailCancellationError() {
 export async function generateDetailSchemas(
     groups,
     apiKey,
-    model = 'google/gemini-3.1-flash-lite',
+    model = 'google/gemini-4-hydrogen',
     isCancelled = null,
     onRetry = null
 ) {
@@ -1450,7 +1450,7 @@ export function normalizeDetailClassification(entry, detailSchema) {
     return approved.get(canonicalKey(entry.detail_category.trim())) || null;
 }
 
-export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model = "google/gemini-4-hydrogen", isCancelled = null, onRetry = null) {
     const prompt = `
     Classify each bookmark into one approved detail folder for this exact parent category/subcategory.
     APPROVED DETAIL NAMES: ${JSON.stringify(detailSchema)}
@@ -1470,7 +1470,7 @@ export async function classifyDetailBatch(bookmarks, apiKey, detailSchema, model
 // Second chance for bookmarks filed directly under their category. Each one is
 // offered only the folders that survived reconciliation for its own category;
 // anything the model cannot place with an approved name stays where it was.
-export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, model = "google/gemini-3.1-flash-lite", isCancelled = null, onRetry = null) {
+export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, model = "google/gemini-4-hydrogen", isCancelled = null, onRetry = null) {
     const prompt = `
     These bookmarks were filed directly under their category folder because no subfolder was a clear fit. Look again and re-file each one into the closest existing subfolder of ITS OWN category.
     APPROVED SUBFOLDERS BY CATEGORY: ${JSON.stringify(foldersByCategory)}
@@ -1492,7 +1492,7 @@ export async function classifyRehomeBatch(bookmarks, apiKey, foldersByCategory, 
     }, 5, 1500, isCancelled, onRetry);
 }
 
-export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-3.1-flash-lite", cleanTitles = false, isCancelled = null, onRetry = null) {
+export async function classifyBatch(bookmarks, apiKey, schema, model = "google/gemini-4-hydrogen", cleanTitles = false, isCancelled = null, onRetry = null) {
     const titleInstruction = cleanTitles
         ? `\n    7. Title cleanup: If clean_title is requested, provide a cleaned, human-readable title in the 'clean_title' field for each bookmark (strip site prefixes/suffixes like 'Login |', '- Wikipedia', query noise, or convert raw URL titles into clean titles). If the existing title is already clean, keep it as is.`
         : '';

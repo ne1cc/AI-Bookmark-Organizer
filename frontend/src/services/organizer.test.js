@@ -435,7 +435,7 @@ describe('OrganizerService cleanTitles integration', () => {
             expect.arrayContaining([expect.objectContaining({ url: 'https://example.com' })]),
             'test-key',
             expect.any(Object),
-            'google/gemini-3.1-flash-lite',
+            'google/gemini-4-hydrogen',
             false,
             expect.any(Function),
             expect.any(Function)
@@ -1147,7 +1147,7 @@ describe('classifyBatch and generateSchema default model and cancellation forwar
         vi.useRealTimers()
     })
 
-    it('defaults model to google/gemini-3.1-flash-lite in classifyBatch', async () => {
+    it('defaults model to google/gemini-4-hydrogen in classifyBatch', async () => {
         let capturedPayload = null
         global.fetch = vi.fn(async (url, options) => {
             capturedPayload = JSON.parse(options.body)
@@ -1173,10 +1173,10 @@ describe('classifyBatch and generateSchema default model and cancellation forwar
 
         await classifyBatch(bookmarks, 'sk-or-test-key', schema)
 
-        expect(capturedPayload.model).toBe('google/gemini-3.1-flash-lite')
+        expect(capturedPayload.model).toBe('google/gemini-4-hydrogen')
     })
 
-    it('defaults model to google/gemini-3.1-flash-lite in generateSchema', async () => {
+    it('defaults model to google/gemini-4-hydrogen in generateSchema', async () => {
         let capturedPayload = null
         global.fetch = vi.fn(async (url, options) => {
             capturedPayload = JSON.parse(options.body)
@@ -1200,7 +1200,7 @@ describe('classifyBatch and generateSchema default model and cancellation forwar
         const bookmarks = [{ title: 'Code Site', url: 'https://code.example.com' }]
         await generateSchema(bookmarks, 'sk-or-test-key', ['Tech'])
 
-        expect(capturedPayload.model).toBe('google/gemini-3.1-flash-lite')
+        expect(capturedPayload.model).toBe('google/gemini-4-hydrogen')
     })
 
     it('forwards isCancelled and onRetry from classifyBatch to withRetry', async () => {
@@ -1256,9 +1256,9 @@ describe('OrganizerService resilient batch processing and sub-batch subdivision'
         vi.restoreAllMocks()
     })
 
-    it('defaults model to google/gemini-3.1-flash-lite in constructor', () => {
+    it('defaults model to google/gemini-4-hydrogen in constructor', () => {
         const service = createOrganizerService('test-key', ['Tech'], () => {})
-        expect(service.model).toBe('google/gemini-3.1-flash-lite')
+        expect(service.model).toBe('google/gemini-4-hydrogen')
     })
 
     it('subdivides failing batches in half recursively on retry until classification succeeds without dumping to Other -> General', async () => {

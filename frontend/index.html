@@ -24,19 +24,6 @@
         background: var(--bg-init);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
-      .init-skeleton-header {
-        text-align: center;
-        padding: 2.5rem 1rem 1.25rem;
-      }
-      .init-skeleton-title {
-        font-size: 1.85rem;
-        font-weight: 800;
-        letter-spacing: -0.5px;
-        background: linear-gradient(135deg, #7c94ba, #506990);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin: 0;
-      }
       .init-skeleton-card {
         margin: 0 1.25rem 1rem;
         padding: 1.25rem;
@@ -49,10 +36,9 @@
   </head>
   <body>
     <div id="root">
-      <div class="init-skeleton-header">
-        <h1 class="init-skeleton-title">AI Bookmark Organizer</h1>
-        <p style="font-size: 0.88rem; color: var(--text-sub); margin-top: 0.35rem;">Transform your chaos into a curated library</p>
-      </div>
+      <header class="app-header">
+        <h1 class="app-title">AI Bookmark Organizer</h1>
+      </header>
       <div class="init-skeleton-card" style="height: 90px;"></div>
       <div class="init-skeleton-card" style="height: 140px;"></div>
     </div>
