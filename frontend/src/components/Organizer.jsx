@@ -53,7 +53,7 @@ const SUBFOLDER_EXPLAINER_IMAGES = {
 };
 
 /**
- * The three models offered in the picker, cheapest first.
+ * The three models offered in the picker, cheapest first; the default is the most capable (DEFAULT_MODEL_ID).
  *
  * Contract:
  * - ids are OpenRouter-namespaced; the native Gemini API strips the "google/" prefix (see geminiModelId).
@@ -65,8 +65,8 @@ const MODEL_OPTIONS = [
         name: '3.5 Flash Lite',
         label: '3.5 Flash Lite',
         badge: 'Fast',
-        desc: 'Recommended default — fast and low-cost for large bookmark collections.',
-        description: 'Recommended default — fast and low-cost for large bookmark collections.'
+        desc: 'Fast and low-cost for large bookmark collections.',
+        description: 'Fast and low-cost for large bookmark collections.'
     },
     {
         id: 'google/gemini-3.8-flash',
@@ -81,12 +81,12 @@ const MODEL_OPTIONS = [
         name: '4 Hydrogen',
         label: '4 Hydrogen',
         badge: 'Best',
-        desc: 'Most capable: complex taxonomies and heavy loads with rich nested structures.',
-        description: 'Most capable: complex taxonomies and heavy loads with rich nested structures.'
+        desc: 'Recommended default — most capable: complex taxonomies and heavy loads with rich nested structures.',
+        description: 'Recommended default — most capable: complex taxonomies and heavy loads with rich nested structures.'
     },
 ]
 
-const DEFAULT_MODEL_ID = MODEL_OPTIONS[0].id
+const DEFAULT_MODEL_ID = 'google/gemini-4-hydrogen'
 
 // Retired picker ids and the model that replaces each (Google shuts down 3.1 Flash Lite on 2027-05-07).
 const MODEL_MIGRATIONS = {
@@ -1775,7 +1775,7 @@ export default function Organizer({ theme = 'light' }) {
                                 onChange={handleModelChange}
                             />
                             <p className="hint">
-                                {models.find(m => m.id === selectedModel)?.description || MODEL_OPTIONS[0].description}
+                                {models.find(m => m.id === selectedModel)?.description || MODEL_OPTIONS.find(m => m.id === DEFAULT_MODEL_ID).description}
                             </p>
                         </section>
                     )}

@@ -263,7 +263,7 @@ import {
 
 
 export class OrganizerService {
-    constructor(apiKey, categories, onProgress, model = "google/gemini-3.5-flash-lite", subfolderTarget = "medium", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
+    constructor(apiKey, categories, onProgress, model = "google/gemini-4-hydrogen", subfolderTarget = "medium", sortAlphabetically = true, removeDuplicates = true, cleanTitles = false, flatDateSort = false, dateSortOrder = "desc", schemaSortOrder = undefined, inferCategoriesOrFileDownload = true) {
         this.apiKey = apiKey;
         this.categories = categories;
         const rawOnProgress = onProgress || (() => { });
