@@ -52,6 +52,60 @@ const SUBFOLDER_EXPLAINER_IMAGES = {
     }
 };
 
+/**
+ * The three models offered in the picker, cheapest first.
+ *
+ * Contract:
+ * - ids are OpenRouter-namespaced; the native Gemini API strips the "google/" prefix (see geminiModelId).
+ * - Keep this list at three: more choices overwhelmed users.
+ */
+const MODEL_OPTIONS = [
+    {
+        id: 'google/gemini-3.5-flash-lite',
+        name: '3.5 Flash Lite',
+        label: '3.5 Flash Lite',
+        badge: 'Fast',
+        desc: 'Recommended default — fast and low-cost for large bookmark collections.',
+        description: 'Recommended default — fast and low-cost for large bookmark collections.'
+    },
+    {
+        id: 'google/gemini-3.8-flash',
+        name: '3.8 Flash',
+        label: '3.8 Flash',
+        badge: 'Balanced',
+        desc: 'High intelligence & reasoning for everyday bookmark collections.',
+        description: 'High intelligence & reasoning for everyday bookmark collections.'
+    },
+    {
+        id: 'google/gemini-4-hydrogen',
+        name: '4 Hydrogen',
+        label: '4 Hydrogen',
+        badge: 'Best',
+        desc: 'Most capable: complex taxonomies and heavy loads with rich nested structures.',
+        description: 'Most capable: complex taxonomies and heavy loads with rich nested structures.'
+    },
+]
+
+const DEFAULT_MODEL_ID = MODEL_OPTIONS[0].id
+
+// Retired picker ids and the model that replaces each (Google shuts down 3.1 Flash Lite on 2027-05-07).
+const MODEL_MIGRATIONS = {
+    'google/gemini-3.1-flash-lite': 'google/gemini-3.5-flash-lite',
+    'google/gemini-3.1-pro-preview': 'google/gemini-4-hydrogen',
+    'google/gemini-2.5-pro': 'google/gemini-4-hydrogen',
+}
+
+/**
+ * Maps a stored model id to one the picker offers.
+ *
+ * Contract:
+ * - Returns the id if offered, its replacement if retired, null for anything else (caller keeps its default).
+ */
+function resolveModelId(id) {
+    const migrated = MODEL_MIGRATIONS[id] || id
+    return MODEL_OPTIONS.some((m) => m.id === migrated) ? migrated : null
+}
+
 export const SCHEMA_SORT_OPTIONS = [
     {
         id: 'alpha',
@@ -153,50 +207,14 @@ export default function Organizer({ theme = 'light' }) {
     // Auto-detect provider from key format
     const provider = useMemo(() => detectProvider(apiKey), [apiKey])
 
-    // Models supported for Google Gemini
-    const models = useMemo(() => [
-        {
-            id: 'google/gemini-3.5-flash-lite',
-            name: '3.5 Flash Lite',
-            label: '3.5 Flash Lite',
-            badge: 'Fast',
-            desc: 'Fast, cost-efficient model for high-volume bookmark collections.',
-            description: 'Fast, cost-efficient model for high-volume bookmark collections.'
-        },
-        {
-            id: 'google/gemini-3.1-flash-lite',
-            name: '3.1 Flash Lite',
-            label: '3.1 Flash Lite',
-            badge: 'Default',
-            desc: 'Recommended default — ultra-fast latency and minimal token cost.',
-            description: 'Recommended default — ultra-fast latency and minimal token cost.'
-        },
-        {
-            id: 'google/gemini-3.8-flash',
-            name: '3.8 Flash',
-            label: '3.8 Flash',
-            badge: 'Balanced',
-            desc: 'High intelligence & reasoning for everyday bookmark collections.',
-            description: 'High intelligence & reasoning for everyday bookmark collections.'
-        },
-        {
-            id: 'google/gemini-3.1-pro-preview',
-            name: '3.1 Pro Preview',
-            label: '3.1 Pro Preview',
-            badge: 'Deep Reasoning',
-            desc: 'Complex taxonomies & heavy loads with rich nested structures.',
-            description: 'Complex taxonomies & heavy loads with rich nested structures.'
-        },
-    ], [])
+    // Models supported for Google Gemini (see MODEL_OPTIONS)
+    const models = MODEL_OPTIONS
 
     const [selectedModel, setSelectedModel] = useState(() => {
         try {
-            const m = localStorage.getItem('selectedModel')
-            return m && ['google/gemini-3.5-flash-lite', 'google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(m)
-                ? m
-                : 'google/gemini-3.1-flash-lite'
+            return resolveModelId(localStorage.getItem('selectedModel')) || DEFAULT_MODEL_ID
         } catch {
-            return 'google/gemini-3.1-flash-lite'
+            return DEFAULT_MODEL_ID
         }
     })
 
@@ -602,13 +620,12 @@ export default function Organizer({ theme = 'light' }) {
                     setInferCategories(result.inferCategories)
                     try { localStorage.setItem('inferCategories', JSON.stringify(result.inferCategories)) } catch {}
                 }
-                if (result.selectedModel === 'google/gemini-2.5-pro') {
-                    setSelectedModel('google/gemini-3.1-pro-preview')
-                    try { localStorage.setItem('selectedModel', 'google/gemini-3.1-pro-preview') } catch {}
-                    chrome.storage.local.set({ selectedModel: 'google/gemini-3.1-pro-preview' })
-                } else if (result.selectedModel && ['google/gemini-3.5-flash-lite', 'google/gemini-3.1-flash-lite', 'google/gemini-3.8-flash', 'google/gemini-3.1-pro-preview'].includes(result.selectedModel)) {
-                    setSelectedModel(result.selectedModel)
-                    try { localStorage.setItem('selectedModel', result.selectedModel) } catch {}
+                const storedModel = resolveModelId(result.selectedModel)
+                if (storedModel) {
+                    setSelectedModel(storedModel)
+                    try { localStorage.setItem('selectedModel', storedModel) } catch {}
+                    // Persist a migrated choice so retired ids are not re-read next load.
+                    if (storedModel !== result.selectedModel) chrome.storage.local.set({ selectedModel: storedModel })
                 }
                 if (result.subfolderTarget) {
                     const normalizedTarget = normalizeSubfolderTarget(result.subfolderTarget)
@@ -1758,7 +1775,7 @@ export default function Organizer({ theme = 'light' }) {
                                 onChange={handleModelChange}
                             />
                             <p className="hint">
-                                {models.find(m => m.id === selectedModel)?.description || '3.1 Flash Lite: Recommended default — ultra-fast latency and minimal token cost.'}
+                                {models.find(m => m.id === selectedModel)?.description || MODEL_OPTIONS[0].description}
                             </p>
                         </section>
                     )}

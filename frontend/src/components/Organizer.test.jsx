@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, cleanup, within } from '@testing-library/react'
 import Organizer from './Organizer'
 import { OrganizerService } from '../services/organizer'
 import * as inputService from '../services/input_bookmarks'
@@ -94,6 +94,29 @@ describe('Organizer Component UI Tests', () => {
 
         expect(modelButton.className).toContain('active')
         expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ selectedModel: 'google/gemini-3.5-flash-lite' })
+    })
+
+    it('offers exactly three models and defaults to 3.5 Flash Lite', () => {
+        render(<Organizer />)
+
+        const group = screen.getByRole('group', { name: 'AI model' })
+        expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual([
+            '3.5 Flash Lite(Fast)', '3.8 Flash(Balanced)', '4 Hydrogen(Best)'
+        ])
+        expect(within(group).getByRole('button', { name: /3\.5 Flash Lite/ }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it.each([
+        ['google/gemini-3.1-flash-lite', '3.5 Flash Lite'],
+        ['google/gemini-3.1-pro-preview', '4 Hydrogen'],
+        ['google/gemini-4-hydrogen', '4 Hydrogen'],
+        ['not-a-model', '3.5 Flash Lite'],
+    ])('maps stored model %s to %s', (stored, label) => {
+        localStorage.setItem('selectedModel', stored)
+        render(<Organizer />)
+
+        const group = screen.getByRole('group', { name: 'AI model' })
+        expect(within(group).getByRole('button', { name: new RegExp(label) }).getAttribute('aria-pressed')).toBe('true')
     })
 
     it('defaults new installs to inferred categories with no manual selection', () => {
